@@ -311,7 +311,7 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
       // Only fill what is still empty, so nothing already typed is replaced.
       setForm((f) => {
         const next = { ...f };
-        for (const [key, label] of CANDIDATE_FIELDS) if (found[key] && !String(f[key] || '').trim()) { next[key] = found[key]; used.push(label.toLowerCase()); }
+        for (const [key, label] of CANDIDATE_FIELDS) if (found[key] && !String(f[key] || '').trim()) { next[key] = found[key]; used.push(key === 'linkedin' ? 'LinkedIn link' : label.toLowerCase()); }
         return next;
       });
       setFilled(used);

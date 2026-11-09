@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Check, Plus, UserPlus, Trash2 } from 'lucide-react';
+import { Check, Copy, Download, Plus, UserPlus, Trash2 } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, ago, fmtDate } from '../lib.js';
 import { Avatar, Badge, Button, Card, CardHeader, Field, Input, Modal, Page, Tabs, Textarea, useAction, useToast } from '../ui.jsx';
@@ -154,6 +154,41 @@ function Team() {
   );
 }
 
+function Extension() {
+  const toast = useToast();
+  const address = window.location.origin;
+  const copy = async () => { try { await navigator.clipboard.writeText(address); toast('Workspace address copied'); } catch { window.prompt('Copy this address', address); } };
+  const steps = [
+    <>Download the extension below and unzip it. You get a folder called <b className="font-medium text-stone-900">the-book-extension</b>.</>,
+    <>In Chrome, open <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">chrome://extensions</code> and switch on <b className="font-medium text-stone-900">Developer mode</b> (top right).</>,
+    <>Click <b className="font-medium text-stone-900">Load unpacked</b> and choose that folder. Pin “The Book” from the puzzle-piece menu so its icon stays visible.</>,
+    <>Click the icon, paste your workspace address (below) and allow access when Chrome asks. You need to be signed in to this workspace in the same browser.</>,
+  ];
+  return (
+    <div className="max-w-2xl space-y-6">
+      <Card>
+        <CardHeader title="Add candidates from LinkedIn" />
+        <div className="space-y-4 p-4 text-sm leading-relaxed text-stone-600">
+          <p>
+            With the Chrome extension, open someone’s LinkedIn profile, click the extension’s icon, and their name, title, company, location and profile link are filled in for you.
+            Choose the job and stage, and they are in that pipeline with you as the owner. It warns you if the person is already in your workspace.
+          </p>
+          <a href="/the-book-extension.zip" download><Button variant="primary" icon={Download}>Download the extension</Button></a>
+          <ol className="list-decimal space-y-2 pl-5">{steps.map((step, i) => <li key={i}>{step}</li>)}</ol>
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-lg bg-stone-100 px-3 py-2.5 text-xs text-stone-800">{address}</code>
+            <Button icon={Copy} onClick={copy}>Copy address</Button>
+          </div>
+          <p className="text-[13px] text-stone-500">
+            The extension only reads the page you are on when you click its icon, and only talks to this workspace. It works on other pages too (GitHub profiles, company team pages), and every field can be corrected before saving.
+            Each person on your team installs it in their own browser. Keyboard shortcut: Alt+Shift+A.
+          </p>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 const MERGE_FIELDS = ['candidate_first_name', 'candidate_name', 'job_title', 'company', 'sender_name'];
 
 function Templates() {
@@ -212,18 +247,19 @@ export default function Settings() {
   const { isAgency } = useApp();
   const [params, setParams] = useSearchParams();
   // Client users only have the account tab; an unknown or agency-only tab in the address falls back to it.
-  const tab = isAgency && ['agency', 'team', 'templates'].includes(params.get('tab')) ? params.get('tab') : 'account';
+  const tab = isAgency && ['agency', 'team', 'templates', 'extension'].includes(params.get('tab')) ? params.get('tab') : 'account';
   const setTab = (t) => setParams({ tab: t }, { replace: true });
   return (
     <Page title="Settings">
       {isAgency && (
         <Tabs className="mb-6" value={tab} onChange={setTab}
-          tabs={[{ id: 'account', label: 'Your account' }, { id: 'agency', label: 'Agency' }, { id: 'team', label: 'Team' }, { id: 'templates', label: 'Email templates' }]} />
+          tabs={[{ id: 'account', label: 'Your account' }, { id: 'agency', label: 'Agency' }, { id: 'team', label: 'Team' }, { id: 'templates', label: 'Email templates' }, { id: 'extension', label: 'Browser extension' }]} />
       )}
       {tab === 'account' && <Account />}
       {tab === 'agency' && isAgency && <Agency />}
       {tab === 'team' && isAgency && <Team />}
       {tab === 'templates' && isAgency && <Templates />}
+      {tab === 'extension' && isAgency && <Extension />}
     </Page>
   );
 }

@@ -22,6 +22,24 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Access** | Agency admins and recruiters see every client. Client users see only their own company, and never see your fees, internal brief or agency-only notes. |
 | **Accounts** | Send a one-time invitation link (from a client's page or Settings, Team) and the person sets their own password. Or people can use "Create an account" on the sign-in page: the account stays locked until you approve it and choose which client's hiring team it joins. |
 
+## Chrome extension
+
+`extension/` is a Chrome extension for sourcing. On a LinkedIn profile (or a GitHub profile, or a company's team
+page), click its icon: the person's name, title, company, location and profile link are filled in, you choose the
+job and stage, and they are added to that pipeline with you as the owner. It warns you when the person is already
+in the workspace. It only reads the page when you click it, and only talks to your workspace, using the sign-in
+you already have there.
+
+Everyone on the team can download it from Settings, Browser extension, which also has the four install steps
+(Chrome, Load unpacked). `npm run build` packs the folder into that download. To offer it through the Chrome Web
+Store instead, zip the folder and submit it from a Chrome developer account.
+
+LinkedIn changes its page markup from time to time. The reader has fallbacks (it was tested against signed-in,
+public and renamed-class versions of a profile page), and every field can be corrected before saving, but if a
+field stops filling in, `extension/extract.js` is the one file to adjust. LinkedIn's terms restrict tools that
+extract data from its pages; this one only copies what is on the screen of the profile a recruiter has opened,
+one person at a time, when they click.
+
 ## Run it
 
 Requires Node.js 22.13 or newer.

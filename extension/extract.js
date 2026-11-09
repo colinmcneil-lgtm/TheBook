@@ -42,6 +42,26 @@
       out.title ||= (m ? m[1] : headline.split(/\s*[|·•]\s*/)[0]).trim();
       if (m) out.company ||= m[2].trim();
     }
+    // If LinkedIn's class names have changed and nothing above matched, read the top card by position instead:
+    // the headline is the first sentence-like text after the name, and the location is the first "City, Region" after that.
+    const h1 = main.querySelector('h1');
+    if (h1 && (!headline || !out.location)) {
+      const card = h1.closest('section') || main;
+      const noise = /^\(?(he|she|they|ze|xe)\b[^)]{0,20}\)?$|·\s*(1st|2nd|3rd)|contact info|followers|connections|^message$|^connect$|^follow$|^more$|^open to|verified|mutual/i;
+      const seen = new Set();
+      const texts = [...card.querySelectorAll('div, span, p, li')]
+        .filter((el) => (h1.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) && !h1.contains(el))
+        .filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()))
+        .map(text)
+        .filter((t) => t && t !== out.name && !noise.test(t) && !seen.has(t) && seen.add(t));
+      const line = !headline && texts.find((t) => t.length >= 6 && t.length <= 220);
+      if (line) {
+        const m = /^(.+?)\s+(?:at|@)\s+([^|·•]+)/i.exec(line);
+        out.title ||= (m ? m[1] : line.split(/\s*[|·•]\s*/)[0]).trim();
+        if (m) out.company ||= m[2].trim();
+      }
+      out.location ||= texts.find((t) => t !== line && t.length <= 80 && /^[\p{L}][\p{L} .'’-]+(,\s*[\p{L}][\p{L} .'’-]+){1,3}$/u.test(t)) || '';
+    }
     // The first entry of the Experience section, when it is on screen.
     const exp = document.querySelector('#experience')?.closest('section');
     const role = exp && exp.querySelector('li');

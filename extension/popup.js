@@ -31,7 +31,8 @@ async function api(path, options = {}) {
 // ---------- connecting to a workspace ----------
 function parseBase(value) {
   const typed = value.trim();
-  const url = new URL(/^https?:\/\//i.test(typed) ? typed : `https://${typed}`);
+  // No scheme typed: assume https, except for a workspace running on this computer.
+  const url = new URL(/^https?:\/\//i.test(typed) ? typed : `${/^(localhost|127\.0\.0\.1)(:|\/|$)/i.test(typed) ? 'http' : 'https'}://${typed}`);
   const local = ['localhost', '127.0.0.1'].includes(url.hostname);
   if (url.protocol !== 'https:' && !local) throw new Error('The workspace address needs to start with https://');
   return url.origin;
@@ -46,8 +47,11 @@ $('setup-form').addEventListener('submit', async (e) => {
   } catch (err) {
     return setError('setup-error', err.message.includes('https') ? err.message : 'That does not look like a web address.');
   }
-  // Must be asked for directly from this click, or Chrome refuses.
-  const granted = await chrome.permissions.request({ origins: [`${origin}/*`] });
+  // Saved before asking: Chrome's permission prompt can close this popup, and the address must survive that.
+  // When the popup is opened again, start() finds the address and the permission and carries on.
+  await chrome.storage.local.set({ base: origin });
+  const origins = [`${origin}/*`];
+  const granted = (await chrome.permissions.contains({ origins })) || (await chrome.permissions.request({ origins }));
   if (!granted) return setError('setup-error', 'Chrome needs your permission to connect to that address.');
   try {
     const res = await fetch(`${origin}/api/bootstrap`);
@@ -56,7 +60,6 @@ $('setup-form').addEventListener('submit', async (e) => {
   } catch {
     return setError('setup-error', 'That address did not answer like a hiring workspace. Check it and try again.');
   }
-  await chrome.storage.local.set({ base: origin });
   start();
 });
 
