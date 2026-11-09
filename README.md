@@ -65,6 +65,17 @@ docker build -t embed .
 docker run -p 3000:3000 -v embed-data:/data embed
 ```
 
+### Railway
+
+1. Create a service from this GitHub repository. Railway builds it from the `Dockerfile`.
+2. Attach a **Volume** to the service with the mount path `/data`. Without it, the database and résumés are wiped on every deploy.
+3. Add a service variable `PORT` = `3000`, then generate a public domain for the service pointing at port 3000.
+4. Open the domain. The first visit asks you to create your owner account.
+
+The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejects builds that contain one.
+
+### Any host
+
 - **Persistent storage is required.** The database and résumés live in `DATA_DIR` (`/data` in the container).
   Without a mounted volume they are lost on every redeploy. Back this folder up.
 - **Serve it over HTTPS** (every host above does this for you) and point a domain at it, for example

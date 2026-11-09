@@ -12,7 +12,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/package.json ./
-# The database and uploaded résumés live in /data. Mount a persistent volume there.
-VOLUME /data
+# The database and uploaded résumés live in /data. Attach a persistent volume there on your host
+# (no VOLUME instruction here: some hosts, Railway among them, reject it and manage volumes themselves).
 EXPOSE 3000
 CMD ["node", "--disable-warning=ExperimentalWarning", "server/index.js"]
