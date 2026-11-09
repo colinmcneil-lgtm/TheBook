@@ -1,0 +1,437 @@
+import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck,
+} from 'lucide-react';
+import { api, ago, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
+import { useApp, useApi } from '../state.jsx';
+import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
+import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal } from './CandidateModals.jsx';
+
+const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
+const DELIVERY = { sent: { label: 'Sent', tone: 'green' }, failed: { label: 'Delivery failed', tone: 'red' }, not_configured: { label: 'Saved, not sent', tone: 'amber' } };
+
+export default function CandidateDrawer({ id, onClose }) {
+  const { data, error } = useApi(`/applications/${id}`);
+  return (
+    <Drawer onClose={onClose} label="Candidate">
+      {error ? (
+        <div className="p-6"><Empty icon={CircleAlert} title="This candidate could not be opened" action={<Button onClick={onClose}>Close</Button>}>{error}</Empty></div>
+      ) : !data ? <Loading className="h-full" /> : <CandidateView data={data} onClose={onClose} />}
+    </Drawer>
+  );
+}
+
+function CandidateView({ data, onClose }) {
+  const { isAgency, bump, user } = useApp();
+  const toast = useToast();
+  const [tab, setTab] = useState('overview');
+  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'edit' | { review } | { scorecard }
+  const { application: app, candidate, job, client, stages } = data;
+  const stage = stages.find((s) => s.id === app.stage_id);
+  const next = stages.find((s) => s.position === stage.position + 1);
+  const active = app.status === 'active';
+
+  const [move, moving] = useAction(async (stageId) => {
+    const { stage: to } = await api.post(`/applications/${app.id}/move`, { stage_id: stageId });
+    toast(to.kind === 'hired' ? `${firstName(candidate.name)} marked as hired` : `Moved to ${to.name}`);
+    bump();
+  });
+  const [restore] = useAction(async () => { await api.post(`/applications/${app.id}/restore`); bump(); });
+  const [withdraw] = useAction(async () => { await api.post(`/applications/${app.id}/withdraw`); toast('Marked as withdrawn'); bump(); });
+  const [erase] = useAction(async () => {
+    if (!window.confirm(`Permanently delete ${candidate.name}'s application, notes, scorecards and résumé? This cannot be undone.`)) return;
+    await api.del(`/applications/${app.id}`);
+    toast('Candidate data deleted');
+    onClose();
+    bump();
+  });
+
+  const scorecardsDue = data.interviews.filter((i) => i.status !== 'cancelled' && new Date(i.starts_at) < new Date() && i.panel.some((p) => p.id === user.id) && !i.scorecards.some((s) => s.user_id === user.id));
+
+  return (
+    <>
+      <div className="border-b border-line bg-white px-5 pt-4 sm:px-6">
+        <div className="flex items-start gap-4">
+          <Avatar name={candidate.name} size={48} />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-semibold tracking-tight text-stone-900">{candidate.name}</h2>
+              {app.status === 'rejected' && <Badge tone="red">Rejected</Badge>}
+              {app.status === 'withdrawn' && <Badge tone="gray">Withdrawn</Badge>}
+              {app.status === 'hired' && <Badge tone="green" icon={Check}>Hired</Badge>}
+            </div>
+            {(candidate.current_title || candidate.current_company) && (
+              <p className="text-sm text-stone-600">{[candidate.current_title, candidate.current_company].filter(Boolean).join(' at ')}</p>
+            )}
+            <p className="mt-0.5 text-sm text-stone-500">
+              For <Link to={`/jobs/${job.id}`} className="font-medium text-brand-700 hover:underline">{job.title}</Link> · {client.name}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-stone-600">
+              <a href={`mailto:${candidate.email}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Mail className="size-3.5" />{candidate.email}</a>
+              {candidate.phone && <a href={`tel:${candidate.phone}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Phone className="size-3.5" />{candidate.phone}</a>}
+              {candidate.linkedin && <a href={candidate.linkedin} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 hover:text-brand-700"><Link2 className="size-3.5" />LinkedIn</a>}
+              {candidate.location && <span className="inline-flex items-center gap-1.5"><MapPin className="size-3.5" />{candidate.location}</span>}
+            </div>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" className="-m-1 rounded-md p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700"><X className="size-5" /></button>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {active || app.status === 'hired' ? (
+            <>
+              <Select aria-label="Stage" value={app.stage_id} onChange={(e) => move(Number(e.target.value))} disabled={moving} className="!w-auto max-w-52 font-medium">
+                {stages.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </Select>
+              {active && next && (
+                <Button variant="primary" icon={ArrowRight} busy={moving} onClick={() => move(next.id)}>
+                  {next.kind === 'hired' ? 'Mark as hired' : `Move to ${next.name}`}
+                </Button>
+              )}
+              {active && <Button variant="danger" onClick={() => setModal('reject')}>Reject</Button>}
+            </>
+          ) : (
+            <Button icon={Undo2} onClick={restore}>Return to pipeline</Button>
+          )}
+          <div className="flex-1" />
+          <Button icon={CalendarPlus} onClick={() => setModal('schedule')} className="max-sm:hidden">Schedule</Button>
+          <Button icon={Mail} onClick={() => setModal('email')} className="max-sm:hidden">Email</Button>
+          <Menu
+            trigger={<Button aria-label="More actions" icon={Ellipsis} className="!px-2.5" />}
+            items={[
+              { label: 'Schedule interview', icon: CalendarPlus, onClick: () => setModal('schedule') },
+              { label: 'Email candidate', icon: Mail, onClick: () => setModal('email') },
+              isAgency && { label: app.review_status ? 'Resubmit to hiring team' : 'Submit to hiring team', icon: Send, onClick: () => setModal('submit') },
+              isAgency && { label: data.offer ? 'Update offer' : 'Record an offer', icon: Banknote, onClick: () => setModal('offer') },
+              isAgency && { label: 'Edit details', icon: Pencil, onClick: () => setModal('edit') },
+              active && null,
+              active && { label: 'Candidate withdrew', icon: LogOut, onClick: withdraw },
+              isAgency && null,
+              isAgency && { label: 'Delete candidate data', icon: Trash2, danger: true, onClick: erase },
+            ]}
+          />
+        </div>
+
+        <Tabs
+          className="mt-3 -mb-px border-b-0"
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { id: 'overview', label: 'Overview' },
+            { id: 'interviews', label: 'Interviews', count: data.interviews.length || undefined },
+            { id: 'activity', label: 'Activity' },
+            { id: 'emails', label: 'Emails', count: data.emails.length || undefined },
+          ]}
+        />
+      </div>
+
+      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-6">
+        {app.status === 'rejected' && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+            <span className="font-medium">Rejected.</span> {app.reject_reason}
+          </div>
+        )}
+        {scorecardsDue.map((i) => (
+          <div key={i.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            <span><span className="font-medium">Your scorecard is due</span> for {i.title} on {fmtDate(i.starts_at)}.</span>
+            <Button size="sm" variant="primary" icon={ClipboardCheck} onClick={() => setModal({ scorecard: i })}>Add scorecard</Button>
+          </div>
+        ))}
+        <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
+
+        {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} />}
+        {tab === 'interviews' && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onScorecard={(i) => setModal({ scorecard: i })} />}
+        {tab === 'activity' && <ActivityTab data={data} />}
+        {tab === 'emails' && <EmailsTab data={data} onCompose={() => setModal('email')} />}
+      </div>
+
+      {modal === 'reject' && <RejectModal data={data} onClose={() => setModal(null)} />}
+      {modal === 'schedule' && <ScheduleModal data={data} onClose={() => setModal(null)} />}
+      {modal === 'email' && <EmailModal data={data} onClose={() => setModal(null)} />}
+      {modal === 'submit' && <SubmitModal data={data} onClose={() => setModal(null)} />}
+      {modal === 'offer' && <OfferModal data={data} onClose={() => setModal(null)} />}
+      {modal === 'edit' && <EditCandidateModal data={data} onClose={() => setModal(null)} />}
+      {modal?.review && <ReviewModal data={data} decision={modal.review} onClose={() => setModal(null)} />}
+      {modal?.scorecard && <ScorecardModal interview={modal.scorecard} criteria={job.criteria} candidateName={candidate.name} onClose={() => setModal(null)} />}
+    </>
+  );
+}
+
+function ReviewBanner({ data, onDecide }) {
+  const { isAgency } = useApp();
+  const app = data.application;
+  if (!app.review_status) return null;
+  const pending = app.review_status === 'pending';
+  const approved = app.review_status === 'approved';
+  return (
+    <Card className={cx('overflow-hidden', pending && 'border-amber-300')}>
+      <div className={cx('flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 text-sm', pending ? 'bg-amber-50 text-amber-950' : approved ? 'bg-brand-50 text-brand-900' : 'bg-red-50 text-red-900')}>
+        <span className="inline-flex items-center gap-2 font-medium">
+          {pending ? <Hourglass className="size-4" /> : approved ? <CircleCheck className="size-4" /> : <CircleAlert className="size-4" />}
+          {pending
+            ? isAgency ? `Waiting for the ${data.client.name} hiring team to review` : 'Waiting for your review'
+            : `${approved ? 'Approved for interview' : 'Declined'} by ${app.reviewed_by_name || 'the hiring team'} · ${fmtDate(app.reviewed_at)}`}
+        </span>
+        {pending && (
+          <span className="flex gap-2">
+            <Button size="sm" variant="danger" onClick={() => onDecide('declined')}>Decline</Button>
+            <Button size="sm" variant="primary" icon={Check} onClick={() => onDecide('approved')}>{isAgency ? 'Record approval' : 'Approve for interview'}</Button>
+          </span>
+        )}
+      </div>
+      <div className="space-y-3 px-4 py-3">
+        <div>
+          <div className="text-xs font-medium tracking-wide text-stone-500 uppercase">Recruiter write-up{app.submitted_by_name ? ` · ${app.submitted_by_name}` : ''}</div>
+          <p className="mt-1 text-sm leading-relaxed whitespace-pre-wrap text-stone-800">{app.submission_note}</p>
+        </div>
+        {app.review_note && (
+          <div>
+            <div className="text-xs font-medium tracking-wide text-stone-500 uppercase">Hiring team response</div>
+            <p className="mt-1 text-sm leading-relaxed whitespace-pre-wrap text-stone-800">{app.review_note}</p>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function Overview({ data, onOffer }) {
+  const { isAgency, bump, user } = useApp();
+  const { application: app, client } = data;
+  const [note, setNote] = useState('');
+  const [isPrivate, setPrivate] = useState(false);
+  const [addNote, saving] = useAction(async () => {
+    await api.post(`/applications/${app.id}/notes`, { body: note, private: isPrivate });
+    setNote('');
+    bump();
+  });
+  const [rate] = useAction(async (rating) => { await api.patch(`/applications/${app.id}`, { rating }); bump(); });
+  const [removeNote] = useAction(async (id) => { await api.del(`/notes/${id}`); bump(); });
+  const stage = data.stages.find((s) => s.id === app.stage_id);
+  const row = (label, value) => (
+    <div className="flex items-start justify-between gap-4 py-1.5 text-sm">
+      <dt className="shrink-0 text-stone-500">{label}</dt>
+      <dd className="text-right font-medium text-stone-800">{value}</dd>
+    </div>
+  );
+
+  return (
+    <div className="grid gap-4 md:grid-cols-[1fr_260px]">
+      <div className="min-w-0 space-y-4">
+        <Card className="p-4">
+          <form onSubmit={(e) => { e.preventDefault(); addNote(); }}>
+            <Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note for the team…" aria-label="New note" />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              {isAgency ? <Checkbox checked={isPrivate} onChange={(e) => setPrivate(e.target.checked)} label="Agency only (hidden from the client)" /> : <span />}
+              <Button type="submit" variant="primary" size="sm" busy={saving} disabled={!note.trim()}>Add note</Button>
+            </div>
+          </form>
+          {data.notes.length > 0 && (
+            <ul className="mt-4 space-y-4 border-t border-line pt-4">
+              {data.notes.map((n) => (
+                <li key={n.id} className="flex gap-3">
+                  <Avatar name={n.user_name || '?'} size={28} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 text-[13px]">
+                      <span className="font-medium text-stone-900">{n.user_name}</span>
+                      <span className="text-stone-400">{ago(n.created_at)}</span>
+                      {n.private === 1 && <Badge tone="violet" icon={Lock}>Agency only</Badge>}
+                      {n.user_id === user.id && <button type="button" onClick={() => removeNote(n.id)} className="text-xs text-stone-400 hover:text-red-700">Delete</button>}
+                    </div>
+                    <p className="mt-0.5 text-sm leading-relaxed whitespace-pre-wrap text-stone-700">{n.body}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        {app.answers.length > 0 && (
+          <Card className="p-4">
+            <h3 className="text-sm font-semibold text-stone-900">Screening answers</h3>
+            <dl className="mt-3 space-y-3">
+              {app.answers.map((a, i) => (
+                <div key={i}>
+                  <dt className="text-[13px] text-stone-500">{a.question}</dt>
+                  <dd className="mt-0.5 text-sm leading-relaxed whitespace-pre-wrap text-stone-800">{a.answer || <span className="text-stone-400">No answer</span>}</dd>
+                </div>
+              ))}
+            </dl>
+          </Card>
+        )}
+        {app.cover_note && (
+          <Card className="p-4">
+            <h3 className="text-sm font-semibold text-stone-900">Note from the candidate</h3>
+            <p className="mt-2 text-sm leading-relaxed whitespace-pre-wrap text-stone-700">{app.cover_note}</p>
+          </Card>
+        )}
+      </div>
+
+      <div className="space-y-4">
+        <Card className="px-4 py-2.5">
+          <dl className="divide-y divide-line">
+            {row('Stage', stage.name)}
+            {row('In stage', ago(app.stage_entered_at).replace(' ago', ''))}
+            {row('Applied', fmtDate(app.applied_at, true))}
+            {row('Source', SOURCES[app.source] || app.source)}
+            {row('Rating', <Stars value={app.rating} onChange={rate} />)}
+          </dl>
+        </Card>
+        {app.resume_file ? (
+          <a href={`/api/applications/${app.id}/resume`} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl border border-line bg-white px-4 py-3 text-sm hover:border-brand-300">
+            <span className="flex size-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700"><FileText className="size-4" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="block font-medium text-stone-900">Résumé</span>
+              <span className="block truncate text-xs text-stone-500">{app.resume_name}</span>
+            </span>
+            <Download className="size-4 text-stone-400" />
+          </a>
+        ) : (
+          <div className="rounded-xl border border-dashed border-stone-300 px-4 py-3 text-sm text-stone-500">No résumé on file.</div>
+        )}
+        {(data.offer || (isAgency && stage.kind === 'offer')) && (
+          <Card className="p-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-stone-900">Offer</h3>
+              {data.offer && <Badge tone={OFFER_STATUS[data.offer.status].tone}>{OFFER_STATUS[data.offer.status].label}</Badge>}
+            </div>
+            {data.offer ? (
+              <dl className="mt-2 text-sm">
+                {data.offer.salary != null && row('Base salary', money(data.offer.salary, client.currency))}
+                {data.offer.start_date && row('Start date', fmtDate(data.offer.start_date, true))}
+                {isAgency && client.fee_percent > 0 && data.offer.salary != null && row(`Your fee (${client.fee_percent}%)`, money((data.offer.salary * client.fee_percent) / 100, client.currency))}
+              </dl>
+            ) : <p className="mt-1 text-sm text-stone-500">No offer recorded yet.</p>}
+            {data.offer?.notes && <p className="mt-2 text-[13px] text-stone-600">{data.offer.notes}</p>}
+            {isAgency && <Button size="sm" className="mt-3 w-full" onClick={onOffer}>{data.offer ? 'Update offer' : 'Record offer'}</Button>}
+          </Card>
+        )}
+        {data.others.length > 0 && (
+          <Card className="p-4">
+            <h3 className="text-sm font-semibold text-stone-900">Also considered for</h3>
+            <ul className="mt-2 space-y-1.5 text-sm">
+              {data.others.map((o) => (
+                <li key={o.id}><Link to={`?c=${o.id}`} className="font-medium text-brand-700 hover:underline">{o.job_title}</Link> <span className="text-stone-500">· {o.status === 'active' ? o.stage_name : o.status}</span></li>
+              ))}
+            </ul>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function InterviewsTab({ data, onSchedule, onScorecard }) {
+  const { bump, user } = useApp();
+  const [setStatus] = useAction(async (id, status) => { await api.patch(`/interviews/${id}`, { status }); bump(); });
+  if (!data.interviews.length)
+    return <Card><Empty icon={CalendarPlus} title="No interviews yet" action={<Button variant="primary" icon={CalendarPlus} onClick={onSchedule}>Schedule interview</Button>}>Book the first conversation and choose who should give feedback.</Empty></Card>;
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end"><Button icon={CalendarPlus} size="sm" onClick={onSchedule}>Schedule another</Button></div>
+      {data.interviews.map((i) => {
+        const past = new Date(i.starts_at) < new Date();
+        const mine = i.scorecards.find((s) => s.user_id === user.id);
+        return (
+          <Card key={i.id}>
+            <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-stone-900">{i.title}</h3>
+                  {i.status === 'cancelled' ? <Badge tone="red">Cancelled</Badge> : i.status === 'completed' ? <Badge tone="gray">Completed</Badge> : past ? <Badge tone="amber">Awaiting feedback</Badge> : <Badge tone="blue">Upcoming</Badge>}
+                </div>
+                <p className="mt-0.5 text-[13px] text-stone-600">{fmtDateTime(i.starts_at)} · {i.duration_min} min · {INTERVIEW_KINDS[i.kind]}</p>
+                {i.location && <p className="truncate text-[13px] text-stone-500">{i.location}</p>}
+                {i.notes && <p className="mt-1 text-[13px] text-stone-600">{i.notes}</p>}
+              </div>
+              <div className="flex items-center gap-2">
+                {i.status !== 'cancelled' && <Button size="sm" variant={past && !mine ? 'primary' : 'secondary'} icon={ClipboardCheck} onClick={() => onScorecard(i)}>{mine ? 'Edit my scorecard' : 'Add scorecard'}</Button>}
+                <Menu
+                  trigger={<Button size="sm" aria-label="Interview actions" icon={Ellipsis} className="!px-2" />}
+                  items={[
+                    { label: 'Add to calendar (.ics)', icon: Download, onClick: () => { window.location.href = `/api/interviews/${i.id}/ics`; } },
+                    i.status === 'scheduled' && { label: 'Mark as completed', icon: Check, onClick: () => setStatus(i.id, 'completed') },
+                    i.status !== 'cancelled' && { label: 'Cancel interview', icon: X, danger: true, onClick: () => setStatus(i.id, 'cancelled') },
+                    i.status === 'cancelled' && { label: 'Reinstate', icon: Undo2, onClick: () => setStatus(i.id, 'scheduled') },
+                  ]}
+                />
+              </div>
+            </div>
+            <div className="divide-y divide-line border-t border-line">
+              {i.panel.map((p) => {
+                const sc = i.scorecards.find((s) => s.user_id === p.id);
+                return (
+                  <div key={p.id} className="px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <Avatar name={p.name} size={26} />
+                      <span className="text-sm font-medium text-stone-900">{p.name}</span>
+                      <span className="text-xs text-stone-500">{p.role === 'client' ? p.title : 'Agency'}</span>
+                      <span className="flex-1" />
+                      {sc ? <Badge tone={RECOMMENDATIONS[sc.recommendation].tone}>{RECOMMENDATIONS[sc.recommendation].label}</Badge> : <span className="text-xs text-stone-400">{past && i.status !== 'cancelled' ? 'Feedback not in yet' : 'No scorecard yet'}</span>}
+                    </div>
+                    {sc && (
+                      <div className="mt-2 pl-9">
+                        {Object.keys(sc.ratings).length > 0 && (
+                          <div className="mb-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">
+                            {Object.entries(sc.ratings).map(([criterion, value]) => (
+                              <div key={criterion} className="flex items-center justify-between gap-3 text-[13px] text-stone-600">
+                                <span className="truncate">{criterion}</span>
+                                <span className="flex shrink-0 gap-0.5" role="img" aria-label={`${value} out of 4`}>
+                                  {[1, 2, 3, 4].map((n) => <span key={n} className={cx('h-1.5 w-4 rounded-full', n <= value ? 'bg-brand-600' : 'bg-stone-200')} />)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {sc.notes && <p className="text-sm leading-relaxed whitespace-pre-wrap text-stone-700">{sc.notes}</p>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {!i.panel.length && <div className="px-4 py-3 text-sm text-stone-500">No interviewers assigned.</div>}
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function ActivityTab({ data }) {
+  return (
+    <Card className="p-4">
+      <ol className="relative space-y-4 before:absolute before:top-2 before:bottom-2 before:left-[5px] before:w-px before:bg-line">
+        {data.activities.map((a) => (
+          <li key={a.id} className="relative flex gap-3 pl-0">
+            <span className="relative z-10 mt-1.5 size-[11px] shrink-0 rounded-full border-2 border-white bg-stone-300 ring-1 ring-stone-300" />
+            <div className="min-w-0 text-sm">
+              <p className="text-stone-800">{a.detail}</p>
+              <p className="text-xs text-stone-500">{a.user_name || data.candidate.name} · {fmtDateTime(a.created_at)}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </Card>
+  );
+}
+
+function EmailsTab({ data, onCompose }) {
+  if (!data.emails.length)
+    return <Card><Empty icon={Mail} title="No emails yet" action={<Button variant="primary" icon={Mail} onClick={onCompose}>Email candidate</Button>}>Messages you send from here are kept on the candidate's record.</Empty></Card>;
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end"><Button icon={Mail} size="sm" onClick={onCompose}>New email</Button></div>
+      {data.emails.map((e) => (
+        <Card key={e.id} className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-stone-900">{e.subject}</h3>
+            <Badge tone={DELIVERY[e.delivery]?.tone}>{DELIVERY[e.delivery]?.label}</Badge>
+          </div>
+          <p className="text-xs text-stone-500">To {e.to_email} · {e.sent_by_name || 'Automatic'} · {fmtDateTime(e.created_at)}</p>
+          <p className="mt-2 text-sm leading-relaxed whitespace-pre-wrap text-stone-700">{e.body}</p>
+        </Card>
+      ))}
+    </div>
+  );
+}

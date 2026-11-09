@@ -1,0 +1,47 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --color-brand-50: #eef5f1;
+  --color-brand-100: #d8e8df;
+  --color-brand-200: #b3d2c2;
+  --color-brand-300: #86b69f;
+  --color-brand-400: #57957a;
+  --color-brand-500: #387a5f;
+  --color-brand-600: #2a624b;
+  --color-brand-700: #224f3d;
+  --color-brand-800: #1c3f32;
+  --color-brand-900: #132a22;
+  --color-brand-950: #0c1c17;
+  --color-gold: #e8c468;
+  --color-paper: #f6f5f1;
+  --color-line: #e4e2db;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--color-paper);
+  color: var(--color-stone-900);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+button, [role="button"], a, select, summary { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--color-brand-500); outline-offset: 2px; }
+.tabular { font-variant-numeric: tabular-nums; }
+
+@keyframes slide-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes pop-in { from { transform: translateY(8px) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+.animate-slide-in { animation: slide-in 0.18s ease-out; }
+.animate-pop-in { animation: pop-in 0.16s ease-out; }
+.animate-fade-in { animation: fade-in 0.15s ease-out; }
+@media (prefers-reduced-motion: reduce) { .animate-slide-in, .animate-pop-in, .animate-fade-in { animation: none; } }
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; }
+  main { overflow: visible !important; height: auto !important; }
+}
