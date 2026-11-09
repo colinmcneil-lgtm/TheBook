@@ -37,6 +37,22 @@ function safeUrl(v) {
   } catch { return null; }
 }
 const pw = (v) => (typeof v === 'string' ? v : '');
+const isStr = (v) => typeof v === 'string';
+/** A first name is only used in emails when it is plainly a name; otherwise the greeting stays neutral. */
+const greetingName = (name) => {
+  const first = String(name || '').split(/\s+/)[0];
+  return /^[\p{L}\p{M}'’-]{1,40}$/u.test(first) ? first : 'there';
+};
+/** Rate limits count per IPv4 address, or per /64 for IPv6 (one subscriber controls a whole /64). */
+function addressKey(ip = '') {
+  if (!ip.includes(':')) return ip;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) return mapped[1];
+  const [head, tail = ''] = ip.split('::');
+  const h = head ? head.split(':') : [], t = tail ? tail.split(':') : [];
+  const groups = ip.includes('::') ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t] : h;
+  return `${groups.slice(0, 4).join(':')}::/64`;
+}
 
 const hashPassword = (pw, salt = crypto.randomBytes(16).toString('hex')) => `${salt}:${crypto.scryptSync(pw, salt, 32).toString('hex')}`;
 function verifyPassword(pw, stored) {
@@ -65,7 +81,11 @@ setInterval(pruneHits, 10 * 60000).unref();
 /** Record one hit for `key`; false when it already has `max` hits inside the window. */
 function takeHit(key, max, windowMs) {
   if (hits.size > 50000) pruneHits();
-  if (hits.size > 50000 && !hits.has(key)) return false; // under flood: refuse new keys rather than forget the old ones
+  if (hits.size > 50000) {
+    // Still full of live entries: drop the oldest tenth so memory stays bounded and genuine newcomers are never refused.
+    let drop = 5000;
+    for (const k of hits.keys()) { if (drop-- <= 0) break; hits.delete(k); }
+  }
   const recent = recentHits(key, windowMs);
   if (recent.length >= max) return false;
   recent.push(Date.now());
@@ -74,7 +94,7 @@ function takeHit(key, max, windowMs) {
 }
 const TOO_MANY = 'Too many attempts. Please try again in a few minutes.';
 const rateLimit = (name, max, windowMs) => (req, res, next) =>
-  takeHit(`${name}:${req.ip}`, max, windowMs) ? next() : res.status(429).json({ error: TOO_MANY });
+  takeHit(`${name}:${addressKey(req.ip)}`, max, windowMs) ? next() : res.status(429).json({ error: TOO_MANY });
 
 const ALLOWED_RESUME = ['.pdf', '.doc', '.docx', '.rtf', '.txt'];
 const upload = multer({
@@ -112,7 +132,8 @@ function readSession(req) {
 function startSession(req, res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   q.run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)', token, userId, new Date(Date.now() + 30 * DAY).toISOString());
-  const secure = req.secure ? '; Secure' : '';
+  // A wrong "https" claim cannot hurt here: a browser on plain http simply refuses to store a Secure cookie.
+  const secure = req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https' ? '; Secure' : '';
   res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${30 * 86400}${secure}`);
 }
 
@@ -136,14 +157,9 @@ api.post('/setup', (req, res) => {
 api.post('/login', rateLimit('login', 20, 10 * 60000), (req, res) => {
   const { email, password } = req.body || {};
   const address = String(email || '').trim().toLowerCase().slice(0, 200);
-  // Second limit per account, so guesses spread over many addresses still run out.
-  if (recentHits(`fail:${address}`, 15 * 60000).length >= 30) return res.status(429).json({ error: TOO_MANY });
   const user = q.get('SELECT * FROM users WHERE email = ?', address);
   const matches = verifyPassword(pw(password), user ? user.password_hash : DUMMY_HASH);
-  if (!user || !matches) {
-    takeHit(`fail:${address}`, Infinity, 15 * 60000);
-    bad('That email and password do not match.', 401);
-  }
+  if (!user || !matches) bad('That email and password do not match.', 401);
   // Only someone who knows the password learns the state of the account.
   if (user.pending) bad(`Your account is waiting for approval by ${getSetting('agency_name', 'the agency')}. You will be able to sign in once it is approved.`, 403);
   if (!user.active) bad('This account has been deactivated.', 403);
@@ -257,9 +273,7 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
       let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', client.id, email);
       if (cand) {
         if (q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ? AND job_id = ?', cand.id, job.id)) return { duplicate: true };
-        // An anonymous form must never change an existing person's details. It may only fill in blanks.
-        q.run('UPDATE candidates SET phone = COALESCE(phone, ?), linkedin = COALESCE(linkedin, ?), location = COALESCE(location, ?) WHERE id = ?',
-          phone, linkedin, location, cand.id);
+        // An anonymous form must never change an existing person's record: nobody has shown they own this address.
       } else {
         const id = q.insert('INSERT INTO candidates (client_id, name, email, phone, linkedin, location, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
           client.id, name, email, phone, linkedin, location, now());
@@ -283,7 +297,7 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
     if (result.appId && recent < 3) {
       await sendTemplate('application_received', {
         applicationId: result.appId, to: email,
-        vars: { candidate_first_name: name.split(/\s+/)[0].slice(0, 40), candidate_name: name, job_title: job.title, company: client.name, sender_name: client.name },
+        vars: { candidate_first_name: greetingName(name), candidate_name: name, job_title: job.title, company: client.name, sender_name: client.name },
       });
     }
     res.json({ ok: true });
@@ -298,6 +312,10 @@ api.use((req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Please sign in.' });
   // A client user with no client would otherwise be scoped to "everything". That state should never exist; refuse it outright.
   if (req.user.role === 'client' && !req.user.client_id) return res.status(403).json({ error: 'This account is not linked to a company yet.' });
+  next();
+});
+api.use((req, res, next) => {
+  for (const value of Object.values(req.query)) if (typeof value !== 'string') return res.status(400).json({ error: 'That request could not be read.' });
   next();
 });
 const agencyOnly = (req, res, next) => (isAgency(req.user) ? next() : res.status(403).json({ error: 'Only the agency team can do this.' }));
@@ -474,7 +492,7 @@ api.get('/clients', (req, res) => {
 function clientFields(b) {
   const model = ['retainer', 'per_hire', 'hybrid'].includes(b.engagement_model) ? b.engagement_model : 'retainer';
   return {
-    name: clean(b.name, 120), brand_color: /^#[0-9a-f]{6}$/i.test(b.brand_color || '') ? b.brand_color : '#1f5443',
+    name: clean(b.name, 120), brand_color: isStr(b.brand_color) && /^#[0-9a-f]{6}$/i.test(b.brand_color) ? b.brand_color : '#1f5443',
     website: safeUrl(b.website), privacy_url: safeUrl(b.privacy_url), industry: clean(b.industry, 120), location: clean(b.location, 120),
     tagline: clean(b.tagline, 200), about: text(b.about, 6000),
     status: ['active', 'paused', 'ended'].includes(b.status) ? b.status : 'active',
@@ -482,8 +500,8 @@ function clientFields(b) {
     // Only the terms that belong to the chosen model are kept, so revenue never counts a figure the form no longer shows.
     monthly_retainer: model === 'per_hire' ? 0 : Math.max(0, int(b.monthly_retainer) ?? 0),
     fee_percent: model === 'retainer' ? 0 : Math.min(100, Math.max(0, Number(b.fee_percent) || 0)),
-    currency: /^[A-Z]{3}$/.test(b.currency || '') ? b.currency : 'USD',
-    started_at: /^\d{4}-\d{2}-\d{2}$/.test(b.started_at || '') ? b.started_at : null,
+    currency: isStr(b.currency) && /^[A-Z]{3}$/.test(b.currency) ? b.currency : 'USD',
+    started_at: isStr(b.started_at) && /^\d{4}-\d{2}-\d{2}$/.test(b.started_at) ? b.started_at : null,
   };
 }
 
@@ -614,7 +632,7 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
   const b = req.body || {};
   const f = jobFields(b);
   if (!f.title) bad('Job title is required.');
-  checkHiringManager(f.hiring_manager_id, job.client_id);
+  if (f.hiring_manager_id !== job.hiring_manager_id) checkHiringManager(f.hiring_manager_id, job.client_id);
   tx(() => {
     const t = now();
     q.run(
@@ -715,7 +733,7 @@ function loadApp(id, user) {
   return a;
 }
 const mailVars = (a, user) => ({
-  candidate_first_name: a.candidate_name.split(' ')[0], candidate_name: a.candidate_name,
+  candidate_first_name: greetingName(a.candidate_name), candidate_name: a.candidate_name,
   job_title: a.job_title, company: a.client_name, sender_name: user.name,
 });
 
@@ -747,7 +765,7 @@ api.post('/applications', agencyOnly, upload.single('resume'), (req, res) => {
     const email = String(b.email || '').trim().toLowerCase();
     const c = candidateFields(b);
     if (!c.name || !validEmail(email)) bad('Name and a valid email are required.');
-    const source = Object.hasOwn(SOURCE_LABELS, b.source) ? b.source : 'agency_sourced';
+    const source = isStr(b.source) && Object.hasOwn(SOURCE_LABELS, b.source) ? b.source : 'agency_sourced';
     const id = tx(() => {
       let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', job.client_id, email);
       if (cand && q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ? AND job_id = ?', cand.id, job.id)) bad('This person is already in the pipeline for this job.');
@@ -943,7 +961,7 @@ api.put('/applications/:id/offer', agencyOnly, (req, res) => {
   const status = ['draft', 'sent', 'accepted', 'declined'].includes(b.status) ? b.status : 'draft';
   const existing = q.get('SELECT * FROM offers WHERE application_id = ?', a.id);
   const t = now();
-  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(b.start_date || '') ? b.start_date : null;
+  const startDate = isStr(b.start_date) && /^\d{4}-\d{2}-\d{2}$/.test(b.start_date) ? b.start_date : null;
   if (existing) q.run('UPDATE offers SET salary = ?, start_date = ?, status = ?, notes = ?, updated_at = ? WHERE id = ?', int(b.salary), startDate, status, text(b.notes, 4000), t, existing.id);
   else q.run('INSERT INTO offers (application_id, salary, start_date, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', a.id, int(b.salary), startDate, status, text(b.notes, 4000), t, t);
   if (!existing || existing.status !== status) logActivity(a.id, req.user.id, 'offer', `Offer ${status === 'draft' ? 'drafted' : status}`);
@@ -1009,8 +1027,8 @@ api.get('/interviews', (req, res) => {
   const cid = scopeOf(req);
   const where = [], p = [];
   if (cid) { where.push('cl.id = ?'); p.push(cid); }
-  if (req.query.when === 'upcoming') { where.push(`i.status = 'scheduled' AND i.starts_at >= ?`); p.push(new Date(Date.now() - 3600000).toISOString()); }
-  if (req.query.when === 'past') { where.push(`(i.status != 'scheduled' OR i.starts_at < ?)`); p.push(new Date(Date.now() - 3600000).toISOString()); }
+  if (req.query.when === 'upcoming') { where.push(`i.status = 'scheduled' AND i.starts_at >= ? AND a.status IN ('active', 'hired')`); p.push(new Date(Date.now() - 3600000).toISOString()); }
+  if (req.query.when === 'past') { where.push(`(i.status != 'scheduled' OR i.starts_at < ? OR a.status NOT IN ('active', 'hired'))`); p.push(new Date(Date.now() - 3600000).toISOString()); }
   if (req.query.when === 'feedback') {
     where.push(`i.status != 'cancelled' AND i.starts_at < ? AND EXISTS (SELECT 1 FROM interview_panel p WHERE p.interview_id = i.id AND p.user_id = ?)
       AND NOT EXISTS (SELECT 1 FROM scorecards sc WHERE sc.interview_id = i.id AND sc.user_id = ?)`);
@@ -1040,8 +1058,8 @@ api.post('/interviews', async (req, res) => {
   const starts = new Date(b.starts_at);
   const title = clean(b.title, 160);
   if (!title || Number.isNaN(starts.getTime())) bad('Give the interview a title and a start time.');
-  if (a.status !== 'active') bad('Return this candidate to the pipeline before scheduling an interview.');
-  const kind = Object.hasOwn(KIND_LABELS, b.kind) ? b.kind : 'video';
+  if (a.status !== 'active' && a.status !== 'hired') bad('Return this candidate to the pipeline before scheduling an interview.');
+  const kind = isStr(b.kind) && Object.hasOwn(KIND_LABELS, b.kind) ? b.kind : 'video';
   const id = tx(() => {
     const iid = q.insert(
       `INSERT INTO interviews (application_id, title, kind, starts_at, duration_min, location, notes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1069,7 +1087,7 @@ api.patch('/interviews/:id', (req, res) => {
       const starts = new Date(b.starts_at);
       if (Number.isNaN(starts.getTime())) bad('That start time is not valid.');
       q.run('UPDATE interviews SET title = ?, kind = ?, starts_at = ?, duration_min = ?, location = ?, notes = ? WHERE id = ?',
-        clean(b.title, 160) ?? i.title, Object.hasOwn(KIND_LABELS, b.kind) ? b.kind : i.kind, starts.toISOString(),
+        clean(b.title, 160) ?? i.title, isStr(b.kind) && Object.hasOwn(KIND_LABELS, b.kind) ? b.kind : i.kind, starts.toISOString(),
         Math.min(480, Math.max(10, int(b.duration_min) ?? i.duration_min)), clean(b.location, 300), text(b.notes, 4000), i.id);
       if (starts.toISOString() !== i.starts_at) logActivity(i.application_id, req.user.id, 'interview', `Rescheduled ${i.title}`);
     }
@@ -1123,13 +1141,13 @@ api.get('/dashboard', (req, res) => {
     active_candidates: n(`SELECT COUNT(*) n ${appJoin} WHERE a.status = 'active' ${w}`, ...p),
     new_applicants: n(`SELECT COUNT(*) n ${appJoin} WHERE a.status = 'active' AND s.kind = 'applied' ${w}`, ...p),
     interviews_week: n(`SELECT COUNT(*) n FROM interviews i JOIN applications a ON a.id = i.application_id JOIN jobs j ON j.id = a.job_id
-      WHERE i.status = 'scheduled' AND i.starts_at >= ? AND i.starts_at < ? ${w}`, now(), new Date(Date.now() + 7 * DAY).toISOString(), ...p),
+      WHERE i.status = 'scheduled' AND a.status IN ('active', 'hired') AND i.starts_at >= ? AND i.starts_at < ? ${w}`, now(), new Date(Date.now() + 7 * DAY).toISOString(), ...p),
     offers_out: n(`SELECT COUNT(*) n ${appJoin} WHERE a.status = 'active' AND s.kind = 'offer' ${w}`, ...p),
     hires_90d: n(`SELECT COUNT(*) n ${appJoin} WHERE a.status = 'hired' AND a.hired_at >= ? ${w}`, daysAgo(90), ...p),
     pending_review: n(`SELECT COUNT(*) n ${appJoin} WHERE a.status = 'active' AND a.review_status = 'pending' ${w}`, ...p),
   };
   const upcoming = withPanels(q.all(
-    `${interviewSelect} WHERE i.status = 'scheduled' AND i.starts_at >= ? ${cid ? 'AND cl.id = ?' : ''} ORDER BY i.starts_at LIMIT 6`,
+    `${interviewSelect} WHERE i.status = 'scheduled' AND i.starts_at >= ? AND a.status IN ('active', 'hired') ${cid ? 'AND cl.id = ?' : ''} ORDER BY i.starts_at LIMIT 6`,
     new Date(Date.now() - 3600000).toISOString(), ...p));
   const jobs = q.all(`${jobSelect} WHERE j.status = 'open' ${w} ORDER BY new_applicants DESC, j.opened_at LIMIT 8`, ...p)
     .map(({ description, ideal_profile, questions, criteria, ...j }) => j);
@@ -1152,7 +1170,7 @@ api.get('/reports', (req, res) => {
   const cid = scopeOf(req);
   const jobId = int(req.query.job_id);
   if (jobId) loadJob(jobId, req.user);
-  const days = int(req.query.days);
+  const days = Math.min(3650, Math.max(0, int(req.query.days) ?? 0));
   const since = days ? daysAgo(days) : '1970-01-01';
   const where = [], p = [];
   if (cid) { where.push('j.client_id = ?'); p.push(cid); }

@@ -238,6 +238,9 @@ function ensureAutoincrement(table) {
 }
 addColumn('clients', 'privacy_url', 'TEXT');
 addColumn('users', 'pending', 'INTEGER NOT NULL DEFAULT 0');
+// Engagement terms that do not belong to the client's current model are not counted as revenue; clear any left by older versions.
+db.exec(`UPDATE clients SET monthly_retainer = 0 WHERE engagement_model = 'per_hire' AND monthly_retainer != 0`);
+db.exec(`UPDATE clients SET fee_percent = 0 WHERE engagement_model = 'retainer' AND fee_percent != 0`);
 addColumn('users', 'requested_company', 'TEXT');
 addColumn('applications', 'consent_at', 'TEXT');
 for (const table of ['candidates', 'applications', 'interviews']) ensureAutoincrement(table);

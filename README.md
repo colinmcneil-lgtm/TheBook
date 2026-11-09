@@ -20,6 +20,7 @@ interviews and reporting for every company you work inside, with a login for eac
 | **Email** | Templates with merge fields; every message is recorded on the candidate. Application confirmations, interview invitations and rejections can be sent automatically. |
 | **Reports** | Funnel conversion, source effectiveness, weekly application volume, time to hire, open-role ageing and hires. Printable for client reviews. Your retainer and placement-fee revenue is shown to your agency only. |
 | **Access** | Agency admins and recruiters see every client. Client users see only their own company, and never see your fees, internal brief or agency-only notes. |
+| **Accounts** | Send a one-time invitation link (from a client's page or Settings, Team) and the person sets their own password. Or people can use "Create an account" on the sign-in page: the account stays locked until you approve it and choose which client's hiring team it joins. |
 
 ## Run it
 
@@ -109,8 +110,8 @@ src/
 ```
 
 Security basics in place: salted scrypt password hashing, HTTP-only same-site session cookies, every
-request checked against the signed-in user's client, rate limiting on sign-in (per address and per account)
-and on public applications, a content security policy, résumé uploads restricted by type and size and only
+request checked against the signed-in user's client, rate limiting per visitor on sign-in, sign-up,
+invitations and public applications, a content security policy, résumé uploads restricted by type and size and only
 ever served back as downloads, length limits on everything the public form accepts, and a honeypot field on
 application forms. The code was reviewed by independent reviewers across authorization, web security, server
 logic, front end and deployment, and the confirmed findings were fixed.
@@ -122,7 +123,9 @@ they made at that client, and their résumé files.
 ## Not built yet
 
 - Calendar integration (Google or Microsoft) for live availability and automatic invites; today you get a calendar file to download.
-- Self-service password reset by email; an agency user sets a new temporary password instead.
+- Self-service password reset by email. Until then, deactivate the old account and send the person a new invitation link.
+- Email verification for self-registered accounts and an email when an account is approved (both need email delivery
+  connected); for now the approver confirms who the person is and lets them know.
 - AI-assisted screening or candidate summaries.
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
 - Automated tests in the repository (the flows were verified end to end in a browser during development).

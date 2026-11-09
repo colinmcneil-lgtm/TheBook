@@ -11,15 +11,28 @@ const isProd = process.env.NODE_ENV === 'production';
 // right: 0 when the app is reached directly, 1 behind a platform's proxy (Railway, Render, Fly), 2 with a CDN as well.
 // Those platforms are detected automatically; set TRUST_PROXY to override.
 const onPlatform = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RENDER || process.env.FLY_APP_NAME);
-const trustProxy = process.env.TRUST_PROXY ?? (onPlatform ? '1' : '0');
-app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+const requested = (process.env.TRUST_PROXY || '').trim().toLowerCase();
+function proxySetting() {
+  if (!requested) return onPlatform ? 1 : false;
+  if (/^\d+$/.test(requested)) return Number(requested) || false;
+  if (requested === 'true') return 1;
+  if (requested === 'false') return false;
+  return requested; // a list of proxy addresses or subnets
+}
+try {
+  app.set('trust proxy', proxySetting());
+} catch {
+  console.error(`TRUST_PROXY="${process.env.TRUST_PROXY}" is not valid (use a number of proxies, or a list of their addresses). Trusting none.`);
+  app.set('trust proxy', false);
+}
 app.disable('x-powered-by');
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('X-Frame-Options', 'DENY');
-  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+  // Browsers ignore this header on plain http, so honouring the proxy's word for "https" is safe even when the proxy is not trusted.
+  if (req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https') res.setHeader('Strict-Transport-Security', 'max-age=15552000');
   if (isProd) {
     // The dev server needs inline scripts and a websocket for hot reload, so the policy is production-only.
     res.setHeader('Content-Security-Policy',
