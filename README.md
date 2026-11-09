@@ -91,8 +91,12 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
 - **Tell the app about proxies.** Leave `TRUST_PROXY` unset when the app is reached directly (plain `docker run`).
   Behind a reverse proxy set it to the number of proxies in front, or sign-in and application rate limits will
   either lump every visitor together or be trivially bypassed.
-- **Connect email** by setting `SMTP_URL` and `MAIL_FROM` (see `.env.example`). Until you do, emails are
-  saved on the candidate's record and clearly marked as not sent. With email connected, admins are also emailed
+- **Connect email** in one of two ways (see `.env.example`). Until you do, emails are saved on the candidate's
+  record and clearly marked as not sent.
+  - `RESEND_API_KEY` and `MAIL_FROM`: sends through [Resend](https://resend.com)'s web API. Use this on Railway,
+    whose Hobby plan blocks SMTP. Create a Resend account, verify your sending domain there, create an API key,
+    and set `MAIL_FROM` to an address on that domain, for example `Your Agency <hiring@youragency.com>`.
+  - `SMTP_URL` and `MAIL_FROM`: sends through any SMTP server. With email connected, admins are also emailed
   when someone requests an account, and people are emailed when their account is approved. Set `APP_URL` to the
   workspace's address so those emails can link to it (Railway is detected automatically).
 

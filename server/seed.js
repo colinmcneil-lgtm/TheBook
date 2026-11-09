@@ -21,6 +21,7 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   tx(() => {
     for (const t of ['emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'users', 'clients'])
       db.exec(`DELETE FROM ${t}`);
+    db.exec('DELETE FROM sqlite_sequence'); // a wiped database starts numbering from 1 again
   });
   for (const file of fs.readdirSync(UPLOAD_DIR)) fs.rmSync(path.join(UPLOAD_DIR, file), { force: true }); // résumés of the rows just deleted
 }
