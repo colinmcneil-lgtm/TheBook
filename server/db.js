@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   salary_public INTEGER NOT NULL DEFAULT 1,
   description TEXT,
   ideal_profile TEXT,                                -- internal brief, never shown publicly
+  brief TEXT NOT NULL DEFAULT '{}',                  -- the recruiter brief (must-haves, where to look, search terms, pay notes...), agency only
   status TEXT NOT NULL DEFAULT 'draft',              -- draft | open | paused | closed
   hiring_manager_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   openings INTEGER NOT NULL DEFAULT 1,
@@ -243,6 +244,7 @@ function rebuildTable(table, change) {
 const ensureAutoincrement = (table) =>
   rebuildTable(table, (sql) => (/AUTOINCREMENT/i.test(sql) ? sql : sql.replace(/\bid INTEGER PRIMARY KEY\b/i, 'id INTEGER PRIMARY KEY AUTOINCREMENT')));
 addColumn('clients', 'privacy_url', 'TEXT');
+addColumn('jobs', 'brief', "TEXT NOT NULL DEFAULT '{}'");
 addColumn('users', 'pending', 'INTEGER NOT NULL DEFAULT 0');
 // Engagement terms that do not belong to the client's current model are not counted as revenue; clear any left by older versions.
 db.exec(`UPDATE clients SET monthly_retainer = 0 WHERE engagement_model = 'per_hire' AND monthly_retainer != 0`);

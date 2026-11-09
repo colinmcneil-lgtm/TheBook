@@ -592,18 +592,32 @@ api.put('/clients/:id', agencyOnly, (req, res) => {
 
 // ---------- jobs ----------
 const jobSelect = `
-  SELECT j.*, cl.name AS client_name, cl.brand_color, cl.slug AS client_slug, cl.currency, u.name AS hiring_manager_name,
+  SELECT j.*, cl.name AS client_name, cl.brand_color, cl.slug AS client_slug, cl.currency, cl.fee_percent, u.name AS hiring_manager_name, cu.name AS created_by_name,
     (SELECT COUNT(*) FROM applications a WHERE a.job_id = j.id) AS total_applicants,
     (SELECT COUNT(*) FROM applications a WHERE a.job_id = j.id AND a.status = 'active') AS active_candidates,
     (SELECT COUNT(*) FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.job_id = j.id AND a.status = 'active' AND s.kind = 'applied') AS new_applicants,
     (SELECT COUNT(*) FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.job_id = j.id AND a.status = 'active' AND s.kind = 'interview') AS interviewing,
     (SELECT COUNT(*) FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.job_id = j.id AND a.status = 'active' AND s.kind = 'offer') AS offers,
     (SELECT COUNT(*) FROM applications a WHERE a.job_id = j.id AND a.status = 'hired') AS hires
-  FROM jobs j JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = j.hiring_manager_id`;
+  FROM jobs j JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = j.hiring_manager_id LEFT JOIN users cu ON cu.id = j.created_by`;
 /** Parse the JSON columns and drop the agency-only internal brief for client users. */
 function hydrateJob(j, user) {
-  const { ideal_profile, ...rest } = j;
-  return { ...rest, ...(isAgency(user) ? { ideal_profile } : {}), questions: json(j.questions, []), criteria: json(j.criteria, []) };
+  const { ideal_profile, brief, fee_percent, ...rest } = j; // agency-only: the brief, and the fee the client pays
+  return { ...rest, ...(isAgency(user) ? { ideal_profile, brief: json(brief, {}), fee_percent } : {}), questions: json(j.questions, []), criteria: json(j.criteria, []) };
+}
+
+// The recruiter brief: free-text sections and one-item-per-line lists. Only these keys are stored.
+const BRIEF_TEXT = ['about', 'locations', 'search_string', 'pay_notes', 'pay_flex', 'process_notes'];
+const BRIEF_LISTS = ['must_haves', 'nice_to_haves', 'not_a_fit', 'target_companies', 'where_to_look', 'search_titles', 'search_keywords', 'selling_points', 'screening_questions'];
+function briefFields(input) {
+  const b = input && typeof input === 'object' ? input : {};
+  const out = {};
+  for (const key of BRIEF_TEXT) { const value = text(b[key], 6000); if (value) out[key] = value; }
+  for (const key of BRIEF_LISTS) {
+    const items = (Array.isArray(b[key]) ? b[key] : []).map((item) => clean(item, 300)).filter(Boolean).slice(0, 60);
+    if (items.length) out[key] = items;
+  }
+  return out;
 }
 /** A hiring manager must be an active agency user or belong to the job's own client. */
 function checkHiringManager(userId, clientId) {
@@ -625,7 +639,7 @@ api.get('/jobs', (req, res) => {
   if (req.query.status) { where.push('j.status = ?'); p.push(req.query.status); }
   const rows = q.all(`${jobSelect} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY CASE j.status WHEN 'open' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 ELSE 3 END, j.created_at DESC`, ...p);
-  res.json(rows.map((j) => hydrateJob(j, req.user)));
+  res.json(rows.map((j) => hydrateJob(j, req.user)).map(({ brief, ...j }) => ({ ...j, has_brief: brief ? Object.keys(brief).length > 0 : undefined })));
 });
 
 function jobFields(b) {
@@ -686,7 +700,8 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
       `UPDATE jobs SET title = ?, department = ?, location = ?, work_mode = ?, employment_type = ?, salary_min = ?, salary_max = ?, salary_public = ?,
          description = ?, ideal_profile = ?, status = ?, hiring_manager_id = ?, openings = ?, questions = ?, criteria = ?,
          opened_at = ?, closed_at = ? WHERE id = ?`,
-      f.title, f.department, f.location, f.work_mode, f.employment_type, f.salary_min, f.salary_max, f.salary_public, f.description, f.ideal_profile,
+      f.title, f.department, f.location, f.work_mode, f.employment_type, f.salary_min, f.salary_max, f.salary_public, f.description,
+      b.ideal_profile !== undefined ? f.ideal_profile : job.ideal_profile, // the brief is edited on its own page; leave it alone unless sent
       f.status, f.hiring_manager_id, f.openings, f.questions, f.criteria,
       job.opened_at ?? (f.status === 'open' ? t : null), f.status === 'closed' ? job.closed_at ?? t : null, job.id);
 
@@ -714,6 +729,17 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
       q.run(`UPDATE stages SET position = ? WHERE job_id = ? AND kind = 'hired'`, wanted.length + 2, job.id);
     }
   });
+  res.json({ ok: true });
+});
+
+// The recruiter brief is saved on its own, from the job's Brief page. It belongs to whoever created the job:
+// they (or an admin) can change it; the rest of the team reads it.
+api.put('/jobs/:id/brief', agencyOnly, (req, res) => {
+  const job = loadJob(req.params.id, req.user);
+  if (req.user.role !== 'admin' && job.created_by !== req.user.id) bad('Only the person who created this job, or an admin, can edit its brief.', 403);
+  const b = req.body || {};
+  q.run('UPDATE jobs SET brief = ?, ideal_profile = ? WHERE id = ?',
+    JSON.stringify(briefFields(b.brief)), b.ideal_profile !== undefined ? text(b.ideal_profile, 6000) : job.ideal_profile, job.id);
   res.json({ ok: true });
 });
 
@@ -1241,7 +1267,7 @@ api.get('/dashboard', (req, res) => {
     `${interviewSelect} WHERE i.status = 'scheduled' AND i.starts_at >= ? AND a.status IN ('active', 'hired') ${cid ? 'AND cl.id = ?' : ''} ORDER BY i.starts_at LIMIT 6`,
     new Date(Date.now() - 3600000).toISOString(), ...p));
   const jobs = q.all(`${jobSelect} WHERE j.status = 'open' ${w} ORDER BY new_applicants DESC, j.opened_at LIMIT 8`, ...p)
-    .map(({ description, ideal_profile, questions, criteria, ...j }) => j);
+    .map(({ description, ideal_profile, brief, fee_percent, questions, criteria, ...j }) => j);
   const recent = q.all(
     `SELECT ac.id, ac.type, ac.detail, ac.created_at, ac.application_id, u.name AS user_name, c.name AS candidate_name, j.title AS job_title, cl.name AS client_name
      FROM activities ac JOIN applications a ON a.id = ac.application_id JOIN candidates c ON c.id = a.candidate_id

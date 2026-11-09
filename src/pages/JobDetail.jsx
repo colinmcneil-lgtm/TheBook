@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CalendarDays, ChevronDown, Copy, ExternalLink, Pencil, Trash2, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { api, url, daysSince, fmtDate, salaryRange, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
@@ -7,6 +7,9 @@ import { Avatar, Badge, Button, Card, Empty, Menu, Page, Stars, Tabs, useAction,
 import { JobStatusBadge, ReviewBadge } from '../components/bits.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
 import JobForm from '../components/JobForm.jsx';
+import JobBrief from '../components/JobBrief.jsx';
+
+const lastTab = () => { try { return localStorage.getItem('thebook.jobtab'); } catch { return null; } };
 import { AddCandidateModal } from '../components/CandidateModals.jsx';
 
 function Board({ stages, apps }) {
@@ -101,12 +104,6 @@ function Details({ job, stages }) {
           <h3 className="text-sm font-semibold text-stone-900">Job advert</h3>
           {job.description ? <p className="mt-3 max-w-prose text-sm leading-relaxed whitespace-pre-wrap text-stone-700">{job.description}</p> : <p className="mt-2 text-sm text-stone-500">No description yet.</p>}
         </Card>
-        {isAgency && job.ideal_profile && (
-          <Card className="border-violet-200 bg-violet-50/50 p-5">
-            <h3 className="text-sm font-semibold text-stone-900">Internal brief <span className="font-normal text-stone-500">· agency only</span></h3>
-            <p className="mt-2 max-w-prose text-sm leading-relaxed whitespace-pre-wrap text-stone-700">{job.ideal_profile}</p>
-          </Card>
-        )}
       </div>
       <div className="space-y-6">
         <Card className="px-4 py-2.5">
@@ -146,8 +143,17 @@ export default function JobDetail() {
   const toast = useToast();
   const navigate = useNavigate();
   const openCandidate = useOpenCandidate();
-  const [tab, setTab] = useState('pipeline');
+  const [params, setParams] = useSearchParams();
   const [modal, setModal] = useState(null);
+  // The address decides the tab, then whichever tab this person used last; recruiters start on the brief, clients on the pipeline.
+  const allowed = isAgency ? ['brief', 'pipeline', 'all', 'details'] : ['pipeline', 'all', 'details'];
+  const tab = [params.get('tab'), lastTab(), allowed[0]].find((t) => allowed.includes(t));
+  const setTab = (t) => {
+    try { localStorage.setItem('thebook.jobtab', t); } catch { /* storage unavailable */ }
+    const next = new URLSearchParams(params);
+    next.set('tab', t);
+    setParams(next, { replace: true });
+  };
   const { data, error } = useApi(`/jobs/${id}`);
   const { data: apps, error: appsError } = useApi(url('/applications', { job_id: id, status: 'all' }));
   const inPlay = useMemo(() => (apps || []).filter((a) => a.status === 'active' || a.status === 'hired'), [apps]);
@@ -201,7 +207,9 @@ export default function JobDetail() {
     >
       <Link to="/jobs" className="no-print -mt-3 mb-3 inline-flex items-center gap-1 text-[13px] text-stone-500 hover:text-stone-800"><ArrowLeft className="size-3.5" />All jobs</Link>
       <Tabs className="mb-4" value={tab} onChange={setTab}
-        tabs={[{ id: 'pipeline', label: 'Pipeline', count: inPlay.length }, { id: 'all', label: 'All candidates', count: apps.length }, { id: 'details', label: 'Job details' }]} />
+        tabs={[isAgency && { id: 'brief', label: 'Brief' }, { id: 'pipeline', label: 'Pipeline', count: inPlay.length }, { id: 'all', label: 'All candidates', count: apps.length },
+          { id: 'details', label: isAgency ? 'Advert and setup' : 'Job details' }].filter(Boolean)} />
+      {tab === 'brief' && <JobBrief job={job} stages={stages} />}
       {tab === 'pipeline' && <Board stages={stages} apps={inPlay} />}
       {tab === 'all' && <ApplicationsTable rows={apps} showJob={false} empty="Nobody has applied yet. Share the apply link or add candidates you have sourced." />}
       {tab === 'details' && <Details job={job} stages={stages} />}

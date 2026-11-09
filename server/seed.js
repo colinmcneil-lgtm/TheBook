@@ -147,6 +147,51 @@ tx(() => {
   ];
   q.run('UPDATE jobs SET openings = 3 WHERE id = ?', jobs[0].id);
 
+  // Recruiter briefs: what the team sourcing each role needs to know.
+  const brief = (jobId, data) => q.run('UPDATE jobs SET brief = ? WHERE id = ?', JSON.stringify(data), jobId);
+  brief(jobs[0].id, {
+    about: 'Lumen is splitting its scheduling engine out of the monolith and needs a senior engineer to own the booking services end to end. The team is six engineers plus a product manager, reporting to Maya (VP Engineering). Two of the three openings are growth hires; one replaces a leaver.',
+    must_haves: ['5+ years building and running production backend services', 'Strong Postgres: has designed schemas and fixed slow queries under load', 'TypeScript or another typed backend language (Go, Kotlin, C#) with willingness to work in TypeScript', 'Has owned a service through an on-call rotation', 'Right to work in the UK without sponsorship'],
+    nice_to_haves: ['Multi-tenant SaaS at scale', 'Healthcare, booking or scheduling domain', 'Has mentored mid-level engineers'],
+    not_a_fit: ['Pure front-end or mobile backgrounds', 'Contractors looking for day rates', 'Fully remote outside the UK'],
+    target_companies: ['Brightwater', 'Northgate Digital', 'Halden Systems', 'Sable Analytics', 'Tidewell', 'Quillon'],
+    where_to_look: ['LinkedIn: backend engineers at the target companies with 4 to 8 years in post', 'GitHub: contributors to Postgres tooling and TypeScript server frameworks', 'Speakers and attendees from London backend and Postgres meetups', 'Maya’s former colleagues at Northgate Digital (ask her for introductions)'],
+    locations: 'London office two days a week (Tuesday and Thursday). Commutable from most of the South East. Manchester office is an option for the right person.',
+    search_titles: ['Senior Backend Engineer', 'Senior Software Engineer', 'Staff Engineer', 'Lead Backend Developer'],
+    search_keywords: ['TypeScript', 'Node.js', 'PostgreSQL', 'distributed systems', 'SaaS'],
+    pay_notes: 'Share options (0.05% to 0.1%), 10% pension match, private health, £1,500 learning budget.',
+    pay_flex: 'Maya will go to £110k for someone who can lead the scheduling rewrite. No sign-on bonus.',
+    selling_points: ['Own a system handling millions of appointments a month', 'Series B closed in the spring: three years of runway', 'Small team, no agile theatre, real say in architecture', 'Maya is a strong, hands-on engineering leader with low attrition'],
+    screening_questions: ['Tell me about the last production incident you led the response to.', 'What is the largest table you have worked with, and what did you do when queries slowed down?', 'What are you earning now, and what would make you move?', 'What is your notice period?'],
+    process_notes: 'Send profiles in batches of three with a short write-up. Maya replies within 48 hours. Technical interview is a paired exercise, not a take-home.',
+  });
+  brief(jobs[3].id, {
+    about: 'Kestrel is expanding into the Midlands and needs a sales leader who can keep closing while building the team from eight to fifteen. Reports to Ruth; works closely with Dev on depot capacity.',
+    must_haves: ['Has led a B2B sales team of five or more', 'Track record in logistics, freight or parcel delivery', 'Still carries a personal number and enjoys it', 'Based within an hour of Manchester'],
+    nice_to_haves: ['Has opened a new region from scratch', 'Experience selling to regional retailers'],
+    not_a_fit: ['Enterprise software sellers with no operational background', 'Account managers who have not won new business recently'],
+    target_companies: ['Varsity Freight', 'Redfern Works', 'Coppermill', 'Pellham'],
+    where_to_look: ['LinkedIn: regional sales managers ready to step up', 'Trade press “movers” columns', 'Referrals from Kestrel’s account executives'],
+    search_titles: ['Head of Sales', 'Sales Director', 'Regional Sales Manager', 'Commercial Director'],
+    search_keywords: ['logistics', 'freight', 'same-day', 'B2B', 'new business'],
+    search_string: '("Head of Sales" OR "Sales Director" OR "Regional Sales Manager") AND (logistics OR freight OR courier) AND (Manchester OR "North West")',
+    pay_notes: '30% bonus on target, car allowance £6k, private health.',
+    pay_flex: 'Base could reach £100k with a lower bonus. Guaranteed first-quarter bonus is possible.',
+    selling_points: ['Profitable, family-owned, growing 30% a year', 'A new region to build with a real budget', 'Direct line to the owners'],
+    screening_questions: ['What was your team’s number last year and what did you personally close?', 'How would you approach your first 90 days in the Midlands?'],
+    process_notes: 'Case presentation is to Ruth and Dev together. They want to see a 90-day plan.',
+  });
+  for (const j of jobs.filter((x, i) => ![0, 3].includes(i) && x.size > 0)) {
+    const meta = q.get('SELECT title, department, location FROM jobs WHERE id = ?', j.id);
+    brief(j.id, {
+      must_haves: [`3+ years in a comparable ${meta.department.toLowerCase()} role`, 'Clear, structured communicator', `Able to be in ${meta.location} as the role requires`],
+      nice_to_haves: ['Experience in a company of a similar size and stage'],
+      search_titles: [meta.title, meta.title.replace(/^(Senior|Lead|Head of) /, '')].filter((t, i, a) => a.indexOf(t) === i),
+      search_keywords: [meta.department, meta.location],
+      selling_points: ['Growing team with a hiring manager who moves quickly'],
+    });
+  }
+
   const usedNames = new Set();
   const person = () => {
     let name;

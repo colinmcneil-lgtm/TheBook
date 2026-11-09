@@ -27,7 +27,7 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
     work_mode: job?.work_mode ?? 'hybrid', employment_type: job?.employment_type ?? 'full_time',
     salary_min: job?.salary_min ?? '', salary_max: job?.salary_max ?? '', salary_public: job ? job.salary_public === 1 : true,
     openings: job?.openings ?? 1, hiring_manager_id: job?.hiring_manager_id ?? '', status: job?.status ?? 'draft',
-    description: job?.description ?? '', ideal_profile: job?.ideal_profile ?? '',
+    description: job?.description ?? '',
     interview_stages: stages ? stages.filter((s) => s.kind === 'interview').map((s) => ({ id: s.id, name: s.name })) : DEFAULT_STAGES.map((name) => ({ name })),
     questions: job?.questions ?? [],
     criteria: job?.criteria ?? DEFAULT_CRITERIA,
@@ -41,7 +41,7 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
 
   const [save, busy] = useAction(async () => {
     const id = job ? (await api.put(`/jobs/${job.id}`, form), job.id) : (await api.post('/jobs', form)).id;
-    toast(job ? 'Job saved' : form.status === 'open' ? 'Job created and published' : 'Job saved as a draft');
+    toast(job ? 'Job saved' : form.status === 'open' ? 'Job created and published. Add the recruiter brief next.' : 'Job saved as a draft. Add the recruiter brief next.');
     bump();
     onClose();
     onSaved?.(id);
@@ -96,10 +96,6 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
 
       <Section title="Job advert" hint="Shown on the client's careers page. Plain text; line breaks are kept.">
         <Textarea rows={9} {...bind('description')} placeholder={'A short introduction to the role and team.\n\nWhat you will do\n• …\n\nWhat we are looking for\n• …'} />
-      </Section>
-
-      <Section title="Internal brief" hint="Your notes on the ideal profile, must-haves and the hiring manager's preferences. Only your agency sees this.">
-        <Textarea rows={3} {...bind('ideal_profile')} />
       </Section>
 
       <Section title="Interview stages" hint="Every pipeline starts with Applied and ends with Offer and Hired. These are the steps in between, in order.">
