@@ -92,7 +92,9 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   Behind a reverse proxy set it to the number of proxies in front, or sign-in and application rate limits will
   either lump every visitor together or be trivially bypassed.
 - **Connect email** by setting `SMTP_URL` and `MAIL_FROM` (see `.env.example`). Until you do, emails are
-  saved on the candidate's record and clearly marked as not sent.
+  saved on the candidate's record and clearly marked as not sent. With email connected, admins are also emailed
+  when someone requests an account, and people are emailed when their account is approved. Set `APP_URL` to the
+  workspace's address so those emails can link to it (Railway is detected automatically).
 
 ## How it is built
 

@@ -31,6 +31,27 @@ export async function sendMail({ applicationId, to, subject, body, userId = null
   return { id, delivery };
 }
 
+/** Where the workspace lives, for links in emails. Never taken from the request, which a sender could forge. */
+export const appUrl = () =>
+  (process.env.APP_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')).replace(/\/+$/, '');
+
+/**
+ * An email to people on the team (not to a candidate, so it is not kept on any candidate's record).
+ * Resolves to true when it was handed to the mail server, false when delivery is not connected or failed.
+ */
+export async function notify({ to, subject, body }) {
+  const recipients = [].concat(to).filter(Boolean);
+  if (!transport || !recipients.length) return false;
+  try {
+    const from = process.env.MAIL_FROM || `"${getSetting('agency_name', 'Recruiting')}" <no-reply@localhost>`;
+    await transport.sendMail({ from, to: recipients, subject: String(subject).replace(/[\r\n]+/g, ' ').slice(0, 300), text: String(body), disableFileAccess: true, disableUrlAccess: true });
+    return true;
+  } catch (err) {
+    console.error('Notification email failed:', err.message);
+    return false;
+  }
+}
+
 /** Send one of the built-in templates (application_received, rejection, interview_invite). */
 export async function sendTemplate(key, { applicationId, to, vars, userId = null }) {
   const tpl = q.get('SELECT * FROM email_templates WHERE key = ?', key);

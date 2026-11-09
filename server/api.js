@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
-import { sendMail, sendTemplate, mailConfigured } from './mail.js';
+import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
 
 export const api = express.Router();
 
@@ -183,6 +183,20 @@ api.post('/signup', rateLimit('signup', 5, 60 * 60000), (req, res) => {
   if (!q.get('SELECT 1 AS x FROM users WHERE email = ?', email)) {
     q.run(`INSERT INTO users (email, password_hash, name, role, client_id, title, active, pending, requested_company, created_at)
            VALUES (?, ?, ?, 'client', NULL, ?, 0, 1, ?, ?)`, email, hash, name, clean(b.title, 120), clean(b.company, 160), now());
+    // Tell the agency's admins. Not awaited (the response must take the same time either way) and capped per hour,
+    // so a burst of fake sign-ups cannot flood their inboxes.
+    if (takeHit('notify:signup', 20, 60 * 60000)) {
+      const admins = q.all(`SELECT email FROM users WHERE role = 'admin' AND active = 1`).map((u) => u.email);
+      const link = appUrl() ? `${appUrl()}/settings?tab=team` : 'Settings, then Team, in your hiring workspace';
+      notify({
+        to: admins,
+        subject: `Account request from ${name}`,
+        body: `Someone has asked for an account in your hiring workspace.\n\n` +
+          `Name: ${name}\nEmail: ${email}\nCompany: ${clean(b.company, 160) || 'not given'}\nJob title: ${clean(b.title, 120) || 'not given'}\n\n` +
+          `These details were typed by the person and have not been verified. The account cannot sign in until you approve it.\n\n` +
+          `Approve or decline: ${link}\n`,
+      });
+    }
   }
   res.json({ ok: true });
 });
@@ -411,12 +425,19 @@ function accessFrom(b, user) {
 }
 
 // Approve a self-registered account and decide what it can see.
-api.post('/users/:id/approve', agencyOnly, (req, res) => {
+api.post('/users/:id/approve', agencyOnly, async (req, res) => {
   const target = q.get('SELECT * FROM users WHERE id = ?', int(req.params.id));
   if (!target || !target.pending) bad('This request has already been handled.', 404);
   const { role, clientId } = accessFrom(req.body || {}, req.user);
   q.run('UPDATE users SET role = ?, client_id = ?, active = 1, pending = 0 WHERE id = ? AND pending = 1', role, clientId, target.id);
-  res.json({ ok: true });
+  // Let the person know (when email is connected). The response says whether that happened, so the approver knows if they need to tell them.
+  const agency = getSetting('agency_name', 'the agency');
+  const notified = await notify({
+    to: target.email,
+    subject: `Your ${agency} account is ready`,
+    body: `Hi ${greetingName(target.name)},\n\nYour account has been approved. You can now sign in${appUrl() ? ` at ${appUrl()}` : ''} with this email address and the password you chose.\n\n${agency}\n`,
+  });
+  res.json({ ok: true, notified });
 });
 
 // Decline a self-registered account. Approved accounts are deactivated instead, so their history stays attributed.

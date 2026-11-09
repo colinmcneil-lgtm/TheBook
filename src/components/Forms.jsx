@@ -133,8 +133,8 @@ export function ApproveForm({ person, onClose }) {
   const guess = clients.find((c) => person.requested_company && c.name.toLowerCase() === person.requested_company.toLowerCase());
   const [form, setForm] = useState({ role: 'client', client_id: guess?.id ?? '' });
   const [approve, busy] = useAction(async () => {
-    await api.post(`/users/${person.id}/approve`, form);
-    toast(`${person.name} can now sign in`);
+    const { notified } = await api.post(`/users/${person.id}/approve`, form);
+    toast(notified ? `${person.name} can now sign in and has been emailed` : `${person.name} can now sign in. Let them know, as no email was sent.`);
     bump();
     onClose();
   });
