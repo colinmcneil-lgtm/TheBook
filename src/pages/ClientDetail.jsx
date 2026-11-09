@@ -6,7 +6,7 @@ import { api, url, fmtDate, ENGAGEMENTS } from '../lib.js';
 import { Avatar, Badge, Button, Card, CardHeader, Empty, Page, Stat, useAction, useToast } from '../ui.jsx';
 import { JobList } from './Jobs.jsx';
 import { engagementSummary } from './Clients.jsx';
-import { ClientForm, UserForm } from '../components/Forms.jsx';
+import { ClientForm, InviteForm } from '../components/Forms.jsx';
 import JobForm from '../components/JobForm.jsx';
 
 export default function ClientDetail() {
@@ -80,7 +80,7 @@ export default function ClientDetail() {
                   </li>
                 ))}
               </ul>
-            ) : <p className="px-4 py-5 text-sm text-stone-500">Invite hiring managers and interviewers so they can review your shortlists and submit scorecards.</p>}
+            ) : <p className="px-4 py-5 text-sm text-stone-500">Invite hiring managers and interviewers so they can review your shortlists and submit scorecards. You get a link to send them; they choose their own password.</p>}
           </Card>
 
           <Card>
@@ -96,7 +96,7 @@ export default function ClientDetail() {
       </div>
 
       {modal === 'edit' && <ClientForm client={client} onClose={() => setModal(null)} />}
-      {modal === 'user' && <UserForm client={client} onClose={() => setModal(null)} />}
+      {modal === 'user' && <InviteForm client={client} onClose={() => setModal(null)} />}
       {modal === 'job' && <JobForm clientId={client.id} onClose={() => setModal(null)} onSaved={(jobId) => navigate(`/jobs/${jobId}`)} />}
     </Page>
   );

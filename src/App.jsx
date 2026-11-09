@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { api } from './lib.js';
 import { AppContext } from './state.jsx';
 import { ToastProvider, Loading } from './ui.jsx';
 import Layout from './components/Layout.jsx';
-import Login from './pages/Login.jsx';
+import Login, { Join } from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Inbox from './pages/Inbox.jsx';
 import Jobs from './pages/Jobs.jsx';
@@ -24,6 +24,7 @@ function Workspace() {
   const [me, setMe] = useState(undefined); // undefined = loading, null = signed out
   const [version, setVersion] = useState(0);
   const [scope, setScopeState] = useState(() => Number(stored('embed.scope')) || null);
+  const navigate = useNavigate();
 
   const reloadMe = useCallback(() => api.get('/me').then(setMe).catch(() => setMe(null)), []);
   useEffect(() => { reloadMe(); }, [reloadMe]);
@@ -45,9 +46,10 @@ function Workspace() {
       version,
       bump: () => setVersion((v) => v + 1),
       reloadMe,
-      signOut: async () => { await api.post('/logout').catch(() => {}); setMe(null); },
+      // Back to the home address, so whoever signs in next does not land on the previous person's page.
+      signOut: async () => { await api.post('/logout').catch(() => {}); navigate('/', { replace: true }); setMe(null); },
     };
-  }, [me, scope, version, reloadMe]);
+  }, [me, scope, version, reloadMe, navigate]);
 
   if (me === undefined) return <Loading className="h-full" />;
   if (!me) return <Login onDone={reloadMe} />;
@@ -79,6 +81,7 @@ export default function App() {
       <Routes>
         <Route path="/careers/:slug" element={<Careers />} />
         <Route path="/careers/:slug/:jobId" element={<CareersJob />} />
+        <Route path="/join/:token" element={<Join />} />
         <Route path="/*" element={<Workspace />} />
       </Routes>
     </ToastProvider>

@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Plus, UserPlus, Trash2 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Check, Plus, UserPlus, Trash2 } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
-import { api } from '../lib.js';
+import { api, ago, fmtDate } from '../lib.js';
 import { Avatar, Badge, Button, Card, CardHeader, Field, Input, Modal, Page, Tabs, Textarea, useAction, useToast } from '../ui.jsx';
-import { UserForm } from '../components/Forms.jsx';
+import { ApproveForm, InviteForm } from '../components/Forms.jsx';
 
 function Account() {
   const { user } = useApp();
@@ -61,15 +62,46 @@ function Team() {
   const { isAdmin, user, bump } = useApp();
   const toast = useToast();
   const { data: people, error } = useApi('/users');
-  const [adding, setAdding] = useState(false);
+  const { data: invites } = useApi('/invites');
+  const [modal, setModal] = useState(null); // 'invite' | { approve: person }
   const [setActive] = useAction(async (u, active) => { await api.patch(`/users/${u.id}`, { active }); toast(active ? 'Reactivated' : 'Deactivated'); bump(); });
+  const [decline] = useAction(async (u) => {
+    if (!window.confirm(`Decline ${u.name}'s account request? It will be removed.`)) return;
+    await api.del(`/users/${u.id}`);
+    toast('Request declined');
+    bump();
+  });
+  const [revoke] = useAction(async (inv) => { await api.del(`/invites/${inv.id}`); toast('Invitation revoked'); bump(); });
   if (!people) return <Pending error={error} />;
-  const groups = [['Agency team', people.filter((p) => p.role !== 'client')], ['Client hiring teams', people.filter((p) => p.role === 'client')]];
+  const waiting = people.filter((p) => p.pending);
+  const members = people.filter((p) => !p.pending);
+  const groups = [['Agency team', members.filter((p) => p.role !== 'client')], ['Client hiring teams', members.filter((p) => p.role === 'client')]];
   return (
     <div className="max-w-3xl space-y-6">
+      {waiting.length > 0 && (
+        <Card className="border-amber-300">
+          <CardHeader title="Account requests" count={waiting.length} action={<span className="text-xs text-stone-500">From “Create an account” on the sign-in page</span>} />
+          <ul className="divide-y divide-line">
+            {waiting.map((u) => (
+              <li key={u.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                <Avatar name={u.name} size={30} />
+                <div className="min-w-0 flex-1 basis-56">
+                  <div className="truncate text-sm font-medium text-stone-900">{u.name}</div>
+                  <div className="truncate text-[13px] text-stone-500">{[u.email, u.requested_company, u.title].filter(Boolean).join(' · ')}</div>
+                  <div className="text-xs text-stone-400">Requested {ago(u.created_at)}</div>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="danger" onClick={() => decline(u)}>Decline</Button>
+                  <Button size="sm" variant="primary" icon={Check} onClick={() => setModal({ approve: u })}>Approve</Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
       {groups.map(([title, list], gi) => (
         <Card key={title}>
-          <CardHeader title={title} count={list.length} action={gi === 0 && isAdmin ? <Button size="sm" icon={UserPlus} onClick={() => setAdding(true)}>Add teammate</Button> : gi === 1 ? <span className="text-xs text-stone-500">Invite from each client’s page</span> : null} />
+          <CardHeader title={title} count={list.length} action={gi === 0 && isAdmin ? <Button size="sm" icon={UserPlus} onClick={() => setModal('invite')}>Invite teammate</Button> : gi === 1 ? <span className="text-xs text-stone-500">Invite from each client’s page</span> : null} />
           <ul className="divide-y divide-line">
             {list.map((u) => (
               <li key={u.id} className="flex items-center gap-3 px-4 py-2.5">
@@ -92,7 +124,26 @@ function Team() {
           </ul>
         </Card>
       ))}
-      {adding && <UserForm onClose={() => setAdding(false)} />}
+      {invites?.length > 0 && (
+        <Card>
+          <CardHeader title="Open invitations" count={invites.length} action={<span className="text-xs text-stone-500">Unused links that still work</span>} />
+          <ul className="divide-y divide-line">
+            {invites.map((inv) => (
+              <li key={inv.id} className="flex items-center gap-3 px-4 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-stone-900">{inv.role === 'client' ? `${inv.client_name} hiring team` : inv.role === 'admin' ? 'Agency admin' : 'Agency recruiter'}</div>
+                  <div className="truncate text-[13px] text-stone-500">
+                    {[inv.email ? `Only for ${inv.email}` : 'Anyone with the link', inv.created_by_name && `created by ${inv.created_by_name}`, `expires ${fmtDate(inv.expires_at)}`].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+                {(inv.role === 'client' || isAdmin) && <button type="button" onClick={() => revoke(inv)} className="text-xs font-medium text-stone-500 hover:text-red-700">Revoke</button>}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+      {modal === 'invite' && <InviteForm onClose={() => setModal(null)} />}
+      {modal?.approve && <ApproveForm person={modal.approve} onClose={() => setModal(null)} />}
     </div>
   );
 }
@@ -153,7 +204,10 @@ function Templates() {
 
 export default function Settings() {
   const { isAgency } = useApp();
-  const [tab, setTab] = useState('account');
+  const [params, setParams] = useSearchParams();
+  // Client users only have the account tab; an unknown or agency-only tab in the address falls back to it.
+  const tab = isAgency && ['agency', 'team', 'templates'].includes(params.get('tab')) ? params.get('tab') : 'account';
+  const setTab = (t) => setParams({ tab: t }, { replace: true });
   return (
     <Page title="Settings">
       {isAgency && (

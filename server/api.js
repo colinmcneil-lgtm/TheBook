@@ -138,13 +138,68 @@ api.post('/login', rateLimit('login', 20, 10 * 60000), (req, res) => {
   const address = String(email || '').trim().toLowerCase().slice(0, 200);
   // Second limit per account, so guesses spread over many addresses still run out.
   if (recentHits(`fail:${address}`, 15 * 60000).length >= 30) return res.status(429).json({ error: TOO_MANY });
-  const user = q.get('SELECT * FROM users WHERE email = ? AND active = 1', address);
+  const user = q.get('SELECT * FROM users WHERE email = ?', address);
   const matches = verifyPassword(pw(password), user ? user.password_hash : DUMMY_HASH);
   if (!user || !matches) {
     takeHit(`fail:${address}`, Infinity, 15 * 60000);
     bad('That email and password do not match.', 401);
   }
+  // Only someone who knows the password learns the state of the account.
+  if (user.pending) bad(`Your account is waiting for approval by ${getSetting('agency_name', 'the agency')}. You will be able to sign in once it is approved.`, 403);
+  if (!user.active) bad('This account has been deactivated.', 403);
   startSession(req, res, user.id);
+  res.json({ ok: true });
+});
+
+// ---------- unauthenticated: creating an account ----------
+// Anyone may ask for an account. It stays locked (it cannot sign in or see anything) until an agency user approves it
+// and decides which client's hiring team it belongs to.
+api.post('/signup', rateLimit('signup', 5, 60 * 60000), (req, res) => {
+  if (!q.get('SELECT 1 AS x FROM users LIMIT 1')) bad('This workspace has not been set up yet.', 403);
+  const b = req.body || {};
+  const email = String(b.email || '').trim().toLowerCase();
+  const name = clean(b.name, 120);
+  if (!name || !validEmail(email)) bad('Your name and a valid email are required.');
+  if (pw(b.password).length < 8) bad('Choose a password of at least 8 characters.');
+  if (q.get('SELECT COUNT(*) AS n FROM users WHERE pending = 1').n >= 200) bad('Account requests are paused for now. Please contact the agency directly.', 429);
+  const hash = hashPassword(b.password); // always computed, so the response time does not reveal whether the address is registered
+  // Same answer whether or not the address already has an account, for the same reason.
+  if (!q.get('SELECT 1 AS x FROM users WHERE email = ?', email)) {
+    q.run(`INSERT INTO users (email, password_hash, name, role, client_id, title, active, pending, requested_company, created_at)
+           VALUES (?, ?, ?, 'client', NULL, ?, 0, 1, ?, ?)`, email, hash, name, clean(b.title, 120), clean(b.company, 160), now());
+  }
+  res.json({ ok: true });
+});
+
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+function loadInvite(token) {
+  const inv = /^[a-f0-9]{48}$/.test(token || '')
+    ? q.get(`SELECT i.*, c.name AS client_name FROM invites i LEFT JOIN clients c ON c.id = i.client_id WHERE i.token_hash = ?`, hashToken(token))
+    : null;
+  if (!inv || inv.used_at || inv.expires_at < now() || (inv.role === 'client' && !inv.client_id)) bad('This invitation link is no longer valid. Please ask for a new one.', 404);
+  return inv;
+}
+
+api.get('/invites/:token', rateLimit('invite', 40, 10 * 60000), (req, res) => {
+  const inv = loadInvite(req.params.token);
+  res.json({ role: inv.role, clientName: inv.client_name, email: inv.email, agencyName: getSetting('agency_name', '') });
+});
+
+api.post('/invites/:token/accept', rateLimit('invite', 40, 10 * 60000), (req, res) => {
+  const inv = loadInvite(req.params.token);
+  const b = req.body || {};
+  const email = inv.email || String(b.email || '').trim().toLowerCase();
+  const name = clean(b.name, 120);
+  if (!name || !validEmail(email)) bad('Your name and a valid email are required.');
+  if (pw(b.password).length < 8) bad('Choose a password of at least 8 characters.');
+  if (q.get('SELECT 1 AS x FROM users WHERE email = ?', email)) bad('An account with this email already exists. Sign in instead, or ask for it to be reactivated.');
+  const id = tx(() => {
+    // Claim the invitation first; if another request used it a moment ago, nothing is created.
+    if (!q.run('UPDATE invites SET used_at = ? WHERE id = ? AND used_at IS NULL', now(), inv.id).changes) bad('This invitation link has already been used.', 404);
+    return q.insert('INSERT INTO users (email, password_hash, name, role, client_id, title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      email, hashPassword(b.password), name, inv.role, inv.role === 'client' ? inv.client_id : null, clean(b.title, 120), now());
+  });
+  startSession(req, res, id);
   res.json({ ok: true });
 });
 
@@ -241,6 +296,8 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
 api.use((req, res, next) => {
   req.user = readSession(req);
   if (!req.user) return res.status(401).json({ error: 'Please sign in.' });
+  // A client user with no client would otherwise be scoped to "everything". That state should never exist; refuse it outright.
+  if (req.user.role === 'client' && !req.user.client_id) return res.status(403).json({ error: 'This account is not linked to a company yet.' });
   next();
 });
 const agencyOnly = (req, res, next) => (isAgency(req.user) ? next() : res.status(403).json({ error: 'Only the agency team can do this.' }));
@@ -281,6 +338,7 @@ api.get('/nav', (req, res) => {
       WHERE a.status = 'active' AND s.kind = 'applied' ${where}`, ...p),
     pending_review: count(`SELECT COUNT(*) n FROM applications a JOIN jobs j ON j.id = a.job_id
       WHERE a.status = 'active' AND a.review_status = 'pending' ${where}`, ...p),
+    pending_accounts: isAgency(req.user) ? count('SELECT COUNT(*) n FROM users WHERE pending = 1') : 0,
     scorecards_due: count(`SELECT COUNT(*) n FROM interviews i JOIN interview_panel p ON p.interview_id = i.id
       JOIN applications a ON a.id = i.application_id JOIN jobs j ON j.id = a.job_id
       WHERE p.user_id = ? AND i.status != 'cancelled' AND i.starts_at < ?
@@ -317,7 +375,7 @@ api.delete('/templates/:id', agencyOnly, (req, res) => {
 // ---------- users ----------
 api.get('/users', (req, res) => {
   const cid = scopeOf(req);
-  const cols = `u.id, u.name, u.email, u.role, u.client_id, u.title, u.active, c.name AS client_name`;
+  const cols = `u.id, u.name, u.email, u.role, u.client_id, u.title, u.active, u.pending, u.requested_company, u.created_at, c.name AS client_name`;
   let rows;
   if (isAgency(req.user) && !cid) rows = q.all(`SELECT ${cols} FROM users u LEFT JOIN clients c ON c.id = u.client_id ORDER BY u.role = 'client', u.name`);
   else rows = q.all(`SELECT ${cols} FROM users u LEFT JOIN clients c ON c.id = u.client_id
@@ -325,25 +383,66 @@ api.get('/users', (req, res) => {
   res.json(rows);
 });
 
-api.post('/users', agencyOnly, (req, res) => {
-  const b = req.body || {};
+/** Validate the access being granted: client users need a real client; only an admin may add agency team members. */
+function accessFrom(b, user) {
   const role = ['admin', 'recruiter', 'client'].includes(b.role) ? b.role : 'client';
-  if (role !== 'client' && req.user.role !== 'admin') bad('Only an agency admin can add agency team members.', 403);
-  const email = String(b.email || '').trim().toLowerCase();
-  if (!clean(b.name) || !validEmail(email)) bad('Name and a valid email are required.');
-  if (pw(b.password).length < 8) bad('Set a temporary password of at least 8 characters.');
+  if (role !== 'client' && user.role !== 'admin') bad('Only an agency admin can add agency team members.', 403);
   const clientId = role === 'client' ? int(b.client_id) : null;
   if (role === 'client' && !q.get('SELECT 1 AS x FROM clients WHERE id = ?', clientId)) bad('Choose the client this person belongs to.');
-  if (q.get('SELECT 1 AS x FROM users WHERE email = ?', email)) bad('Someone with that email already has an account.');
-  const id = q.insert('INSERT INTO users (email, password_hash, name, role, client_id, title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    email, hashPassword(b.password), clean(b.name, 120), role, clientId, clean(b.title, 120), now());
-  res.json({ id });
+  return { role, clientId };
+}
+
+// Approve a self-registered account and decide what it can see.
+api.post('/users/:id/approve', agencyOnly, (req, res) => {
+  const target = q.get('SELECT * FROM users WHERE id = ?', int(req.params.id));
+  if (!target || !target.pending) bad('This request has already been handled.', 404);
+  const { role, clientId } = accessFrom(req.body || {}, req.user);
+  q.run('UPDATE users SET role = ?, client_id = ?, active = 1, pending = 0 WHERE id = ? AND pending = 1', role, clientId, target.id);
+  res.json({ ok: true });
+});
+
+// Decline a self-registered account. Approved accounts are deactivated instead, so their history stays attributed.
+api.delete('/users/:id', agencyOnly, (req, res) => {
+  const target = q.get('SELECT * FROM users WHERE id = ?', int(req.params.id));
+  if (!target || !target.pending) bad('Only account requests that are still waiting can be removed.', 404);
+  q.run('DELETE FROM users WHERE id = ? AND pending = 1', target.id);
+  res.json({ ok: true });
+});
+
+// ---------- invitations ----------
+api.get('/invites', agencyOnly, (req, res) => {
+  res.json(q.all(
+    `SELECT i.id, i.role, i.client_id, i.email, i.created_at, i.expires_at, c.name AS client_name, u.name AS created_by_name
+     FROM invites i LEFT JOIN clients c ON c.id = i.client_id LEFT JOIN users u ON u.id = i.created_by
+     WHERE i.used_at IS NULL AND i.expires_at > ? ORDER BY i.created_at DESC`, now()));
+});
+
+api.post('/invites', agencyOnly, (req, res) => {
+  const b = req.body || {};
+  const { role, clientId } = accessFrom(b, req.user);
+  const email = String(b.email || '').trim().toLowerCase() || null;
+  if (email && !validEmail(email)) bad('That email address does not look right.');
+  if (email && q.get('SELECT 1 AS x FROM users WHERE email = ?', email)) bad('Someone with that email already has an account.');
+  if (q.get('SELECT COUNT(*) AS n FROM invites WHERE used_at IS NULL AND expires_at > ?', now()).n >= 500) bad('There are too many unused invitations. Revoke some first.');
+  const token = crypto.randomBytes(24).toString('hex');
+  const expiresAt = new Date(Date.now() + 7 * DAY).toISOString();
+  q.run('INSERT INTO invites (token_hash, role, client_id, email, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    hashToken(token), role, clientId, email, req.user.id, now(), expiresAt);
+  res.json({ token, expires_at: expiresAt }); // the only time the link can be read; just its hash is stored
+});
+
+api.delete('/invites/:id', agencyOnly, (req, res) => {
+  const inv = q.get('SELECT * FROM invites WHERE id = ?', int(req.params.id));
+  if (inv && inv.role !== 'client' && req.user.role !== 'admin') bad('Only an agency admin can revoke this invitation.', 403);
+  q.run('DELETE FROM invites WHERE id = ?', int(req.params.id));
+  res.json({ ok: true });
 });
 
 api.patch('/users/:id', agencyOnly, (req, res) => {
   const target = q.get('SELECT * FROM users WHERE id = ?', int(req.params.id));
   if (!target) bad('Not found', 404);
   if (target.role !== 'client' && req.user.role !== 'admin') bad('Only an agency admin can change agency team members.', 403);
+  if (target.pending) bad('Approve or decline this account request first.');
   const b = req.body || {};
   if (b.active !== undefined && typeof b.active !== 'boolean') bad('active must be true or false.');
   if (b.active === false && target.id === req.user.id) bad('You cannot deactivate your own account.');

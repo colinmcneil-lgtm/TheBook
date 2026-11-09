@@ -11,7 +11,7 @@ async function request(method, path, body) {
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
   if (!res.ok) {
     // A 401 on anything but the sign-in calls means the session ended: tell the app so it shows the sign-in screen.
-    if (res.status === 401 && !/^\/(login|me|setup|bootstrap|public)\b/.test(path)) window.dispatchEvent(new Event('auth:expired'));
+    if (res.status === 401 && !/^\/(login|me|setup|signup|bootstrap|public)\b/.test(path)) window.dispatchEvent(new Event('auth:expired'));
     const err = new Error(data?.error || 'Something went wrong. Please try again.');
     err.status = res.status;
     throw err;

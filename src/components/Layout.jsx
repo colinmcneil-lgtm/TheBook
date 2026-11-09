@@ -48,7 +48,7 @@ export default function Layout({ children }) {
     { to: '/interviews', label: 'Interviews', icon: CalendarDays, count: counts?.scorecards_due },
     { to: '/reports', label: 'Reports', icon: ChartColumn },
     isAgency && { to: '/clients', label: 'Clients', icon: Building2 },
-    { to: '/settings', label: 'Settings', icon: Settings },
+    { to: '/settings', label: 'Settings', icon: Settings, count: counts?.pending_accounts },
   ].filter(Boolean);
 
   const sidebar = (

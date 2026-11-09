@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Copy } from 'lucide-react';
 import { api, ENGAGEMENTS, todayLocal } from '../lib.js';
 import { useApp } from '../state.jsx';
 import { Button, Field, Input, Modal, Select, Textarea, useAction, useToast } from '../ui.jsx';
@@ -70,40 +71,94 @@ export function ClientForm({ client, onClose, onSaved }) {
   );
 }
 
-const randomPassword = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => 'abcdefghjkmnpqrstuvwxyz23456789'[b % 31]).join('');
+const copyText = async (text) => { try { await navigator.clipboard.writeText(text); return true; } catch { return false; } };
 
-/** Create a login for an agency teammate (no `client`) or someone on a client's hiring team. */
-export function UserForm({ client, onClose }) {
-  const { bump, isAdmin } = useApp();
+/**
+ * Create a one-time invitation link. With `client`, the person joins that company's hiring team;
+ * without it, they join your agency team (admins only).
+ */
+export function InviteForm({ client, onClose }) {
+  const { bump, isAdmin, agencyName } = useApp();
   const toast = useToast();
-  const [form, setForm] = useState({ name: '', email: '', title: '', role: client ? 'client' : 'recruiter', password: randomPassword() });
-  const bind = (key) => ({ value: form[key], onChange: (e) => setForm((f) => ({ ...f, [key]: e.target.value })) });
-  const [save, busy] = useAction(async () => {
-    await api.post('/users', { ...form, client_id: client?.id });
-    try { await navigator.clipboard.writeText(`Sign in at ${window.location.origin}\nEmail: ${form.email}\nTemporary password: ${form.password}`); toast('Account created. Sign-in details copied to your clipboard.'); }
-    catch { toast('Account created. Share the sign-in details with them.'); }
+  const [form, setForm] = useState({ email: '', role: client ? 'client' : 'recruiter' });
+  const [link, setLink] = useState(null);
+  const [create, busy] = useAction(async () => {
+    const { token } = await api.post('/invites', { ...form, client_id: client?.id });
+    const url = `${window.location.origin}/join/${token}`;
+    setLink(url);
+    bump();
+    if (await copyText(url)) toast('Invitation link copied');
+  });
+  const audience = client ? `${client.name}'s hiring team` : `the ${agencyName} team`;
+
+  if (link) {
+    return (
+      <Modal title="Invitation link ready" subtitle={`Send this to the person joining ${audience}.`} onClose={onClose}
+        footer={<Button variant="primary" onClick={onClose}>Done</Button>}>
+        <div className="flex items-center gap-2">
+          <code className="min-w-0 flex-1 truncate rounded-lg bg-stone-100 px-3 py-2.5 text-xs text-stone-800">{link}</code>
+          <Button icon={Copy} onClick={async () => toast((await copyText(link)) ? 'Copied' : 'Select the link and copy it', 'ok')}>Copy</Button>
+        </div>
+        <ul className="list-disc space-y-1 pl-5 text-[13px] leading-relaxed text-stone-600">
+          <li>They open it, choose their own password, and are signed in straight away.</li>
+          <li>It works once and expires in 7 days. You can revoke it under Settings, Team.</li>
+          <li>This is the only time the link is shown, so copy it now.</li>
+        </ul>
+      </Modal>
+    );
+  }
+  return (
+    <Modal title={client ? `Invite someone from ${client.name}` : 'Invite a teammate'}
+      subtitle={client ? 'Hiring managers and interviewers see only this company’s roles and candidates.' : 'Teammates see every client.'} onClose={onClose} onSubmit={create}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Create invitation link</Button></>}>
+      <Field label="Their email (optional)" hint="If you add it, the link only works for an account with this address.">
+        <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} autoFocus />
+      </Field>
+      {!client && (
+        <Field label="Access">
+          <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} disabled={!isAdmin}>
+            <option value="recruiter">Recruiter (all clients)</option>
+            <option value="admin">Admin (plus team and agency settings)</option>
+          </Select>
+        </Field>
+      )}
+    </Modal>
+  );
+}
+
+/** Approve a self-registered account: decide which client's hiring team (or, for admins, which agency role) it gets. */
+export function ApproveForm({ person, onClose }) {
+  const { bump, isAdmin, clients } = useApp();
+  const toast = useToast();
+  const guess = clients.find((c) => person.requested_company && c.name.toLowerCase() === person.requested_company.toLowerCase());
+  const [form, setForm] = useState({ role: 'client', client_id: guess?.id ?? '' });
+  const [approve, busy] = useAction(async () => {
+    await api.post(`/users/${person.id}/approve`, form);
+    toast(`${person.name} can now sign in`);
     bump();
     onClose();
   });
   return (
-    <Modal title={client ? `Invite someone from ${client.name}` : 'Add a teammate'} subtitle={client ? 'Hiring managers and interviewers see only this company’s roles and candidates.' : undefined} onClose={onClose} onSubmit={save}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Create account</Button></>}>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Full name"><Input {...bind('name')} required autoFocus /></Field>
-        <Field label="Job title"><Input {...bind('title')} /></Field>
-        <Field label="Email"><Input type="email" {...bind('email')} required /></Field>
-        {!client && (
-          <Field label="Access">
-            <Select {...bind('role')} disabled={!isAdmin}>
-              <option value="recruiter">Recruiter (all clients)</option>
-              <option value="admin">Admin (plus team and billing settings)</option>
-            </Select>
-          </Field>
-        )}
-        <Field label="Temporary password" hint="Send this to them yourself. They can change it in Settings after signing in." className={client ? '' : 'sm:col-span-2'}>
-          <Input {...bind('password')} required minLength={8} className="font-mono" />
+    <Modal title={`Approve ${person.name}`} subtitle={[person.email, person.requested_company && `says they are from ${person.requested_company}`].filter(Boolean).join(' · ')} size="sm" onClose={onClose} onSubmit={approve}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Approve account</Button></>}>
+      <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+        Anyone can request an account, and the email address has not been verified. Only approve people you recognise.
+      </p>
+      <Field label="Give access as">
+        <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+          <option value="client">Client hiring team (one company only)</option>
+          {isAdmin && <option value="recruiter">Recruiter on my team (all clients)</option>}
+          {isAdmin && <option value="admin">Admin on my team</option>}
+        </Select>
+      </Field>
+      {form.role === 'client' && (
+        <Field label="Company" hint="They will see this client's roles and candidates, and nothing else.">
+          <Select value={form.client_id} onChange={(e) => setForm({ ...form, client_id: e.target.value })} required>
+            <option value="">Choose a client…</option>
+            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </Select>
         </Field>
-      </div>
+      )}
     </Modal>
   );
 }

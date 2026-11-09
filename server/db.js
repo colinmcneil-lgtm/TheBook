@@ -37,7 +37,22 @@ CREATE TABLE IF NOT EXISTS users (
   client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
   title TEXT,
   active INTEGER NOT NULL DEFAULT 1,
+  pending INTEGER NOT NULL DEFAULT 0,                -- 1 = self-registered and waiting for an agency user to approve
+  requested_company TEXT,                            -- what a self-registered person typed as their company
   created_at TEXT NOT NULL
+);
+
+-- One-time links that let a specific person create their own account with the access chosen by the inviter.
+CREATE TABLE IF NOT EXISTS invites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash TEXT NOT NULL UNIQUE,                   -- only a hash is stored; the link itself is shown once
+  role TEXT NOT NULL,                                -- admin | recruiter | client
+  client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+  email TEXT,                                        -- if set, the account must use this address
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -222,6 +237,8 @@ function ensureAutoincrement(table) {
   }
 }
 addColumn('clients', 'privacy_url', 'TEXT');
+addColumn('users', 'pending', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('users', 'requested_company', 'TEXT');
 addColumn('applications', 'consent_at', 'TEXT');
 for (const table of ['candidates', 'applications', 'interviews']) ensureAutoincrement(table);
 
