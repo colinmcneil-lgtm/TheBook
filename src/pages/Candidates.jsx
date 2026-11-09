@@ -11,6 +11,7 @@ export default function Candidates() {
   const openCandidate = useOpenCandidate();
   const [status, setStatus] = useState('active');
   const [jobId, setJobId] = useState('');
+  const [owner, setOwner] = useState('');
   const [text, setText] = useState('');
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState(false);
@@ -18,7 +19,9 @@ export default function Candidates() {
   useEffect(() => setJobId(''), [scope]);
 
   const { data: jobs } = useApi(url('/jobs', { client_id: scope }));
-  const { data: rows, error } = useApi(url('/applications', { client_id: scope, status, job_id: jobId, q: query }));
+  const { data: rows, error } = useApi(url('/applications', { client_id: scope, status, job_id: jobId, q: query, owner }));
+  const { data: people } = useApi(url('/users', { client_id: scope }));
+  const recruiters = (people || []).filter((p) => p.role !== 'client' && p.active && !p.pending);
 
   return (
     <Page
@@ -34,6 +37,12 @@ export default function Candidates() {
         <Select value={jobId} onChange={(e) => setJobId(e.target.value)} aria-label="Filter by job" className="!w-auto max-w-64">
           <option value="">All jobs</option>
           {(jobs || []).map((j) => <option key={j.id} value={j.id}>{j.title}{scope ? '' : ` · ${j.client_name}`}</option>)}
+        </Select>
+        <Select value={owner} onChange={(e) => setOwner(e.target.value)} aria-label="Filter by owner" className="!w-auto max-w-56">
+          <option value="">Any owner</option>
+          {isAgency && <option value="me">Mine</option>}
+          {recruiters.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          <option value="none">Unassigned</option>
         </Select>
       </div>
       <Tabs className="mb-4" value={status} onChange={setStatus}

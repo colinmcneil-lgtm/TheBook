@@ -42,6 +42,14 @@ function safeUrl(v) {
     return u.pathname === '/' && !u.search && !u.hash ? u.origin : u.href; // no stray trailing slash on a bare site address
   } catch { return null; }
 }
+/** A profile link in one canonical form, so the same LinkedIn profile is recognised however its address was copied. */
+function profileUrl(value, label) {
+  const url = label ? linkField(value, label) : safeUrl(value);
+  if (!url) return null;
+  const u = new URL(url);
+  const m = /(^|\.)linkedin\.com$/i.test(u.hostname) ? /^\/(in|pub)\/([^/]+)/i.exec(u.pathname) : null;
+  return m ? `https://www.linkedin.com/${m[1].toLowerCase()}/${m[2].toLowerCase()}` : url;
+}
 /** For forms filled in by the agency: a link that was typed but is not a usable web address is refused, not silently dropped. */
 function linkField(value, label) {
   const url = safeUrl(value);
@@ -293,7 +301,7 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
       answers.push({ question: question.label, answer: answer || '' });
     }
     const source = PUBLIC_SOURCES.includes(b.source) ? b.source : 'careers_page';
-    const phone = clean(b.phone, 40), linkedin = safeUrl(b.linkedin), location = clean(b.location, 120);
+    const phone = clean(b.phone, 40), linkedin = profileUrl(b.linkedin), location = clean(b.location, 120);
 
     const result = tx(() => {
       let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', client.id, email);
@@ -733,7 +741,7 @@ api.delete('/jobs/:id', adminOnly, (req, res) => {
 // ---------- applications (a candidate in a job's pipeline) ----------
 const appSelect = `
   SELECT a.id, a.status, a.source, a.rating, a.applied_at, a.stage_entered_at, a.updated_at, a.review_status, a.stage_id, a.reject_reason, a.hired_at,
-    a.resume_file IS NOT NULL AS has_resume,
+    a.resume_file IS NOT NULL AS has_resume, a.owner_id, ou.name AS owner_name,
     c.id AS candidate_id, c.name, c.email, c.current_title, c.current_company, c.location,
     j.id AS job_id, j.title AS job_title, j.client_id, cl.name AS client_name, cl.brand_color,
     s.name AS stage_name, s.kind AS stage_kind, s.position AS stage_position,
@@ -742,7 +750,8 @@ const appSelect = `
   JOIN candidates c ON c.id = a.candidate_id
   JOIN jobs j ON j.id = a.job_id
   JOIN clients cl ON cl.id = j.client_id
-  JOIN stages s ON s.id = a.stage_id`;
+  JOIN stages s ON s.id = a.stage_id
+  LEFT JOIN users ou ON ou.id = a.owner_id`;
 
 api.get('/applications', (req, res) => {
   const cid = scopeOf(req);
@@ -752,6 +761,9 @@ api.get('/applications', (req, res) => {
   if (req.query.status && req.query.status !== 'all') { where.push('a.status = ?'); p.push(req.query.status); }
   if (req.query.stage_kind) { where.push('s.kind = ?'); p.push(req.query.stage_kind); }
   if (req.query.review) { where.push('a.review_status = ?'); p.push(req.query.review); }
+  if (req.query.owner === 'none') where.push('a.owner_id IS NULL');
+  else if (req.query.owner === 'me') { where.push('a.owner_id = ?'); p.push(req.user.id); }
+  else if (int(req.query.owner)) { where.push('a.owner_id = ?'); p.push(int(req.query.owner)); }
   if (clean(req.query.q)) {
     where.push(`(c.name LIKE ? OR c.email LIKE ? OR c.current_company LIKE ? OR c.current_title LIKE ?)`);
     const like = `%${clean(req.query.q, 100)}%`;
@@ -786,12 +798,14 @@ function moveToStage(app, stageId, user) {
     stage.id, t, t, hired ? 'hired' : 'active', hired ? t : null, app.id);
   q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', app.id, stage.id, t);
   logActivity(app.id, user.id, hired ? 'hired' : 'stage', hired ? 'Marked as hired' : `Moved to ${stage.name}`);
+  // An applicant nobody owns yet becomes the responsibility of the recruiter who first takes them forward.
+  if (!app.owner_id && isAgency(user) && stage.kind !== 'applied') q.run('UPDATE applications SET owner_id = ? WHERE id = ? AND owner_id IS NULL', user.id, app.id);
   return stage;
 }
 
 /** Contact details as stored: single-line, capped, and links restricted to http(s). */
 const candidateFields = (c) => ({
-  name: clean(c.name, 120), phone: clean(c.phone, 40), linkedin: safeUrl(c.linkedin), location: clean(c.location, 120),
+  name: clean(c.name, 120), phone: clean(c.phone, 40), linkedin: profileUrl(c.linkedin, 'The profile link'), location: clean(c.location, 120),
   current_title: clean(c.current_title, 160), current_company: clean(c.current_company, 160),
 });
 
@@ -801,14 +815,27 @@ api.post('/applications', agencyOnly, upload.single('resume'), (req, res) => {
     const b = req.body || {};
     const job = q.get('SELECT * FROM jobs WHERE id = ?', int(b.job_id));
     if (!job) bad('Choose a job for this candidate.');
-    const email = String(b.email || '').trim().toLowerCase();
+    const email = String(b.email || '').trim().toLowerCase() || null;
     const c = candidateFields(b);
-    if (!c.name || !validEmail(email)) bad('Name and a valid email are required.');
+    if (!c.name) bad('A name is required.');
+    if (email && !validEmail(email)) bad('That email address does not look right.');
+    if (!email && !c.linkedin) bad('Add an email address or a profile link, so this person can be told apart from others.');
     const source = isStr(b.source) && Object.hasOwn(SOURCE_LABELS, b.source) ? b.source : 'agency_sourced';
-    const id = tx(() => {
-      let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', job.client_id, email);
-      if (cand && q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ? AND job_id = ?', cand.id, job.id)) bad('This person is already in the pipeline for this job.');
-      if (!cand) {
+    const result = tx(() => {
+      // The same person is recognised by email, or failing that by their profile link.
+      let cand = (email && q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', job.client_id, email))
+        || (c.linkedin && q.get('SELECT * FROM candidates WHERE client_id = ? AND linkedin = ?', job.client_id, c.linkedin))
+        || null;
+      const known = Boolean(cand);
+      if (cand) {
+        const dup = q.get(`SELECT a.id, s.name AS stage_name FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.candidate_id = ? AND a.job_id = ?`, cand.id, job.id);
+        if (dup) bad(`${cand.name} is already in the pipeline for this job (${dup.stage_name}).`, 409);
+        // The agency is adding them again, so its details are the newer ones: fill in what was missing and refresh the role.
+        q.run(`UPDATE candidates SET email = COALESCE(email, ?), phone = COALESCE(phone, ?), linkedin = COALESCE(linkedin, ?), location = COALESCE(?, location),
+               current_title = COALESCE(?, current_title), current_company = COALESCE(?, current_company) WHERE id = ?`,
+          email && !q.get('SELECT 1 AS x FROM candidates WHERE client_id = ? AND email = ?', job.client_id, email) ? email : null,
+          c.phone, c.linkedin, c.location, c.current_title, c.current_company, cand.id);
+      } else {
         cand = { id: q.insert(
           'INSERT INTO candidates (client_id, name, email, phone, linkedin, location, current_title, current_company, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
           job.client_id, c.name, email, c.phone, c.linkedin, c.location, c.current_title, c.current_company, now()) };
@@ -818,18 +845,32 @@ api.post('/applications', agencyOnly, upload.single('resume'), (req, res) => {
       const t = now();
       const hired = stage.kind === 'hired';
       const appId = q.insert(
-        `INSERT INTO applications (candidate_id, job_id, stage_id, status, source, cover_note, resume_file, resume_name, applied_at, stage_entered_at, updated_at, hired_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        cand.id, job.id, stage.id, hired ? 'hired' : 'active', source, text(b.cover_note, 6000), req.file?.filename ?? null, clean(req.file?.originalname, 200), t, t, t, hired ? t : null);
+        `INSERT INTO applications (candidate_id, job_id, stage_id, status, source, cover_note, resume_file, resume_name, applied_at, stage_entered_at, updated_at, hired_at, owner_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        cand.id, job.id, stage.id, hired ? 'hired' : 'active', source, text(b.cover_note, 6000), req.file?.filename ?? null, clean(req.file?.originalname, 200), t, t, t, hired ? t : null, req.user.id);
       q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
       logActivity(appId, req.user.id, 'added', `Added to the pipeline (${SOURCE_LABELS[source].toLowerCase()})`);
-      return appId;
+      const note = text(b.note, 10000);
+      if (note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, ?, ?)', appId, req.user.id, note, b.note_private === 'true' || b.note_private === true ? 1 : 0, t);
+      return { id: appId, known };
     });
     stored = true;
-    res.json({ id });
+    res.json(result);
   } finally {
     if (!stored) removeUpload(req.file?.filename);
   }
+});
+
+// Has this person (by profile link or email) already been added anywhere? Used by the browser extension before adding.
+api.get('/candidates/lookup', agencyOnly, (req, res) => {
+  const link = profileUrl(req.query.linkedin);
+  const email = String(req.query.email || '').trim().toLowerCase();
+  if (!link && !validEmail(email)) return res.json([]);
+  res.json(q.all(
+    `SELECT a.id AS application_id, a.status, c.name, j.id AS job_id, j.title AS job_title, cl.name AS client_name, s.name AS stage_name
+     FROM candidates c JOIN applications a ON a.candidate_id = c.id JOIN jobs j ON j.id = a.job_id
+     JOIN clients cl ON cl.id = j.client_id JOIN stages s ON s.id = a.stage_id
+     WHERE c.linkedin = ? OR c.email = ? ORDER BY a.applied_at DESC LIMIT 20`, link ?? '', validEmail(email) ? email : ''));
 });
 
 api.get('/applications/:id', (req, res) => {
@@ -860,7 +901,7 @@ api.get('/applications/:id', (req, res) => {
   const names = (id) => (id ? q.get('SELECT name FROM users WHERE id = ?', id)?.name ?? null : null);
   const { client_id, job_title, candidate_name, candidate_email, client_name, ...application } = a;
   res.json({
-    application: { ...application, answers: json(a.answers, []), submitted_by_name: names(a.submitted_by), reviewed_by_name: names(a.reviewed_by) },
+    application: { ...application, answers: json(a.answers, []), submitted_by_name: names(a.submitted_by), reviewed_by_name: names(a.reviewed_by), owner_name: names(a.owner_id) },
     candidate, job, client, stages, notes, activities, interviews, offer, emails, others,
   });
 });
@@ -872,11 +913,21 @@ api.patch('/applications/:id', (req, res) => {
     const rating = int(b.rating);
     q.run('UPDATE applications SET rating = ?, updated_at = ? WHERE id = ?', rating >= 1 && rating <= 5 ? rating : null, now(), a.id);
   }
+  if (b.owner_id !== undefined && isAgency(req.user)) {
+    const owner = b.owner_id === null || b.owner_id === '' ? null : q.get(`SELECT id, name FROM users WHERE id = ? AND active = 1 AND role != 'client'`, int(b.owner_id));
+    if (owner === undefined) bad('Choose someone on your own team as the owner.');
+    if ((owner?.id ?? null) !== a.owner_id) {
+      q.run('UPDATE applications SET owner_id = ?, updated_at = ? WHERE id = ?', owner?.id ?? null, now(), a.id);
+      logActivity(a.id, req.user.id, 'owner', owner ? `Assigned to ${owner.name}` : 'Owner removed');
+    }
+  }
   if (b.candidate && isAgency(req.user)) {
     const c = candidateFields(b.candidate);
-    const email = String(b.candidate.email || '').trim().toLowerCase();
-    if (!c.name || !validEmail(email)) bad('Name and a valid email are required.');
-    if (q.get('SELECT 1 AS x FROM candidates WHERE client_id = ? AND email = ? AND id != ?', a.client_id, email, a.candidate_id)) bad('Another candidate at this client already uses that email.');
+    const email = String(b.candidate.email || '').trim().toLowerCase() || null;
+    if (!c.name) bad('A name is required.');
+    if (email && !validEmail(email)) bad('That email address does not look right.');
+    if (!email && !c.linkedin) bad('Keep an email address or a profile link, so this person can be told apart from others.');
+    if (email && q.get('SELECT 1 AS x FROM candidates WHERE client_id = ? AND email = ? AND id != ?', a.client_id, email, a.candidate_id)) bad('Another candidate at this client already uses that email.');
     q.run('UPDATE candidates SET name = ?, email = ?, phone = ?, linkedin = ?, location = ?, current_title = ?, current_company = ? WHERE id = ?',
       c.name, email, c.phone, c.linkedin, c.location, c.current_title, c.current_company, a.candidate_id);
   }
@@ -903,7 +954,7 @@ api.post('/applications/:id/reject', async (req, res) => {
     logActivity(a.id, req.user.id, 'rejected', `Rejected: ${reason}`);
     cancelUpcomingInterviews(a.id, req.user.id);
   });
-  if (req.body?.send_email === true) await sendTemplate('rejection', { applicationId: a.id, to: a.candidate_email, vars: mailVars(a, req.user), userId: req.user.id });
+  if (req.body?.send_email === true && a.candidate_email) await sendTemplate('rejection', { applicationId: a.id, to: a.candidate_email, vars: mailVars(a, req.user), userId: req.user.id });
   res.json({ ok: true });
 });
 
@@ -989,6 +1040,7 @@ api.post('/applications/:id/emails', async (req, res) => {
   const subject = clean(req.body?.subject, 300);
   const body = text(req.body?.body, 20000);
   if (!subject || !body) bad('Subject and message are required.');
+  if (!a.candidate_email) bad('There is no email address on file for this candidate. Add one under Edit details first.');
   const result = await sendMail({ applicationId: a.id, to: a.candidate_email, subject, body, userId: req.user.id });
   logActivity(a.id, req.user.id, 'email', `Emailed candidate: ${subject}`);
   res.json(result);
@@ -1107,7 +1159,7 @@ api.post('/interviews', async (req, res) => {
     logActivity(a.id, req.user.id, 'interview', `Scheduled ${title}`);
     return iid;
   });
-  if (b.notify) await sendTemplate('interview_invite', {
+  if (b.notify && a.candidate_email) await sendTemplate('interview_invite', {
     applicationId: a.id, to: a.candidate_email, userId: req.user.id,
     vars: { ...mailVars(a, req.user), interview_time: clean(b.time_label, 120) || starts.toUTCString(), interview_format: KIND_LABELS[kind], interview_location: clean(b.location, 300) || 'Details to follow' },
   });
@@ -1140,8 +1192,8 @@ api.get('/interviews/:id/ics', (req, res) => {
   const stamp = (d) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
   const esc = (s) => String(s || '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ').replace(/([,;\\])/g, '\\$1').replace(/\n/g, '\\n');
   const end = new Date(new Date(i.starts_at).getTime() + i.duration_min * 60000);
-  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Embed//Recruiting//EN', 'BEGIN:VEVENT',
-    `UID:interview-${i.id}@embed`, `DTSTAMP:${stamp(new Date())}`, `DTSTART:${stamp(i.starts_at)}`, `DTEND:${stamp(end)}`,
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//The Book//Recruiting//EN', 'BEGIN:VEVENT',
+    `UID:interview-${i.id}@thebook`, `DTSTAMP:${stamp(new Date())}`, `DTSTART:${stamp(i.starts_at)}`, `DTEND:${stamp(end)}`,
     `SUMMARY:${esc(`${i.title}: ${i.candidate_name} (${i.job_title})`)}`, `LOCATION:${esc(i.location)}`, `DESCRIPTION:${esc(i.notes)}`,
     'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
   res.setHeader('Content-Type', 'text/calendar; charset=utf-8');

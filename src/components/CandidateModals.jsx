@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { FileUp, LoaderCircle } from 'lucide-react';
 import { api, url, firstName, renderTemplate, toLocalInput, fmtDateTime, INTERVIEW_KINDS, RECOMMENDATIONS, REJECT_REASONS, SOURCES } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Button, Checkbox, Field, Input, Modal, Select, Textarea, Avatar, useAction, useToast, cx } from '../ui.jsx';
@@ -38,7 +39,8 @@ export function RejectModal({ data, onClose }) {
         <Select value={reason} onChange={(e) => setReason(e.target.value)}>{REJECT_REASONS.map((r) => <option key={r}>{r}</option>)}</Select>
       </Field>
       {reason === 'Other' && <Field label="Details"><Input value={other} onChange={(e) => setOther(e.target.value)} autoFocus /></Field>}
-      <Checkbox checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} label="Send the “Not moving forward” email" hint="Uses the template in Settings. Reasons are never shared with the candidate." />
+      <Checkbox checked={sendEmail && Boolean(data.candidate.email)} disabled={!data.candidate.email} onChange={(e) => setSendEmail(e.target.checked)} label="Send the “Not moving forward” email"
+        hint={data.candidate.email ? 'Uses the template in Settings. Reasons are never shared with the candidate.' : 'There is no email address on file for this candidate.'} />
       {sendEmail && <MailNote />}
     </Modal>
   );
@@ -96,7 +98,8 @@ export function ScheduleModal({ data, onClose }) {
         <p className="mt-1.5 text-xs text-stone-500">Each interviewer is asked for a scorecard once the interview has taken place.</p>
       </div>
       <Field label="Notes for the panel"><Textarea rows={2} {...bind('notes')} placeholder="What to focus on, what has already been covered" /></Field>
-      <Checkbox checked={notify} onChange={(e) => setNotify(e.target.checked)} label="Email the invitation to the candidate" hint="Uses the “Interview invitation” template with this time, format and location." />
+      <Checkbox checked={notify && Boolean(data.candidate.email)} disabled={!data.candidate.email} onChange={(e) => setNotify(e.target.checked)} label="Email the invitation to the candidate"
+        hint={data.candidate.email ? 'Uses the “Interview invitation” template with this time, format and location.' : 'There is no email address on file for this candidate.'} />
       {notify && <MailNote />}
     </Modal>
   );
@@ -171,8 +174,9 @@ export function EmailModal({ data, onClose }) {
     onClose();
   });
   return (
-    <Modal title={`Email ${data.candidate.name}`} subtitle={data.candidate.email} onClose={onClose} onSubmit={send}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={Boolean(unfilled)}>Send email</Button></>}>
+    <Modal title={`Email ${data.candidate.name}`} subtitle={data.candidate.email || 'No email address on file'} onClose={onClose} onSubmit={send}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={Boolean(unfilled) || !data.candidate.email}>Send email</Button></>}>
+      {!data.candidate.email && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">Add an email address for this candidate first (More actions, Edit details).</p>}
       <MailNote />
       <Field label="Start from a template">
         <Select defaultValue="" onChange={(e) => apply(e.target.value)}>
@@ -261,7 +265,7 @@ export function OfferModal({ data, onClose }) {
   );
 }
 
-const CANDIDATE_FIELDS = [['name', 'Full name', 'text', true], ['email', 'Email', 'email', true], ['phone', 'Phone'], ['linkedin', 'LinkedIn URL'], ['current_title', 'Current title'], ['current_company', 'Current company'], ['location', 'Location']];
+const CANDIDATE_FIELDS = [['name', 'Full name', 'text', true], ['email', 'Email', 'email'], ['phone', 'Phone'], ['linkedin', 'LinkedIn URL'], ['current_title', 'Current title'], ['current_company', 'Current company'], ['location', 'Location']];
 
 export function EditCandidateModal({ data, onClose }) {
   const { bump } = useApp();
@@ -281,15 +285,43 @@ export function EditCandidateModal({ data, onClose }) {
   );
 }
 
-/** Add a sourced or referred candidate straight into a job's pipeline. */
+/** Add a sourced or referred candidate straight into a job's pipeline. Dropping a résumé in fills the form from it. */
 export function AddCandidateModal({ jobId, onClose, onAdded }) {
   const { bump, scope } = useApp();
   const toast = useToast();
   const { data: jobs } = useApi(jobId ? null : url('/jobs', { client_id: scope }));
   const [form, setForm, bind] = useForm({ job_id: jobId || '', source: 'agency_sourced', stage_id: '' });
   const [file, setFile] = useState(null);
+  const [reading, setReading] = useState(false);
+  const [filled, setFilled] = useState(null); // labels of the fields taken from the résumé
+  const [over, setOver] = useState(false);
   const { data: jobData } = useApi(form.job_id ? `/jobs/${form.job_id}` : null);
   useEffect(() => setForm((f) => ({ ...f, stage_id: '' })), [form.job_id]);
+
+  const takeFile = async (picked) => {
+    if (!picked) return;
+    if (!/\.(pdf|docx?|rtf|txt)$/i.test(picked.name)) return toast('Résumés need to be PDF, Word, RTF or text files.', 'error');
+    setFile(picked);
+    setFilled(null);
+    setReading(true);
+    try {
+      const { extractResumeText, parseResume } = await import('../resume.js');
+      const found = parseResume(await extractResumeText(picked));
+      const used = [];
+      // Only fill what is still empty, so nothing already typed is replaced.
+      setForm((f) => {
+        const next = { ...f };
+        for (const [key, label] of CANDIDATE_FIELDS) if (found[key] && !String(f[key] || '').trim()) { next[key] = found[key]; used.push(label.toLowerCase()); }
+        return next;
+      });
+      setFilled(used);
+    } catch (err) {
+      console.warn('The résumé could not be read automatically:', err);
+      setFilled([]);
+    } finally {
+      setReading(false);
+    }
+  };
 
   const [save, busy] = useAction(async () => {
     const fd = new FormData();
@@ -304,6 +336,24 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
   return (
     <Modal title="Add candidate" subtitle="For people you have sourced, referrals, or applicants who came in another way." onClose={onClose} onSubmit={save}
       footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Add candidate</Button></>}>
+      <label
+        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => { e.preventDefault(); setOver(false); takeFile(e.dataTransfer.files[0]); }}
+        className={cx('flex cursor-pointer items-center gap-3 rounded-xl border-2 border-dashed px-4 py-3.5 transition-colors', over ? 'border-brand-500 bg-brand-50' : 'border-stone-300 bg-stone-50 hover:border-stone-400')}
+      >
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-white text-brand-700 ring-1 ring-line">{reading ? <LoaderCircle className="size-5 animate-spin" /> : <FileUp className="size-5" />}</span>
+        <span className="min-w-0 flex-1 text-sm">
+          <span className="block font-medium text-stone-900">{file ? file.name : 'Drop a résumé here, or click to choose one'}</span>
+          <span className="block text-[13px] text-stone-500">
+            {reading ? 'Reading the résumé…'
+              : filled?.length ? `Filled in ${filled.join(', ')} from the résumé. Please check them.`
+              : filled ? 'Attached. Nothing could be read from this file automatically, so fill in the details below.'
+              : 'The details below are filled in from it. PDF, Word, RTF or text, up to 8 MB.'}
+          </span>
+        </span>
+        <input type="file" accept=".pdf,.doc,.docx,.rtf,.txt" className="sr-only" aria-label="Résumé" onChange={(e) => takeFile(e.target.files[0])} />
+      </label>
       <div className="grid gap-4 sm:grid-cols-2">
         {!jobId && (
           <Field label="Job" className="sm:col-span-2">
@@ -322,11 +372,8 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
             {(jobData?.stages || []).filter((s) => s.kind !== 'hired').map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select>
         </Field>
-        <Field label="Résumé" hint="PDF, Word, RTF or text, up to 8 MB.">
-          <input type="file" accept=".pdf,.doc,.docx,.rtf,.txt" onChange={(e) => setFile(e.target.files[0] || null)}
-            className="block w-full text-sm text-stone-600 file:mr-3 file:h-9 file:rounded-lg file:border file:border-line file:bg-white file:px-3 file:text-sm file:font-medium file:text-stone-800" />
-        </Field>
       </div>
+      <p className="text-xs text-stone-500">An email address or a LinkedIn link is needed, so the same person is recognised if they are added again.</p>
     </Modal>
   );
 }

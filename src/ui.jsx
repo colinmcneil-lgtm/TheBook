@@ -123,7 +123,7 @@ export function Badge({ tone = 'gray', icon: Icon, className, children }) {
   );
 }
 
-const AVATAR_COLORS = ['#224f3d', '#0b6e99', '#b45309', '#7c3aed', '#be123c', '#4d7c0f', '#0f766e', '#6d28d9', '#a16207'];
+const AVATAR_COLORS = ['#0c505d', '#0b6e99', '#b45309', '#7c3aed', '#be123c', '#4d7c0f', '#0f766e', '#6d28d9', '#a16207'];
 export function Avatar({ name = '?', color, size = 32, className }) {
   const initials = name.split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
   const hash = [...name].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 997, 7);

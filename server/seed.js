@@ -206,6 +206,9 @@ tx(() => {
         source === 'careers_page' ? `I have followed ${meta.title.includes('Sales') ? 'the company' : 'your product'} for a while and this role is a close match for what I have been doing at ${pick(COMPANIES)}. I would love to talk.` : null,
         rejected ? pick(REJECT_REASONS) : null, appliedAt, enteredAt(depth), enteredAt(depth), status === 'hired' ? enteredAt(depth) : null);
 
+      // Sourced candidates belong to whoever added them; applicants are picked up by a recruiter once they move forward.
+      const owner = source !== 'careers_page' ? priya : depth > 0 ? (n % 3 === 0 ? alex : priya) : null;
+      if (owner) q.run('UPDATE applications SET owner_id = ? WHERE id = ?', owner, appId);
       act(appId, source === 'careers_page' ? null : priya, source === 'careers_page' ? 'applied' : 'added',
         source === 'careers_page' ? 'Applied via careers page' : 'Added to the pipeline', appliedAt);
       for (let i = 0; i <= depth; i++) {

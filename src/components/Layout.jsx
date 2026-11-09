@@ -79,7 +79,7 @@ export default function Layout({ children }) {
         ))}
       </nav>
       <div className="flex items-center gap-2.5 border-t border-white/10 px-4 py-3">
-        <Avatar name={user.name} size={30} color="#2a624b" />
+        <Avatar name={user.name} size={30} color="#136575" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-white">{user.name}</div>
           <div className="truncate text-xs text-brand-300">{user.title || user.email}</div>

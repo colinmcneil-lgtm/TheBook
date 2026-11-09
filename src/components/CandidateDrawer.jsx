@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck,
 } from 'lucide-react';
-import { api, ago, since, extUrl, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
+import { api, url, ago, since, extUrl, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal } from './CandidateModals.jsx';
@@ -77,7 +77,9 @@ function CandidateView({ data, onClose }) {
               For <Link to={`/jobs/${job.id}`} className="font-medium text-brand-700 hover:underline">{job.title}</Link> · {client.name}
             </p>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-stone-600">
-              <a href={`mailto:${candidate.email}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Mail className="size-3.5" />{candidate.email}</a>
+              {candidate.email
+                ? <a href={`mailto:${candidate.email}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Mail className="size-3.5" />{candidate.email}</a>
+                : <span className="inline-flex items-center gap-1.5 text-stone-400"><Mail className="size-3.5" />No email yet</span>}
               {candidate.phone && <a href={`tel:${candidate.phone}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Phone className="size-3.5" />{candidate.phone}</a>}
               {extUrl(candidate.linkedin) && <a href={extUrl(candidate.linkedin)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 hover:text-brand-700"><Link2 className="size-3.5" />Profile link</a>}
               {candidate.location && <span className="inline-flex items-center gap-1.5"><MapPin className="size-3.5" />{candidate.location}</span>}
@@ -217,6 +219,8 @@ function Overview({ data, onOffer }) {
   });
   const [rate] = useAction(async (rating) => { await api.patch(`/applications/${app.id}`, { rating }); bump(); });
   const [removeNote] = useAction(async (id) => { await api.del(`/notes/${id}`); bump(); });
+  const { data: team } = useApi(isAgency ? url('/users', { client_id: client.id }) : null);
+  const [assign] = useAction(async (ownerId) => { await api.patch(`/applications/${app.id}`, { owner_id: ownerId || null }); bump(); });
   const stage = data.stages.find((s) => s.id === app.stage_id);
   const row = (label, value) => (
     <div className="flex items-start justify-between gap-4 py-1.5 text-sm">
@@ -285,6 +289,13 @@ function Overview({ data, onOffer }) {
             {row('Applied', fmtDate(app.applied_at, true))}
             {row('Source', SOURCES[app.source] || app.source)}
             {row('Rating', <Stars value={app.rating} onChange={rate} />)}
+            {row('Owner', isAgency ? (
+              <select aria-label="Owner" value={app.owner_id ?? ''} onChange={(e) => assign(e.target.value)} className="max-w-36 cursor-pointer rounded-md border border-line bg-white py-0.5 pr-6 pl-1.5 text-right text-sm font-medium">
+                <option value="">Unassigned</option>
+                {(team || []).filter((u) => u.role !== 'client' || u.id === app.owner_id).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                {app.owner_id && team && !team.some((u) => u.id === app.owner_id) && <option value={app.owner_id}>{app.owner_name}</option>}
+              </select>
+            ) : app.owner_name || 'Unassigned')}
           </dl>
         </Card>
         {app.resume_file ? (

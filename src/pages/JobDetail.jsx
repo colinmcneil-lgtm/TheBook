@@ -161,7 +161,7 @@ export default function JobDetail() {
     bump();
   });
 
-  if (error) return <Page title="Job not found"><Card><Empty title="This job does not exist or you do not have access to it." action={<Link to="/jobs"><Button>Back to jobs</Button></Link>} /></Card></Page>;
+  if (error) return <Page title="This job could not be opened"><Card><Pending error={error === 'Not found' ? 'It does not exist, or you do not have access to it.' : error} /></Card><Link to="/jobs" className="mt-4 inline-block text-sm font-medium text-brand-700 hover:underline">Back to jobs</Link></Page>;
   if (!data || !apps) return <Pending error={appsError} />;
   const { job, stages } = data;
   const careersUrl = `${window.location.origin}/careers/${job.client_slug}/${job.id}`;

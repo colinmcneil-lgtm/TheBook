@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused, so an old link cannot open a different person
   client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
-  email TEXT NOT NULL,
+  email TEXT,                                        -- required for applicants; may be unknown for people the agency sourced
   phone TEXT, linkedin TEXT, location TEXT, current_title TEXT, current_company TEXT,
   created_at TEXT NOT NULL,
   UNIQUE (client_id, email)
@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS applications (
   updated_at TEXT NOT NULL,
   hired_at TEXT,
   consent_at TEXT,                                   -- when the applicant ticked the data-processing consent box
+  owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL, -- the recruiter responsible for this candidate in this job
   UNIQUE (candidate_id, job_id)
 );
 
@@ -214,13 +215,15 @@ function addColumn(table, column, type) {
   const has = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
   if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
-/** Rebuild a table so its ids are AUTOINCREMENT (never reused after a delete). Rows and ids are kept as they are. */
-function ensureAutoincrement(table) {
+/**
+ * Rebuild a table with a changed definition (SQLite cannot alter a column in place). `change` receives the table's
+ * CREATE statement and returns the new one; nothing happens if it returns it unchanged. Rows and ids are kept.
+ */
+function rebuildTable(table, change) {
   const { sql } = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
-  if (/AUTOINCREMENT/i.test(sql)) return;
-  const rebuilt = sql
-    .replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?\w+["`]?/i, `CREATE TABLE ${table}__new`)
-    .replace(/\bid INTEGER PRIMARY KEY\b/i, 'id INTEGER PRIMARY KEY AUTOINCREMENT');
+  const changed = change(sql);
+  if (changed === sql) return;
+  const rebuilt = changed.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?\w+["`]?/i, `CREATE TABLE ${table}__new`);
   db.exec('PRAGMA foreign_keys = OFF'); // must be off, or dropping the old table would cascade into its children
   db.exec('BEGIN');
   try {
@@ -236,6 +239,9 @@ function ensureAutoincrement(table) {
     db.exec('PRAGMA foreign_keys = ON');
   }
 }
+/** Ids that are never reused after a delete, so an old link cannot open a different record. */
+const ensureAutoincrement = (table) =>
+  rebuildTable(table, (sql) => (/AUTOINCREMENT/i.test(sql) ? sql : sql.replace(/\bid INTEGER PRIMARY KEY\b/i, 'id INTEGER PRIMARY KEY AUTOINCREMENT')));
 addColumn('clients', 'privacy_url', 'TEXT');
 addColumn('users', 'pending', 'INTEGER NOT NULL DEFAULT 0');
 // Engagement terms that do not belong to the client's current model are not counted as revenue; clear any left by older versions.
@@ -243,11 +249,21 @@ db.exec(`UPDATE clients SET monthly_retainer = 0 WHERE engagement_model = 'per_h
 db.exec(`UPDATE clients SET fee_percent = 0 WHERE engagement_model = 'retainer' AND fee_percent != 0`);
 addColumn('users', 'requested_company', 'TEXT');
 addColumn('applications', 'consent_at', 'TEXT');
+if (!db.prepare('PRAGMA table_info(applications)').all().some((c) => c.name === 'owner_id')) {
+  db.exec('ALTER TABLE applications ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL');
+  // Existing candidates belong to whoever added them, where that is known.
+  db.exec(`UPDATE applications SET owner_id = (
+    SELECT ac.user_id FROM activities ac JOIN users u ON u.id = ac.user_id AND u.role != 'client'
+    WHERE ac.application_id = applications.id AND ac.type = 'added' ORDER BY ac.id LIMIT 1)`);
+}
 for (const table of ['candidates', 'applications', 'interviews']) ensureAutoincrement(table);
+// People sourced from a profile often have no known email yet, so it is no longer required.
+rebuildTable('candidates', (sql) => sql.replace(/\bemail TEXT NOT NULL\b/, 'email TEXT'));
 
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_jobs_client ON jobs(client_id);
 CREATE INDEX IF NOT EXISTS idx_apps_job ON applications(job_id);
+CREATE INDEX IF NOT EXISTS idx_candidates_link ON candidates(client_id, linkedin);
 CREATE INDEX IF NOT EXISTS idx_apps_stage ON applications(stage_id);
 CREATE INDEX IF NOT EXISTS idx_hist_app ON stage_history(application_id);
 CREATE INDEX IF NOT EXISTS idx_interviews_app ON interviews(application_id);

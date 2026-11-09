@@ -1,9 +1,9 @@
-# Embed
+# The Book
 
 A hiring workspace for an embedded recruitment agency: one place to run inbound applicants, pipelines,
 interviews and reporting for every company you work inside, with a login for each client's hiring team.
 
-"Embed" is a working name. Your agency name is set at first sign-in and shown throughout.
+Your agency name is set at first sign-in and shown throughout the workspace.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -63,11 +63,11 @@ The app is a single Node process with a SQLite database file, so it runs on any 
 persistent disk (Render, Railway, Fly.io, a small VPS).
 
 ```bash
-docker build -t embed .
+docker build -t the-book .
 ```
 
 ```bash
-docker run -p 3000:3000 -v embed-data:/data embed
+docker run -p 3000:3000 -v the-book-data:/data the-book
 ```
 
 ### Railway

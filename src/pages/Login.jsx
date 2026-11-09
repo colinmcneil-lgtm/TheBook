@@ -6,10 +6,7 @@ import { Button, Field, Input, Loading, useAction } from '../ui.jsx';
 
 export function Logo({ size = 32 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="8" fill="#132a22" />
-      <path d="M10 9h12v3.2h-8.4v2.3H21v3h-7.4v2.3H22V23H10z" fill="#e8c468" />
-    </svg>
+    <img src="/logo.svg" width={size} height={size} alt="" className="shrink-0" />
   );
 }
 
@@ -21,7 +18,7 @@ function AuthFrame({ agencyName, children }) {
         <div className="mx-auto w-full max-w-sm">
           <div className="mb-10 flex items-center gap-2.5">
             <Logo />
-            <span className="text-lg font-semibold tracking-tight">{agencyName || 'Embed'}</span>
+            <span className="text-lg font-semibold tracking-tight">{agencyName || 'The Book'}</span>
           </div>
           {children}
         </div>

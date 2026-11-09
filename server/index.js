@@ -55,7 +55,7 @@ if (isProd) {
   app.use(vite.middlewares);
 }
 
-const server = app.listen(PORT, () => console.log(`Embed is running on http://localhost:${PORT}`));
+const server = app.listen(PORT, () => console.log(`The Book is running on http://localhost:${PORT}`));
 
 // Stop cleanly when the host asks (deploys, restarts): finish open requests, then close the database.
 for (const signal of ['SIGTERM', 'SIGINT']) {

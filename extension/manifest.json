@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "The Book: add candidates",
+  "short_name": "The Book",
+  "version": "0.1.0",
+  "description": "Add the LinkedIn profile you are looking at to a job in your hiring workspace in The Book.",
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Add this person to a job",
+    "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }
+  },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "commands": {
+    "_execute_action": { "suggested_key": { "default": "Alt+Shift+A" }, "description": "Add this person to a job" }
+  }
+}

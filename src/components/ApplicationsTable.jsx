@@ -2,7 +2,7 @@ import React from 'react';
 import { Users } from 'lucide-react';
 import { useOpenCandidate } from '../state.jsx';
 import { since, fmtDate, SOURCES } from '../lib.js';
-import { Card, Empty, Stars } from '../ui.jsx';
+import { Avatar, Card, Empty, Stars } from '../ui.jsx';
 import { CandidateCell, ClientName, ReviewBadge, StageBadge } from './bits.jsx';
 
 export default function ApplicationsTable({ rows, showJob = true, empty = 'No candidates match these filters.' }) {
@@ -10,12 +10,13 @@ export default function ApplicationsTable({ rows, showJob = true, empty = 'No ca
   if (!rows.length) return <Card><Empty icon={Users} title="No candidates here">{empty}</Empty></Card>;
   return (
     <Card className="overflow-x-auto">
-      <table className="w-full min-w-[640px] text-sm">
+      <table className="w-full min-w-[760px] text-sm">
         <thead>
           <tr className="border-b border-line text-left text-xs text-stone-500">
             <th className="px-4 py-2.5 font-medium">Candidate</th>
             {showJob && <th className="px-3 py-2.5 font-medium">Job</th>}
             <th className="px-3 py-2.5 font-medium">Stage</th>
+            <th className="px-3 py-2.5 font-medium">Owner</th>
             <th className="px-3 py-2.5 font-medium">Source</th>
             <th className="px-3 py-2.5 font-medium">Rating</th>
             <th className="px-4 py-2.5 text-right font-medium">Applied</th>
@@ -36,6 +37,9 @@ export default function ApplicationsTable({ rows, showJob = true, empty = 'No ca
               <td className="px-3 py-2.5">
                 <span className="flex flex-wrap items-center gap-1.5"><StageBadge app={a} /><ReviewBadge status={a.status === 'active' ? a.review_status : null} /></span>
                 {a.status === 'active' && <span className="mt-0.5 block text-xs text-stone-500">{a.next_interview ? `Interview ${fmtDate(a.next_interview)}` : `for ${since(a.stage_entered_at)}`}</span>}
+              </td>
+              <td className="px-3 py-2.5 whitespace-nowrap">
+                {a.owner_name ? <span className="inline-flex items-center gap-1.5 text-stone-700"><Avatar name={a.owner_name} size={20} />{a.owner_name}</span> : <span className="text-stone-400">Unassigned</span>}
               </td>
               <td className="px-3 py-2.5 whitespace-nowrap text-stone-600">{SOURCES[a.source] || a.source}</td>
               <td className="px-3 py-2.5">{a.rating ? <Stars value={a.rating} size={13} /> : <span className="text-stone-300">–</span>}</td>

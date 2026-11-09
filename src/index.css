@@ -3,18 +3,19 @@
 
 @theme {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --color-brand-50: #eef5f1;
-  --color-brand-100: #d8e8df;
-  --color-brand-200: #b3d2c2;
-  --color-brand-300: #86b69f;
-  --color-brand-400: #57957a;
-  --color-brand-500: #387a5f;
-  --color-brand-600: #2a624b;
-  --color-brand-700: #224f3d;
-  --color-brand-800: #1c3f32;
-  --color-brand-900: #132a22;
-  --color-brand-950: #0c1c17;
-  --color-gold: #e8c468;
+  /* The Book: deep teal with a warm sand accent, taken from the logo. */
+  --color-brand-50: #edf6f7;
+  --color-brand-100: #d5eaed;
+  --color-brand-200: #aed5db;
+  --color-brand-300: #7db9c3;
+  --color-brand-400: #4a98a6;
+  --color-brand-500: #267b8b;
+  --color-brand-600: #156472;
+  --color-brand-700: #0c505d;
+  --color-brand-800: #07414c;
+  --color-brand-900: #033a44;
+  --color-brand-950: #022a32;
+  --color-gold: #e0b686;
   --color-paper: #f6f5f1;
   --color-line: #e4e2db;
 }
