@@ -28,7 +28,7 @@ export default function ClientDetail() {
   return (
     <Page
       title={<span className="flex items-center gap-3"><span className="size-7 rounded-lg" style={{ background: client.brand_color }} />{client.name}</span>}
-      subtitle={[client.industry, client.location, client.website?.replace(/^https?:\/\//, '')].filter(Boolean).join(' · ')}
+      subtitle={[client.industry, client.location, client.website?.replace(/^https?:\/\//, '').replace(/\/$/, '')].filter(Boolean).join(' · ')}
       actions={
         <>
           <Button icon={Pencil} onClick={() => setModal('edit')}>Edit</Button>

@@ -15,7 +15,8 @@ function Board({ stages, apps }) {
   const open = useOpenCandidate();
   const [moved, setMoved] = useState({}); // optimistic stage for cards that were just dropped
   const [over, setOver] = useState(null);
-  useEffect(() => setMoved({}), [apps]);
+  // When fresh data arrives, forget only the moves it already reflects; a card dropped while that request was in flight stays put.
+  useEffect(() => setMoved((m) => Object.fromEntries(Object.entries(m).filter(([id, stageId]) => apps.find((a) => a.id === Number(id))?.stage_id !== stageId))), [apps]);
 
   const drop = async (e, stage) => {
     e.preventDefault();
@@ -27,6 +28,8 @@ function Board({ stages, apps }) {
     try {
       await api.post(`/applications/${id}/move`, { stage_id: stage.id });
       bump();
+      // Safety net: if the data never shows this move (someone else moved the card again), stop overriding it.
+      setTimeout(() => setMoved((m) => (m[id] === stage.id ? Object.fromEntries(Object.entries(m).filter(([k]) => Number(k) !== id)) : m)), 10000);
     } catch (err) {
       toast(err.message, 'error');
       setMoved((m) => { const { [id]: _, ...rest } = m; return rest; });

@@ -82,6 +82,9 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
           <Field label="Hiring manager" className="sm:col-span-3">
             <Select {...bind('hiring_manager_id')} disabled={!form.client_id}>
               <option value="">Not set</option>
+              {job?.hiring_manager_id && people && !people.some((p) => p.id === job.hiring_manager_id) && (
+                <option value={job.hiring_manager_id}>{job.hiring_manager_name || 'Current manager'} (deactivated)</option>
+              )}
               {(people || []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.role === 'client' ? '' : ' (agency)'}</option>)}
             </Select>
           </Field>

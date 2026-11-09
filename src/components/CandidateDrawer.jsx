@@ -48,6 +48,14 @@ function CandidateView({ data, onClose }) {
     bump();
   });
 
+  const [removeFromJob] = useAction(async () => {
+    if (!window.confirm(`Remove ${candidate.name} from ${job.title}? Their notes, scorecards and interviews for this job are deleted.${data.others.length ? ' Their other applications are kept.' : ' This is their only application, so their record is removed too.'}`)) return;
+    await api.del(`/applications/${app.id}`);
+    toast(`Removed from ${job.title}`);
+    onClose();
+    bump();
+  });
+
   const scorecardsDue = data.interviews.filter((i) => i.status !== 'cancelled' && new Date(i.starts_at) < new Date() && i.panel.some((p) => p.id === user.id) && !i.scorecards.some((s) => s.user_id === user.id));
 
   return (
@@ -108,7 +116,8 @@ function CandidateView({ data, onClose }) {
               active && null,
               active && { label: 'Candidate withdrew', icon: LogOut, onClick: withdraw },
               isAgency && null,
-              isAgency && { label: 'Delete candidate data', icon: Trash2, danger: true, onClick: erase },
+              isAgency && { label: 'Remove from this job', icon: X, danger: true, onClick: removeFromJob },
+              isAgency && { label: 'Delete all data on this person', icon: Trash2, danger: true, onClick: erase },
             ]}
           />
         </div>

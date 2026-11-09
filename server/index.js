@@ -44,7 +44,6 @@ app.use('/api', (req, res, next) => {
   res.setHeader('Cache-Control', 'private, no-store'); // candidate data must not sit in shared caches
   next();
 });
-app.use(express.json({ limit: '1mb' }));
 app.use('/api', api);
 
 if (isProd) {

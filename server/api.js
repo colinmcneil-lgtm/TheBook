@@ -7,6 +7,9 @@ import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_C
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
 
 export const api = express.Router();
+// Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
+// (which may include a password) never reach the server log.
+api.use(express.json({ limit: '1mb' }));
 
 // ---------- helpers ----------
 class HttpError extends Error {
@@ -31,10 +34,19 @@ const text = (v, max = 6000) => (typeof v === 'string' ? v.replace(/\r\n?/g, '\n
 function safeUrl(v) {
   const s = clean(v, 300);
   if (!s) return null;
+  // "example.com:8080/x" is a host and port, not a scheme; only "scheme://" and the well-known non-web schemes count as one.
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^(javascript|data|vbscript|mailto|tel|file|blob|about):/i.test(s);
   try {
-    const u = new URL(/^[a-z][a-z0-9+.-]*:/i.test(s) ? s : `https://${s}`);
-    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+    const u = new URL(hasScheme ? s : `https://${s}`);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.pathname === '/' && !u.search && !u.hash ? u.origin : u.href; // no stray trailing slash on a bare site address
   } catch { return null; }
+}
+/** For forms filled in by the agency: a link that was typed but is not a usable web address is refused, not silently dropped. */
+function linkField(value, label) {
+  const url = safeUrl(value);
+  if (clean(value, 300) && !url) bad(`${label} does not look like a web address.`);
+  return url;
 }
 const pw = (v) => (typeof v === 'string' ? v : '');
 const isStr = (v) => typeof v === 'string';
@@ -285,6 +297,7 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
 
     const result = tx(() => {
       let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', client.id, email);
+      const existing = cand;
       if (cand) {
         if (q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ? AND job_id = ?', cand.id, job.id)) return { duplicate: true };
         // An anonymous form must never change an existing person's record: nobody has shown they own this address.
@@ -302,6 +315,11 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
         req.file?.filename ?? null, clean(req.file?.originalname, 200), t, t, t, t);
       q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
       logActivity(appId, null, 'applied', `Applied via ${SOURCE_LABELS[source].toLowerCase()}`);
+      if (existing) {
+        const given = [existing.name !== name && `name “${name}”`, phone && phone !== existing.phone && `phone ${phone}`,
+          linkedin && linkedin !== existing.linkedin && `link ${linkedin}`, location && location !== existing.location && `location ${location}`].filter(Boolean);
+        if (given.length) logActivity(appId, null, 'applied', `Details typed on this application differ from the record and were not applied (unverified): ${given.join(', ')}`);
+      }
       return { appId };
     });
     stored = Boolean(result.appId);
@@ -514,7 +532,7 @@ function clientFields(b) {
   const model = ['retainer', 'per_hire', 'hybrid'].includes(b.engagement_model) ? b.engagement_model : 'retainer';
   return {
     name: clean(b.name, 120), brand_color: isStr(b.brand_color) && /^#[0-9a-f]{6}$/i.test(b.brand_color) ? b.brand_color : '#1f5443',
-    website: safeUrl(b.website), privacy_url: safeUrl(b.privacy_url), industry: clean(b.industry, 120), location: clean(b.location, 120),
+    website: linkField(b.website, 'The website'), privacy_url: linkField(b.privacy_url, 'The privacy notice link'), industry: clean(b.industry, 120), location: clean(b.location, 120),
     tagline: clean(b.tagline, 200), about: text(b.about, 6000),
     status: ['active', 'paused', 'ended'].includes(b.status) ? b.status : 'active',
     engagement_model: model,

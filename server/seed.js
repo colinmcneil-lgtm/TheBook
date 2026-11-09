@@ -23,7 +23,7 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
       db.exec(`DELETE FROM ${t}`);
     db.exec('DELETE FROM sqlite_sequence'); // a wiped database starts numbering from 1 again
   });
-  for (const file of fs.readdirSync(UPLOAD_DIR)) fs.rmSync(path.join(UPLOAD_DIR, file), { force: true }); // résumés of the rows just deleted
+  for (const file of fs.readdirSync(UPLOAD_DIR)) fs.rmSync(path.join(UPLOAD_DIR, file), { recursive: true, force: true }); // résumés of the rows just deleted
 }
 
 // Deterministic pseudo-random numbers so the demo looks the same on every run.

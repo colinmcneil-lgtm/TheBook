@@ -11,7 +11,7 @@ async function request(method, path, body) {
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
   if (!res.ok) {
     // A 401 on anything but the sign-in calls means the session ended: tell the app so it shows the sign-in screen.
-    if (res.status === 401 && !/^\/(login|me|setup|signup|bootstrap|public)\b/.test(path)) window.dispatchEvent(new Event('auth:expired'));
+    if (res.status === 401 && path !== '/me' && !/^\/(login|setup|signup|bootstrap|public|invites\/[a-f0-9]{48})\b/.test(path)) window.dispatchEvent(new Event('auth:expired'));
     const err = new Error(data?.error || 'Something went wrong. Please try again.');
     err.status = res.status;
     throw err;
@@ -77,7 +77,8 @@ export function extUrl(value) {
   const s = String(value || '').trim();
   if (!s) return null;
   if (/^https?:\/\//i.test(s)) return s;
-  return /^[a-z][a-z0-9+.-]*:/i.test(s) ? null : `https://${s}`;
+  // "example.com:8080" is a host and port, not a scheme.
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^(javascript|data|vbscript|mailto|tel|file|blob|about):/i.test(s) ? null : `https://${s}`;
 }
 export const toLocalInput = (d) => {
   const x = new Date(d);

@@ -14,7 +14,7 @@ export default function Inbox() {
   const tab = params.get('tab') || (isAgency ? 'new' : 'review');
   const setTab = (t) => { const next = new URLSearchParams(params); next.set('tab', t); setParams(next, { replace: true }); };
   const { data: fresh, error } = useApi(url('/applications', { client_id: scope, status: 'active', stage_kind: 'applied', sort: 'oldest' }));
-  const { data: review } = useApi(url('/applications', { client_id: scope, status: 'active', review: 'pending', sort: 'oldest' }));
+  const { data: review, error: reviewError } = useApi(url('/applications', { client_id: scope, status: 'active', review: 'pending', sort: 'oldest' }));
   const [busyId, setBusyId] = useState(null);
 
   const [advance] = useAction(async (app) => {
@@ -36,7 +36,7 @@ export default function Inbox() {
   return (
     <Page title={isAgency ? 'Inbox' : 'To review'} subtitle={isAgency ? 'Every new application across your clients, oldest first.' : 'Candidates your recruiter has put forward, with their write-up.'}>
       <Tabs tabs={tabs} value={tab} onChange={setTab} className="mb-4" />
-      {!rows ? <Pending error={error} /> : rows.length === 0 ? (
+      {!rows ? <Pending error={tab === 'new' ? error : reviewError} /> : rows.length === 0 ? (
         <Card>
           <Empty icon={tab === 'new' ? InboxIcon : Hourglass} title={tab === 'new' ? 'You are all caught up' : 'Nothing waiting for review'}>
             {tab === 'new' ? 'New applications from your clients’ careers pages land here.' : isAgency ? 'Candidates you submit to a hiring team appear here until they respond.' : 'When your recruiter shortlists someone, they will appear here for your decision.'}
