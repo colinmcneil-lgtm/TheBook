@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck,
 } from 'lucide-react';
-import { api, ago, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
+import { api, ago, since, extUrl, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal } from './CandidateModals.jsx';
@@ -40,9 +40,10 @@ function CandidateView({ data, onClose }) {
   const [restore] = useAction(async () => { await api.post(`/applications/${app.id}/restore`); bump(); });
   const [withdraw] = useAction(async () => { await api.post(`/applications/${app.id}/withdraw`); toast('Marked as withdrawn'); bump(); });
   const [erase] = useAction(async () => {
-    if (!window.confirm(`Permanently delete ${candidate.name}'s application, notes, scorecards and résumé? This cannot be undone.`)) return;
-    await api.del(`/applications/${app.id}`);
-    toast('Candidate data deleted');
+    const others = data.others.length ? ` This also removes their ${data.others.length === 1 ? 'application' : 'applications'} for ${data.others.map((o) => o.job_title).join(', ')}.` : '';
+    if (!window.confirm(`Permanently delete everything held on ${candidate.name} at ${client.name}: contact details, notes, scorecards, interviews, emails and résumé?${others} This cannot be undone.`)) return;
+    await api.del(`/candidates/${candidate.id}`);
+    toast(`All data on ${candidate.name} deleted`);
     onClose();
     bump();
   });
@@ -70,7 +71,7 @@ function CandidateView({ data, onClose }) {
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-stone-600">
               <a href={`mailto:${candidate.email}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Mail className="size-3.5" />{candidate.email}</a>
               {candidate.phone && <a href={`tel:${candidate.phone}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Phone className="size-3.5" />{candidate.phone}</a>}
-              {candidate.linkedin && <a href={candidate.linkedin} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 hover:text-brand-700"><Link2 className="size-3.5" />LinkedIn</a>}
+              {extUrl(candidate.linkedin) && <a href={extUrl(candidate.linkedin)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 hover:text-brand-700"><Link2 className="size-3.5" />Profile link</a>}
               {candidate.location && <span className="inline-flex items-center gap-1.5"><MapPin className="size-3.5" />{candidate.location}</span>}
             </div>
           </div>
@@ -94,14 +95,14 @@ function CandidateView({ data, onClose }) {
             <Button icon={Undo2} onClick={restore}>Return to pipeline</Button>
           )}
           <div className="flex-1" />
-          <Button icon={CalendarPlus} onClick={() => setModal('schedule')} className="max-sm:hidden">Schedule</Button>
+          {active && <Button icon={CalendarPlus} onClick={() => setModal('schedule')} className="max-sm:hidden">Schedule</Button>}
           <Button icon={Mail} onClick={() => setModal('email')} className="max-sm:hidden">Email</Button>
           <Menu
             trigger={<Button aria-label="More actions" icon={Ellipsis} className="!px-2.5" />}
             items={[
-              { label: 'Schedule interview', icon: CalendarPlus, onClick: () => setModal('schedule') },
+              active && { label: 'Schedule interview', icon: CalendarPlus, onClick: () => setModal('schedule') },
               { label: 'Email candidate', icon: Mail, onClick: () => setModal('email') },
-              isAgency && { label: app.review_status ? 'Resubmit to hiring team' : 'Submit to hiring team', icon: Send, onClick: () => setModal('submit') },
+              isAgency && active && { label: app.review_status ? 'Resubmit to hiring team' : 'Submit to hiring team', icon: Send, onClick: () => setModal('submit') },
               isAgency && { label: data.offer ? 'Update offer' : 'Record an offer', icon: Banknote, onClick: () => setModal('offer') },
               isAgency && { label: 'Edit details', icon: Pencil, onClick: () => setModal('edit') },
               active && null,
@@ -172,7 +173,7 @@ function ReviewBanner({ data, onDecide }) {
             ? isAgency ? `Waiting for the ${data.client.name} hiring team to review` : 'Waiting for your review'
             : `${approved ? 'Approved for interview' : 'Declined'} by ${app.reviewed_by_name || 'the hiring team'} · ${fmtDate(app.reviewed_at)}`}
         </span>
-        {pending && (
+        {pending && app.status === 'active' && (
           <span className="flex gap-2">
             <Button size="sm" variant="danger" onClick={() => onDecide('declined')}>Decline</Button>
             <Button size="sm" variant="primary" icon={Check} onClick={() => onDecide('approved')}>{isAgency ? 'Record approval' : 'Approve for interview'}</Button>
@@ -271,14 +272,14 @@ function Overview({ data, onOffer }) {
         <Card className="px-4 py-2.5">
           <dl className="divide-y divide-line">
             {row('Stage', stage.name)}
-            {row('In stage', ago(app.stage_entered_at).replace(' ago', ''))}
+            {row('In stage', since(app.stage_entered_at))}
             {row('Applied', fmtDate(app.applied_at, true))}
             {row('Source', SOURCES[app.source] || app.source)}
             {row('Rating', <Stars value={app.rating} onChange={rate} />)}
           </dl>
         </Card>
         {app.resume_file ? (
-          <a href={`/api/applications/${app.id}/resume`} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl border border-line bg-white px-4 py-3 text-sm hover:border-brand-300">
+          <a href={`/api/applications/${app.id}/resume`} download className="flex items-center gap-3 rounded-xl border border-line bg-white px-4 py-3 text-sm hover:border-brand-300">
             <span className="flex size-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700"><FileText className="size-4" /></span>
             <span className="min-w-0 flex-1">
               <span className="block font-medium text-stone-900">Résumé</span>
@@ -324,11 +325,12 @@ function Overview({ data, onOffer }) {
 function InterviewsTab({ data, onSchedule, onScorecard }) {
   const { bump, user } = useApp();
   const [setStatus] = useAction(async (id, status) => { await api.patch(`/interviews/${id}`, { status }); bump(); });
+  const canSchedule = data.application.status === 'active';
   if (!data.interviews.length)
-    return <Card><Empty icon={CalendarPlus} title="No interviews yet" action={<Button variant="primary" icon={CalendarPlus} onClick={onSchedule}>Schedule interview</Button>}>Book the first conversation and choose who should give feedback.</Empty></Card>;
+    return <Card><Empty icon={CalendarPlus} title="No interviews yet" action={canSchedule && <Button variant="primary" icon={CalendarPlus} onClick={onSchedule}>Schedule interview</Button>}>{canSchedule ? 'Book the first conversation and choose who should give feedback.' : 'This candidate is no longer in the pipeline.'}</Empty></Card>;
   return (
     <div className="space-y-4">
-      <div className="flex justify-end"><Button icon={CalendarPlus} size="sm" onClick={onSchedule}>Schedule another</Button></div>
+      {canSchedule && <div className="flex justify-end"><Button icon={CalendarPlus} size="sm" onClick={onSchedule}>Schedule another</Button></div>}
       {data.interviews.map((i) => {
         const past = new Date(i.starts_at) < new Date();
         const mine = i.scorecards.find((s) => s.user_id === user.id);

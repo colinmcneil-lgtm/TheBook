@@ -53,7 +53,8 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
       <Section title="The role">
         <div className="grid gap-4 sm:grid-cols-6">
           <Field label="Client" className="sm:col-span-3">
-            <Select {...bind('client_id')} required disabled={Boolean(job)}>
+            <Select value={form.client_id} required disabled={Boolean(job)}
+              onChange={(e) => setForm((f) => ({ ...f, client_id: e.target.value, hiring_manager_id: '' }))}>
               <option value="">Choose a client…</option>
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>

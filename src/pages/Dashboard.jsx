@@ -1,9 +1,9 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { CalendarDays, Briefcase, Inbox, Hourglass, ClipboardCheck, ArrowRight } from 'lucide-react';
-import { useApp, useApi, useOpenCandidate } from '../state.jsx';
+import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, ago, daysSince, firstName, fmtDay, plural } from '../lib.js';
-import { Card, CardHeader, Empty, Loading, Page, Stat, Avatar } from '../ui.jsx';
+import { Card, CardHeader, Empty, Page, Stat, Avatar } from '../ui.jsx';
 import { ClientName, InterviewLine, StageBadge } from '../components/bits.jsx';
 
 function Nudge({ icon: Icon, to, children }) {
@@ -19,12 +19,12 @@ function Nudge({ icon: Icon, to, children }) {
 export default function Dashboard() {
   const { user, scope, scopeClient, isAgency, clients } = useApp();
   const openCandidate = useOpenCandidate();
-  const { data } = useApi(url('/dashboard', { client_id: scope }));
+  const { data, error } = useApi(url('/dashboard', { client_id: scope }));
   const { data: nav } = useApi(url('/nav', { client_id: scope }));
   const { data: clientRows } = useApi(isAgency && !scope ? '/clients' : null);
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-  if (!data) return <Loading />;
+  if (!data) return <Pending error={error} />;
   const s = data.stats;
 
   // Group upcoming interviews by day.
@@ -40,7 +40,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <Stat Link={Link} to="/jobs" label="Open roles" value={s.open_jobs} />
         <Stat Link={Link} to="/candidates" label="Active candidates" value={s.active_candidates} />
-        <Stat Link={Link} to="/inbox" label="New applicants" value={s.new_applicants} hint="waiting for a first review" />
+        <Stat Link={Link} to="/inbox?tab=new" label="New applicants" value={s.new_applicants} hint="waiting for a first review" />
         <Stat Link={Link} to="/interviews" label="Interviews" value={s.interviews_week} hint="next 7 days" />
         <Stat label="Offers out" value={s.offers_out} />
         <Stat Link={Link} to="/reports" label="Hires" value={s.hires_90d} hint="last 90 days" />

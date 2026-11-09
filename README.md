@@ -40,6 +40,9 @@ npm run dev
 Open http://localhost:3000. `npm run seed` loads a demo agency with three fictional clients; skip it to start
 empty, in which case the first visit asks you to create your owner account.
 
+Settings are read from real environment variables, or from a `.env` file in the project folder if you create one
+(copy `.env.example` to `.env` and edit it).
+
 Demo sign-ins (password `demo1234` for all):
 
 | Who | Email | Sees |
@@ -50,7 +53,8 @@ Demo sign-ins (password `demo1234` for all):
 
 Public careers page for the demo: http://localhost:3000/careers/lumen-health
 
-To wipe the database and reload the demo: `npm run seed -- --reset`.
+To wipe the database and reload the demo: `npm run seed -- --reset`. This deletes every record and uploaded résumé
+in `DATA_DIR`, so it refuses to run when `NODE_ENV=production` unless you add `--force`.
 
 ## Put it online
 
@@ -72,6 +76,9 @@ docker run -p 3000:3000 -v embed-data:/data embed
 3. Add a service variable `PORT` = `3000`, then generate a public domain for the service pointing at port 3000.
 4. Open the domain. The first visit asks you to create your owner account.
 
+Railway, Render and Fly.io are detected automatically, so rate limits apply to each visitor's real address.
+On any other host that puts a proxy in front of the app, set `TRUST_PROXY=1` (or `2` if a CDN sits in front as well).
+
 The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejects builds that contain one.
 
 ### Any host
@@ -80,6 +87,9 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   Without a mounted volume they are lost on every redeploy. Back this folder up.
 - **Serve it over HTTPS** (every host above does this for you) and point a domain at it, for example
   `hiring.youragency.com`. Careers pages then live at `hiring.youragency.com/careers/<client>`.
+- **Tell the app about proxies.** Leave `TRUST_PROXY` unset when the app is reached directly (plain `docker run`).
+  Behind a reverse proxy set it to the number of proxies in front, or sign-in and application rate limits will
+  either lump every visitor together or be trivially bypassed.
 - **Connect email** by setting `SMTP_URL` and `MAIL_FROM` (see `.env.example`). Until you do, emails are
   saved on the candidate's record and clearly marked as not sent.
 
@@ -99,8 +109,15 @@ src/
 ```
 
 Security basics in place: salted scrypt password hashing, HTTP-only same-site session cookies, every
-request checked against the signed-in user's client, rate limiting on sign-in and public applications,
-résumé uploads restricted by type and size, and a honeypot field on application forms.
+request checked against the signed-in user's client, rate limiting on sign-in (per address and per account)
+and on public applications, a content security policy, résumé uploads restricted by type and size and only
+ever served back as downloads, length limits on everything the public form accepts, and a honeypot field on
+application forms. The code was reviewed by independent reviewers across authorization, web security, server
+logic, front end and deployment, and the confirmed findings were fixed.
+
+Candidate privacy: each application records when consent was given, each client can link its own privacy
+notice from the form, and "Delete candidate data" on a profile erases the person's record, every application
+they made at that client, and their résumé files.
 
 ## Not built yet
 

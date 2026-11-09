@@ -163,6 +163,7 @@ export function EmailModal({ data, onClose }) {
     setSubject(renderTemplate(t.subject, vars));
     setBody(renderTemplate(t.body, vars));
   };
+  const unfilled = `${subject}\n${body}`.match(/\{\{\s*\w+\s*\}\}/g);
   const [send, busy] = useAction(async () => {
     const result = await api.post(`/applications/${data.application.id}/emails`, { subject, body });
     toast(result.delivery === 'sent' ? 'Email sent' : result.delivery === 'failed' ? 'Saved, but delivery failed' : 'Saved to the record (delivery not connected)', result.delivery === 'failed' ? 'error' : 'ok');
@@ -171,16 +172,18 @@ export function EmailModal({ data, onClose }) {
   });
   return (
     <Modal title={`Email ${data.candidate.name}`} subtitle={data.candidate.email} onClose={onClose} onSubmit={send}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Send email</Button></>}>
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={Boolean(unfilled)}>Send email</Button></>}>
       <MailNote />
       <Field label="Start from a template">
         <Select defaultValue="" onChange={(e) => apply(e.target.value)}>
           <option value="">Blank message</option>
-          {(templates || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          {/* The interview invitation is sent from the Schedule dialog, where the time and place are known. */}
+          {(templates || []).filter((t) => t.key !== 'interview_invite').map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </Select>
       </Field>
       <Field label="Subject"><Input value={subject} onChange={(e) => setSubject(e.target.value)} required /></Field>
       <Field label="Message"><Textarea rows={10} value={body} onChange={(e) => setBody(e.target.value)} required /></Field>
+      {unfilled && <p className="text-xs text-red-700">Replace {[...new Set(unfilled)].join(', ')} before sending.</p>}
     </Modal>
   );
 }

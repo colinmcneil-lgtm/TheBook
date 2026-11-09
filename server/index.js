@@ -1,16 +1,34 @@
 import express from 'express';
 import path from 'node:path';
 import { api } from './api.js';
+import { db } from './db.js';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const isProd = process.env.NODE_ENV === 'production';
 
-app.set('trust proxy', 1);
+// How many reverse proxies sit in front of the app. This decides whose address rate limits apply to, so it must be
+// right: 0 when the app is reached directly, 1 behind a platform's proxy (Railway, Render, Fly), 2 with a CDN as well.
+// Those platforms are detected automatically; set TRUST_PROXY to override.
+const onPlatform = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RENDER || process.env.FLY_APP_NAME);
+const trustProxy = process.env.TRUST_PROXY ?? (onPlatform ? '1' : '0');
+app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
 app.disable('x-powered-by');
+
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('X-Frame-Options', 'DENY');
+  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+  if (isProd) {
+    // The dev server needs inline scripts and a websocket for hot reload, so the policy is production-only.
+    res.setHeader('Content-Security-Policy',
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+  }
+  next();
+});
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store'); // candidate data must not sit in shared caches
   next();
 });
 app.use(express.json({ limit: '1mb' }));
@@ -25,4 +43,13 @@ if (isProd) {
   app.use(vite.middlewares);
 }
 
-app.listen(PORT, () => console.log(`Embed is running on http://localhost:${PORT}`));
+const server = app.listen(PORT, () => console.log(`Embed is running on http://localhost:${PORT}`));
+
+// Stop cleanly when the host asks (deploys, restarts): finish open requests, then close the database.
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, () => {
+    server.close(() => { db.close(); process.exit(0); });
+    server.closeIdleConnections?.();
+    setTimeout(() => process.exit(0), 8000).unref();
+  });
+}

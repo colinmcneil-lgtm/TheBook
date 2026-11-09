@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api, ENGAGEMENTS } from '../lib.js';
+import { api, ENGAGEMENTS, todayLocal } from '../lib.js';
 import { useApp } from '../state.jsx';
 import { Button, Field, Input, Modal, Select, Textarea, useAction, useToast } from '../ui.jsx';
 
@@ -9,8 +9,8 @@ export function ClientForm({ client, onClose, onSaved }) {
   const { bump, reloadMe } = useApp();
   const toast = useToast();
   const [form, setForm] = useState(() => ({
-    name: '', industry: '', location: '', website: '', tagline: '', about: '', brand_color: '#1f5443', status: 'active',
-    engagement_model: 'retainer', monthly_retainer: '', fee_percent: '', currency: 'USD', started_at: new Date().toISOString().slice(0, 10),
+    name: '', industry: '', location: '', website: '', privacy_url: '', tagline: '', about: '', brand_color: '#1f5443', status: 'active',
+    engagement_model: 'retainer', monthly_retainer: '', fee_percent: '', currency: 'USD', started_at: todayLocal(),
     ...Object.fromEntries(Object.entries(client || {}).map(([k, v]) => [k, v ?? ''])),
   }));
   const bind = (key) => ({ value: form[key] ?? '', onChange: (e) => setForm((f) => ({ ...f, [key]: e.target.value })) });
@@ -47,6 +47,9 @@ export function ClientForm({ client, onClose, onSaved }) {
       )}
       <Field label="Headline"><Input {...bind('tagline')} placeholder="One line on what the company does and why it matters" /></Field>
       <Field label="About the company"><Textarea rows={4} {...bind('about')} placeholder="A few short paragraphs candidates will read before applying." /></Field>
+      <Field label="Privacy notice link" hint="Linked next to the consent box on every application form. Use the client's own candidate privacy notice.">
+        <Input {...bind('privacy_url')} placeholder="https://" />
+      </Field>
 
       <h3 className="border-t border-line pt-4 text-sm font-semibold text-stone-900">Your engagement <span className="font-normal text-stone-500">· never shown to the client</span></h3>
       <div className="grid gap-4 sm:grid-cols-6">

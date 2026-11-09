@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS clients (
   slug TEXT NOT NULL UNIQUE,
   brand_color TEXT NOT NULL DEFAULT '#1f5443',
   website TEXT, industry TEXT, location TEXT, tagline TEXT, about TEXT,
+  privacy_url TEXT,                                  -- the client's privacy notice, linked from the application form
   status TEXT NOT NULL DEFAULT 'active',            -- active | paused | ended
   engagement_model TEXT NOT NULL DEFAULT 'retainer', -- retainer | per_hire | hybrid
   monthly_retainer INTEGER NOT NULL DEFAULT 0,
@@ -75,7 +76,7 @@ CREATE TABLE IF NOT EXISTS stages (
 );
 
 CREATE TABLE IF NOT EXISTS candidates (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused, so an old link cannot open a different person
   client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   email TEXT NOT NULL,
@@ -85,7 +86,7 @@ CREATE TABLE IF NOT EXISTS candidates (
 );
 
 CREATE TABLE IF NOT EXISTS applications (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
   job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   stage_id INTEGER NOT NULL REFERENCES stages(id),
@@ -103,6 +104,7 @@ CREATE TABLE IF NOT EXISTS applications (
   stage_entered_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   hired_at TEXT,
+  consent_at TEXT,                                   -- when the applicant ticked the data-processing consent box
   UNIQUE (candidate_id, job_id)
 );
 
@@ -132,7 +134,7 @@ CREATE TABLE IF NOT EXISTS activities (
 );
 
 CREATE TABLE IF NOT EXISTS interviews (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'video',                -- phone | video | onsite | technical
@@ -190,14 +192,46 @@ CREATE TABLE IF NOT EXISTS email_templates (
   subject TEXT NOT NULL,
   body TEXT NOT NULL
 );
+`);
 
+// ---------- migrations for databases created by an earlier version ----------
+function addColumn(table, column, type) {
+  const has = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+  if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+/** Rebuild a table so its ids are AUTOINCREMENT (never reused after a delete). Rows and ids are kept as they are. */
+function ensureAutoincrement(table) {
+  const { sql } = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
+  if (/AUTOINCREMENT/i.test(sql)) return;
+  const rebuilt = sql
+    .replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?\w+["`]?/i, `CREATE TABLE ${table}__new`)
+    .replace(/\bid INTEGER PRIMARY KEY\b/i, 'id INTEGER PRIMARY KEY AUTOINCREMENT');
+  db.exec('PRAGMA foreign_keys = OFF'); // must be off, or dropping the old table would cascade into its children
+  db.exec('BEGIN');
+  try {
+    db.exec(rebuilt);
+    db.exec(`INSERT INTO ${table}__new SELECT * FROM ${table}`);
+    db.exec(`DROP TABLE ${table}`);
+    db.exec(`ALTER TABLE ${table}__new RENAME TO ${table}`);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+addColumn('clients', 'privacy_url', 'TEXT');
+addColumn('applications', 'consent_at', 'TEXT');
+for (const table of ['candidates', 'applications', 'interviews']) ensureAutoincrement(table);
+
+db.exec(`
 CREATE INDEX IF NOT EXISTS idx_jobs_client ON jobs(client_id);
 CREATE INDEX IF NOT EXISTS idx_apps_job ON applications(job_id);
 CREATE INDEX IF NOT EXISTS idx_apps_stage ON applications(stage_id);
 CREATE INDEX IF NOT EXISTS idx_hist_app ON stage_history(application_id);
 CREATE INDEX IF NOT EXISTS idx_interviews_app ON interviews(application_id);
-CREATE INDEX IF NOT EXISTS idx_activities_app ON activities(application_id);
-`);
+CREATE INDEX IF NOT EXISTS idx_activities_app ON activities(application_id);`);
 
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),

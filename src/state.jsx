@@ -1,6 +1,8 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { CircleAlert } from 'lucide-react';
 import { api } from './lib.js';
+import { Button, Empty, Loading } from './ui.jsx';
 
 export const AppContext = createContext({ version: 0 });
 export const useApp = () => useContext(AppContext);
@@ -23,6 +25,17 @@ export function useApi(path) {
   }, [path, version]);
   const fresh = state.key === key;
   return { data: fresh ? state.data : null, error: fresh ? state.error : null, loading: !fresh };
+}
+
+/** What a screen shows while its data loads: a spinner, or the error with a way to try again if the load failed. */
+export function Pending({ error, className }) {
+  const { bump } = useApp();
+  if (!error) return <Loading className={className} />;
+  return (
+    <div className={className}>
+      <Empty icon={CircleAlert} title="This could not be loaded" action={<Button onClick={bump}>Try again</Button>}>{error}</Empty>
+    </div>
+  );
 }
 
 /** Open (or close, with null) the candidate drawer from anywhere; it lives in the URL as ?c=<application id>. */

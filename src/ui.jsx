@@ -222,12 +222,25 @@ export function Stars({ value, onChange, size = 16 }) {
 }
 
 // ---------- overlays ----------
+// Open overlays, oldest first. Escape closes only the last one, so a modal on top of the drawer does not take the drawer with it.
+const overlays = [];
 function useEscape(onClose) {
+  const latest = useRef(onClose);
+  latest.current = onClose;
   useEffect(() => {
-    const handler = (e) => e.key === 'Escape' && onClose();
+    const token = {};
+    overlays.push(token);
+    const handler = (e) => {
+      if (e.key !== 'Escape' || overlays.at(-1) !== token) return;
+      e.stopPropagation();
+      latest.current();
+    };
     window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener('keydown', handler);
+      overlays.splice(overlays.indexOf(token), 1);
+    };
+  }, []);
 }
 
 export function Modal({ title, subtitle, onClose, children, footer, size = 'md', onSubmit }) {

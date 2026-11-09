@@ -10,6 +10,8 @@ async function request(method, path, body) {
   const res = await fetch('/api' + path, opts);
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
   if (!res.ok) {
+    // A 401 on anything but the sign-in calls means the session ended: tell the app so it shows the sign-in screen.
+    if (res.status === 401 && !/^\/(login|me|setup|bootstrap|public)\b/.test(path)) window.dispatchEvent(new Event('auth:expired'));
     const err = new Error(data?.error || 'Something went wrong. Please try again.');
     err.status = res.status;
     throw err;
@@ -34,8 +36,14 @@ export function url(path, params = {}) {
 }
 
 const DAY = 86400000;
+/** Date-only values ("2026-12-01") mean that calendar day wherever you are, so read them as local, not UTC. */
+const parseDate = (d) => (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(`${d}T00:00`) : new Date(d));
+export const todayLocal = () => {
+  const x = new Date();
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+};
 export const fmtDate = (d, withYear = false) =>
-  d ? new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(withYear ? { year: 'numeric' } : {}) }) : '';
+  d ? parseDate(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(withYear ? { year: 'numeric' } : {}) }) : '';
 export const fmtTime = (d) => new Date(d).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 export const fmtDateTime = (d) => `${new Date(d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}, ${fmtTime(d)}`;
 export const fmtDay = (d) => {
@@ -55,6 +63,21 @@ export function ago(d) {
   const days = Math.floor(mins / 1440);
   if (days < 30) return `${days}d ago`;
   return fmtDate(d, new Date(d).getFullYear() !== new Date().getFullYear());
+}
+/** A duration since `d`, e.g. "5m", "3h", "42d". */
+export function since(d) {
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(d).getTime()) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m`;
+  if (mins < 1440) return `${Math.floor(mins / 60)}h`;
+  return `${Math.floor(mins / 1440)}d`;
+}
+/** A safe link target for a URL someone typed: http(s) only, with https:// added to a bare domain. Null otherwise. */
+export function extUrl(value) {
+  const s = String(value || '').trim();
+  if (!s) return null;
+  if (/^https?:\/\//i.test(s)) return s;
+  return /^[a-z][a-z0-9+.-]*:/i.test(s) ? null : `https://${s}`;
 }
 export const toLocalInput = (d) => {
   const x = new Date(d);

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Search, UserPlus } from 'lucide-react';
-import { useApp, useApi, useOpenCandidate } from '../state.jsx';
+import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, plural } from '../lib.js';
-import { Button, Input, Loading, Page, Select, Tabs } from '../ui.jsx';
+import { Button, Input, Page, Select, Tabs } from '../ui.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
 import { AddCandidateModal } from '../components/CandidateModals.jsx';
 
@@ -18,7 +18,7 @@ export default function Candidates() {
   useEffect(() => setJobId(''), [scope]);
 
   const { data: jobs } = useApi(url('/jobs', { client_id: scope }));
-  const { data: rows } = useApi(url('/applications', { client_id: scope, status, job_id: jobId, q: query }));
+  const { data: rows, error } = useApi(url('/applications', { client_id: scope, status, job_id: jobId, q: query }));
 
   return (
     <Page
@@ -38,7 +38,7 @@ export default function Candidates() {
       </div>
       <Tabs className="mb-4" value={status} onChange={setStatus}
         tabs={[{ id: 'active', label: 'In process' }, { id: 'hired', label: 'Hired' }, { id: 'rejected', label: 'Rejected' }, { id: 'withdrawn', label: 'Withdrawn' }, { id: 'all', label: 'Everyone' }]} />
-      {rows ? <ApplicationsTable rows={rows} /> : <Loading />}
+      {rows ? <ApplicationsTable rows={rows} /> : <Pending error={error} />}
       {adding && <AddCandidateModal onClose={() => setAdding(false)} onAdded={openCandidate} />}
     </Page>
   );

@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ArrowRight, Inbox as InboxIcon, Hourglass } from 'lucide-react';
-import { useApp, useApi, useOpenCandidate } from '../state.jsx';
+import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { api, url, ago, firstName, SOURCES } from '../lib.js';
-import { Badge, Button, Card, Empty, Loading, Page, Tabs, useAction, useToast } from '../ui.jsx';
+import { Badge, Button, Card, Empty, Page, Tabs, useAction, useToast } from '../ui.jsx';
 import { CandidateCell, ClientName } from '../components/bits.jsx';
 
 export default function Inbox() {
@@ -13,7 +13,7 @@ export default function Inbox() {
   const [params, setParams] = useSearchParams();
   const tab = params.get('tab') || (isAgency ? 'new' : 'review');
   const setTab = (t) => { const next = new URLSearchParams(params); next.set('tab', t); setParams(next, { replace: true }); };
-  const { data: fresh } = useApi(url('/applications', { client_id: scope, status: 'active', stage_kind: 'applied', sort: 'oldest' }));
+  const { data: fresh, error } = useApi(url('/applications', { client_id: scope, status: 'active', stage_kind: 'applied', sort: 'oldest' }));
   const { data: review } = useApi(url('/applications', { client_id: scope, status: 'active', review: 'pending', sort: 'oldest' }));
   const [busyId, setBusyId] = useState(null);
 
@@ -36,7 +36,7 @@ export default function Inbox() {
   return (
     <Page title={isAgency ? 'Inbox' : 'To review'} subtitle={isAgency ? 'Every new application across your clients, oldest first.' : 'Candidates your recruiter has put forward, with their write-up.'}>
       <Tabs tabs={tabs} value={tab} onChange={setTab} className="mb-4" />
-      {!rows ? <Loading /> : rows.length === 0 ? (
+      {!rows ? <Pending error={error} /> : rows.length === 0 ? (
         <Card>
           <Empty icon={tab === 'new' ? InboxIcon : Hourglass} title={tab === 'new' ? 'You are all caught up' : 'Nothing waiting for review'}>
             {tab === 'new' ? 'New applications from your clients’ careers pages land here.' : isAgency ? 'Candidates you submit to a hiring team appear here until they respond.' : 'When your recruiter shortlists someone, they will appear here for your decision.'}
@@ -69,6 +69,7 @@ export default function Inbox() {
               </div>
             </div>
           ))}
+          {rows.length === 500 && <p className="px-4 py-3 text-center text-[13px] text-stone-500">Showing the 500 oldest. The rest appear as you work through these.</p>}
         </Card>
       )}
     </Page>

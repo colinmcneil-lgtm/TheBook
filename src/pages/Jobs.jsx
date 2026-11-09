@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Briefcase, Plus, MapPin } from 'lucide-react';
-import { useApp, useApi } from '../state.jsx';
+import { useApp, useApi, Pending } from '../state.jsx';
 import { url, daysSince, WORK_MODES } from '../lib.js';
-import { Button, Card, Empty, Loading, Page, Tabs } from '../ui.jsx';
+import { Button, Card, Empty, Page, Tabs } from '../ui.jsx';
 import { ClientName, JobStatusBadge } from '../components/bits.jsx';
 import JobForm from '../components/JobForm.jsx';
 
@@ -45,7 +45,7 @@ export default function Jobs() {
   const navigate = useNavigate();
   const [status, setStatus] = useState('open');
   const [creating, setCreating] = useState(false);
-  const { data: all } = useApi(url('/jobs', { client_id: scope }));
+  const { data: all, error } = useApi(url('/jobs', { client_id: scope }));
   const count = (s) => all?.filter((j) => j.status === s).length;
   const jobs = all?.filter((j) => status === 'all' || j.status === status);
 
@@ -54,7 +54,7 @@ export default function Jobs() {
       actions={isAgency && <Button variant="primary" icon={Plus} onClick={() => setCreating(true)} disabled={!clients.length}>New job</Button>}>
       <Tabs className="mb-4" value={status} onChange={setStatus}
         tabs={[{ id: 'open', label: 'Open', count: count('open') }, { id: 'draft', label: 'Drafts', count: count('draft') }, { id: 'paused', label: 'Paused', count: count('paused') }, { id: 'closed', label: 'Closed', count: count('closed') }, { id: 'all', label: 'All' }]} />
-      {!jobs ? <Loading /> : jobs.length ? <JobList jobs={jobs} /> : (
+      {!jobs ? <Pending error={error} /> : jobs.length ? <JobList jobs={jobs} /> : (
         <Card>
           <Empty icon={Briefcase} title={status === 'open' ? 'No open jobs' : 'Nothing here'}
             action={isAgency && clients.length > 0 && <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>New job</Button>}>

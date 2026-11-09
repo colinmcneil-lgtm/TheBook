@@ -1,7 +1,7 @@
 import React from 'react';
 import { Users } from 'lucide-react';
 import { useOpenCandidate } from '../state.jsx';
-import { ago, fmtDate, SOURCES } from '../lib.js';
+import { since, fmtDate, SOURCES } from '../lib.js';
 import { Card, Empty, Stars } from '../ui.jsx';
 import { CandidateCell, ClientName, ReviewBadge, StageBadge } from './bits.jsx';
 
@@ -35,7 +35,7 @@ export default function ApplicationsTable({ rows, showJob = true, empty = 'No ca
               )}
               <td className="px-3 py-2.5">
                 <span className="flex flex-wrap items-center gap-1.5"><StageBadge app={a} /><ReviewBadge status={a.status === 'active' ? a.review_status : null} /></span>
-                {a.status === 'active' && <span className="mt-0.5 block text-xs text-stone-500">{a.next_interview ? `Interview ${fmtDate(a.next_interview)}` : `for ${ago(a.stage_entered_at).replace(' ago', '')}`}</span>}
+                {a.status === 'active' && <span className="mt-0.5 block text-xs text-stone-500">{a.next_interview ? `Interview ${fmtDate(a.next_interview)}` : `for ${since(a.stage_entered_at)}`}</span>}
               </td>
               <td className="px-3 py-2.5 whitespace-nowrap text-stone-600">{SOURCES[a.source] || a.source}</td>
               <td className="px-3 py-2.5">{a.rating ? <Stars value={a.rating} size={13} /> : <span className="text-stone-300">–</span>}</td>

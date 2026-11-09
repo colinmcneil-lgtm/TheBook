@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CalendarDays, ChevronDown, Copy, ExternalLink, Pencil, Trash2, UserPlus } from 'lucide-react';
-import { useApp, useApi, useOpenCandidate } from '../state.jsx';
+import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { api, url, daysSince, fmtDate, salaryRange, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
-import { Avatar, Badge, Button, Card, Empty, Loading, Menu, Page, Stars, Tabs, useAction, useToast, cx } from '../ui.jsx';
+import { Avatar, Badge, Button, Card, Empty, Menu, Page, Stars, Tabs, useAction, useToast, cx } from '../ui.jsx';
 import { JobStatusBadge, ReviewBadge } from '../components/bits.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
 import JobForm from '../components/JobForm.jsx';
@@ -146,7 +146,8 @@ export default function JobDetail() {
   const [tab, setTab] = useState('pipeline');
   const [modal, setModal] = useState(null);
   const { data, error } = useApi(`/jobs/${id}`);
-  const { data: apps } = useApi(url('/applications', { job_id: id, status: 'all' }));
+  const { data: apps, error: appsError } = useApi(url('/applications', { job_id: id, status: 'all' }));
+  const inPlay = useMemo(() => (apps || []).filter((a) => a.status === 'active' || a.status === 'hired'), [apps]);
 
   const [setStatus] = useAction(async (status) => { await api.patch(`/jobs/${id}/status`, { status }); toast(`Job is now ${JOB_STATUS[status].label.toLowerCase()}`); bump(); });
   const [remove] = useAction(async () => {
@@ -158,10 +159,9 @@ export default function JobDetail() {
   });
 
   if (error) return <Page title="Job not found"><Card><Empty title="This job does not exist or you do not have access to it." action={<Link to="/jobs"><Button>Back to jobs</Button></Link>} /></Card></Page>;
-  if (!data || !apps) return <Loading />;
+  if (!data || !apps) return <Pending error={appsError} />;
   const { job, stages } = data;
   const careersUrl = `${window.location.origin}/careers/${job.client_slug}/${job.id}`;
-  const inPlay = apps.filter((a) => a.status === 'active' || a.status === 'hired');
   const copyLink = async () => {
     try { await navigator.clipboard.writeText(careersUrl); toast('Application link copied'); } catch { window.prompt('Copy this link', careersUrl); }
   };

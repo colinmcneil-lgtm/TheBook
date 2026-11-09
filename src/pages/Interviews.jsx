@@ -1,9 +1,9 @@
 import React from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, ClipboardCheck } from 'lucide-react';
-import { useApp, useApi } from '../state.jsx';
+import { useApp, useApi, Pending } from '../state.jsx';
 import { url, fmtDay } from '../lib.js';
-import { Badge, Card, Empty, Loading, Page, Tabs } from '../ui.jsx';
+import { Badge, Card, Empty, Page, Tabs } from '../ui.jsx';
 import { ClientName, InterviewLine } from '../components/bits.jsx';
 
 export default function Interviews() {
@@ -11,7 +11,7 @@ export default function Interviews() {
   const [params, setParams] = useSearchParams();
   const tab = params.get('tab') || 'upcoming';
   const setTab = (t) => { const next = new URLSearchParams(params); next.set('tab', t); setParams(next, { replace: true }); };
-  const { data: rows } = useApi(url('/interviews', { client_id: scope, when: tab }));
+  const { data: rows, error } = useApi(url('/interviews', { client_id: scope, when: tab }));
   const { data: nav } = useApi(url('/nav', { client_id: scope }));
 
   const groups = [];
@@ -32,7 +32,7 @@ export default function Interviews() {
     <Page title="Interviews" subtitle="What is booked, and whose feedback is still outstanding.">
       <Tabs className="mb-4" value={tab} onChange={setTab}
         tabs={[{ id: 'upcoming', label: 'Upcoming' }, { id: 'feedback', label: 'Needs my scorecard', count: nav?.scorecards_due || undefined }, { id: 'past', label: 'Past' }]} />
-      {!rows ? <Loading /> : !rows.length ? (
+      {!rows ? <Pending error={error} /> : !rows.length ? (
         <Card>
           <Empty icon={tab === 'feedback' ? ClipboardCheck : CalendarDays} title={tab === 'upcoming' ? 'No interviews booked' : tab === 'feedback' ? 'No scorecards outstanding' : 'No past interviews'}>
             {tab === 'upcoming' ? 'Schedule an interview from any candidate’s profile.' : tab === 'feedback' ? 'When you have interviewed someone, your scorecard request appears here.' : ''}

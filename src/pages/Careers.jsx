@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, CircleCheck, MapPin } from 'lucide-react';
-import { api, salaryRange, WORK_MODES, EMPLOYMENT, firstName } from '../lib.js';
+import { api, salaryRange, WORK_MODES, EMPLOYMENT, firstName, extUrl } from '../lib.js';
 import { Button, Checkbox, Field, Input, Loading, Textarea, useAction } from '../ui.jsx';
 
 // Public, candidate-facing pages. Each client gets /careers/<slug>, styled with their brand colour.
@@ -40,7 +40,7 @@ function Shell({ client, children, compact }) {
       <main className="mx-auto max-w-3xl px-5 py-10">{children}</main>
       <footer className="mx-auto max-w-3xl px-5 pb-10 text-xs text-stone-400">
         © {new Date().getFullYear()} {client.name}
-        {client.website && <> · <a href={client.website} className="hover:text-stone-600">{client.website.replace(/^https?:\/\//, '')}</a></>}
+        {extUrl(client.website) && <> · <a href={extUrl(client.website)} rel="noopener noreferrer" className="hover:text-stone-600">{client.website.replace(/^https?:\/\//, '').replace(/\/$/, '')}</a></>}
       </footer>
     </div>
   );
@@ -165,18 +165,22 @@ export function CareersJob() {
             <input type="file" accept=".pdf,.doc,.docx,.rtf,.txt" onChange={(e) => setFile(e.target.files[0] || null)}
               className="block w-full rounded-lg border border-line bg-white text-sm text-stone-600 file:mr-3 file:h-10 file:border-0 file:border-r file:border-line file:bg-stone-100 file:px-4 file:text-sm file:font-medium file:text-stone-800" />
           </Field>
-          {job.questions.map((q) => (
+          {job.questions.map((q) => q.type === 'yesno' ? (
+            // A fieldset, not a <label>: wrapping radios in one label would make a click on the question text pick "Yes".
+            <fieldset key={q.id} className="sm:col-span-2">
+              <legend className="mb-1 block text-[13px] font-medium text-stone-700">{`${q.label}${q.required ? '' : ' (optional)'}`}</legend>
+              <span className="flex gap-5 pt-1">
+                {['Yes', 'No'].map((option) => (
+                  <label key={option} className="flex items-center gap-2 text-sm text-stone-800">
+                    <input type="radio" name={q.id} value={option} required={q.required} checked={answers[q.id] === option} onChange={() => setAnswers((a) => ({ ...a, [q.id]: option }))} className="size-4" style={{ accentColor: client.brand_color }} />
+                    {option}
+                  </label>
+                ))}
+              </span>
+            </fieldset>
+          ) : (
             <Field key={q.id} label={`${q.label}${q.required ? '' : ' (optional)'}`} className="sm:col-span-2">
-              {q.type === 'yesno' ? (
-                <span className="flex gap-5 pt-1">
-                  {['Yes', 'No'].map((option) => (
-                    <label key={option} className="flex items-center gap-2 text-sm text-stone-800">
-                      <input type="radio" name={q.id} value={option} required={q.required} checked={answers[q.id] === option} onChange={() => setAnswers((a) => ({ ...a, [q.id]: option }))} className="size-4" style={{ accentColor: client.brand_color }} />
-                      {option}
-                    </label>
-                  ))}
-                </span>
-              ) : q.type === 'long' ? (
+              {q.type === 'long' ? (
                 <Textarea rows={4} required={q.required} value={answers[q.id] || ''} onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))} />
               ) : (
                 <Input required={q.required} value={answers[q.id] || ''} onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))} />
@@ -189,7 +193,12 @@ export function CareersJob() {
         </div>
         <div className="mt-5">
           <Checkbox checked={consent} onChange={(e) => setConsent(e.target.checked)} required
-            label={`I agree that ${client.name} and its recruitment partner may store and process my details to consider me for this role.`} />
+            label={`I agree that ${client.name} and its recruitment partner${data.agencyName ? `, ${data.agencyName},` : ''} may store and process my details to consider me for this role.`} />
+          {extUrl(client.privacy_url) && (
+            <p className="mt-1.5 pl-[26px] text-xs text-stone-500">
+              See how your information is used in the <a href={extUrl(client.privacy_url)} target="_blank" rel="noopener noreferrer" className="underline hover:text-stone-800">privacy notice</a>.
+            </p>
+          )}
         </div>
         <Button type="submit" busy={busy} className="mt-6 !h-11 w-full !text-[15px] font-semibold sm:w-auto sm:!px-8" style={accent}>Submit application</Button>
       </form>

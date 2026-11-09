@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Printer } from 'lucide-react';
-import { useApp, useApi, useOpenCandidate } from '../state.jsx';
+import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, fmtDate, money } from '../lib.js';
-import { Button, Card, CardHeader, Loading, Page, Select, Stat, cx } from '../ui.jsx';
+import { Button, Card, CardHeader, Page, Select, Stat, cx } from '../ui.jsx';
 
 const RANGES = [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['', 'All time']];
 const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '–');
@@ -68,7 +68,7 @@ export default function Reports() {
   const [jobId, setJobId] = useState('');
   useEffect(() => setJobId(''), [scope]);
   const { data: jobs } = useApi(url('/jobs', { client_id: scope }));
-  const { data } = useApi(url('/reports', { client_id: scope, job_id: jobId, days }));
+  const { data, error } = useApi(url('/reports', { client_id: scope, job_id: jobId, days }));
   const rangeLabel = RANGES.find(([v]) => v === days)[1].toLowerCase();
   const job = jobs?.find((j) => String(j.id) === jobId);
 
@@ -89,7 +89,7 @@ export default function Reports() {
         </>
       }
     >
-      {!data ? <Loading /> : (
+      {!data ? <Pending error={error} /> : (
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
             <Stat label="Applicants" value={data.totals.applicants} />

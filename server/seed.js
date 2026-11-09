@@ -1,17 +1,28 @@
 // Fills an empty database with a demo agency, three fictional clients and a realistic pipeline.
 // Run with: npm run seed            (refuses to run if the database already has users)
 //           npm run seed -- --reset (wipes everything first)
+//           Both refuse to run when NODE_ENV=production unless you also pass --force.
 import crypto from 'node:crypto';
-import { db, q, tx, setSetting, createStages } from './db.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { db, q, tx, setSetting, createStages, DATA_DIR, UPLOAD_DIR } from './db.js';
 
 const reset = process.argv.includes('--reset');
+if (process.env.NODE_ENV === 'production' && !process.argv.includes('--force')) {
+  console.error(`Refusing to load demo data into a production database (${DATA_DIR}). Add --force if you really mean it.`);
+  process.exit(1);
+}
 if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   if (!reset) {
     console.log('The database already has data. Use "npm run seed -- --reset" to wipe it and load the demo.');
     process.exit(0);
   }
-  for (const t of ['emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'users', 'clients'])
-    db.exec(`DELETE FROM ${t}`);
+  console.log(`Wiping ${DATA_DIR} ...`);
+  tx(() => {
+    for (const t of ['emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'users', 'clients'])
+      db.exec(`DELETE FROM ${t}`);
+  });
+  for (const file of fs.readdirSync(UPLOAD_DIR)) fs.rmSync(path.join(UPLOAD_DIR, file), { force: true }); // résumés of the rows just deleted
 }
 
 // Deterministic pseudo-random numbers so the demo looks the same on every run.

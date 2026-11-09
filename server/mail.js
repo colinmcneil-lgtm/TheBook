@@ -10,11 +10,15 @@ export const mailConfigured = () => Boolean(transport);
 export const renderTemplate = (text, vars) => text.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, key) => (vars[key] ?? m));
 
 export async function sendMail({ applicationId, to, subject, body, userId = null }) {
+  subject = String(subject).replace(/[\r\n]+/g, ' ').slice(0, 300);
+  body = String(body);
   let delivery = 'not_configured';
   if (transport) {
     try {
       const from = process.env.MAIL_FROM || `"${getSetting('agency_name', 'Recruiting')}" <no-reply@localhost>`;
-      await transport.sendMail({ from, to, subject, text: body });
+      // subject and body are plain strings by the time they get here; the two flags make the mail library refuse to
+      // read files or fetch URLs even if something else were ever passed.
+      await transport.sendMail({ from, to, subject: String(subject), text: String(body), disableFileAccess: true, disableUrlAccess: true });
       delivery = 'sent';
     } catch (err) {
       console.error('Email delivery failed:', err.message);

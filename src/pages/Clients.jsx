@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Building2, Plus } from 'lucide-react';
-import { useApi } from '../state.jsx';
+import { useApi, Pending } from '../state.jsx';
 import { ENGAGEMENTS, money } from '../lib.js';
-import { Badge, Button, Card, Empty, Loading, Page } from '../ui.jsx';
+import { Badge, Button, Card, Empty, Page } from '../ui.jsx';
 import { ClientForm } from '../components/Forms.jsx';
 
 export function engagementSummary(c) {
@@ -15,11 +15,11 @@ export function engagementSummary(c) {
 
 export default function Clients() {
   const navigate = useNavigate();
-  const { data: clients } = useApi('/clients');
+  const { data: clients, error } = useApi('/clients');
   const [creating, setCreating] = useState(false);
   return (
     <Page title="Clients" subtitle="The companies you run hiring for." actions={<Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>New client</Button>}>
-      {!clients ? <Loading /> : !clients.length ? (
+      {!clients ? <Pending error={error} /> : !clients.length ? (
         <Card><Empty icon={Building2} title="Add your first client" action={<Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>New client</Button>}>
           You will get a branded careers page for them straight away, and can invite their hiring managers once the first role is live.
         </Empty></Card>

@@ -21,7 +21,22 @@ const json = (v, fallback) => { try { return JSON.parse(v); } catch { return fal
 const DAY = 86400000;
 const daysAgo = (n) => new Date(Date.now() - n * DAY).toISOString();
 const slugify = (s) => String(s).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
-const validEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e || '');
+const validEmail = (e) => typeof e === 'string' && e.length <= 200 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+/** Single-line text from untrusted input: control characters removed, whitespace collapsed, length capped. */
+const clean = (v, max = 200) =>
+  (typeof v === 'string' || typeof v === 'number' ? String(v).replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '') || null;
+/** Multi-line free text with a length cap. */
+const text = (v, max = 6000) => (typeof v === 'string' ? v.replace(/\r\n?/g, '\n').trim().slice(0, max) : '') || null;
+/** Links are only stored when they are http(s); a bare domain gets https:// in front. */
+function safeUrl(v) {
+  const s = clean(v, 300);
+  if (!s) return null;
+  try {
+    const u = new URL(/^[a-z][a-z0-9+.-]*:/i.test(s) ? s : `https://${s}`);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+  } catch { return null; }
+}
+const pw = (v) => (typeof v === 'string' ? v : '');
 
 const hashPassword = (pw, salt = crypto.randomBytes(16).toString('hex')) => `${salt}:${crypto.scryptSync(pw, salt, 32).toString('hex')}`;
 function verifyPassword(pw, stored) {
@@ -29,6 +44,8 @@ function verifyPassword(pw, stored) {
   if (!salt || !hex) return false;
   return crypto.timingSafeEqual(crypto.scryptSync(pw, salt, 32), Buffer.from(hex, 'hex'));
 }
+// Checked when no account matches, so a wrong email costs the same time as a wrong password.
+const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'));
 
 const publicUser = (u) => u && { id: u.id, name: u.name, email: u.email, role: u.role, client_id: u.client_id, title: u.title, active: u.active };
 function publicClient(c, user) {
@@ -39,17 +56,25 @@ function publicClient(c, user) {
 
 // Small in-memory limiter for the unauthenticated endpoints (login, public applications).
 const hits = new Map();
-function rateLimit(name, max, windowMs) {
-  return (req, res, next) => {
-    if (hits.size > 10000) hits.clear();
-    const key = `${name}:${req.ip}`;
-    const recent = (hits.get(key) || []).filter((t) => t > Date.now() - windowMs);
-    if (recent.length >= max) return res.status(429).json({ error: 'Too many attempts. Please try again in a few minutes.' });
-    recent.push(Date.now());
-    hits.set(key, recent);
-    next();
-  };
+const recentHits = (key, windowMs) => (hits.get(key) || []).filter((t) => t > Date.now() - windowMs);
+function pruneHits() {
+  const cutoff = Date.now() - 3600000;
+  for (const [key, times] of hits) if (!times.some((t) => t > cutoff)) hits.delete(key);
 }
+setInterval(pruneHits, 10 * 60000).unref();
+/** Record one hit for `key`; false when it already has `max` hits inside the window. */
+function takeHit(key, max, windowMs) {
+  if (hits.size > 50000) pruneHits();
+  if (hits.size > 50000 && !hits.has(key)) return false; // under flood: refuse new keys rather than forget the old ones
+  const recent = recentHits(key, windowMs);
+  if (recent.length >= max) return false;
+  recent.push(Date.now());
+  hits.set(key, recent);
+  return true;
+}
+const TOO_MANY = 'Too many attempts. Please try again in a few minutes.';
+const rateLimit = (name, max, windowMs) => (req, res, next) =>
+  takeHit(`${name}:${req.ip}`, max, windowMs) ? next() : res.status(429).json({ error: TOO_MANY });
 
 const ALLOWED_RESUME = ['.pdf', '.doc', '.docx', '.rtf', '.txt'];
 const upload = multer({
@@ -57,7 +82,8 @@ const upload = multer({
     destination: UPLOAD_DIR,
     filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString('hex') + path.extname(file.originalname).toLowerCase()),
   }),
-  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+  // Every limit is explicit: multer's defaults allow unlimited text fields, which would let one request exhaust memory.
+  limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 30, parts: 32, fieldSize: 200 * 1024, fieldNameSize: 100 },
   fileFilter: (req, file, cb) =>
     ALLOWED_RESUME.includes(path.extname(file.originalname).toLowerCase())
       ? cb(null, true)
@@ -98,19 +124,26 @@ api.get('/bootstrap', (req, res) => {
 api.post('/setup', (req, res) => {
   if (q.get('SELECT 1 AS x FROM users LIMIT 1')) bad('This workspace is already set up.', 403);
   const { agencyName, name, email, password } = req.body || {};
-  if (!str(agencyName) || !str(name) || !validEmail(email)) bad('Agency name, your name and a valid email are required.');
-  if (!password || password.length < 8) bad('Choose a password of at least 8 characters.');
-  setSetting('agency_name', str(agencyName));
+  if (!clean(agencyName) || !clean(name) || !validEmail(email)) bad('Agency name, your name and a valid email are required.');
+  if (pw(password).length < 8) bad('Choose a password of at least 8 characters.');
+  setSetting('agency_name', clean(agencyName, 120));
   const id = q.insert('INSERT INTO users (email, password_hash, name, role, title, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    email.trim().toLowerCase(), hashPassword(password), str(name), 'admin', 'Founder', now());
+    email.trim().toLowerCase(), hashPassword(password), clean(name, 120), 'admin', 'Founder', now());
   startSession(req, res, id);
   res.json({ ok: true });
 });
 
 api.post('/login', rateLimit('login', 20, 10 * 60000), (req, res) => {
   const { email, password } = req.body || {};
-  const user = q.get('SELECT * FROM users WHERE email = ? AND active = 1', String(email || '').trim().toLowerCase());
-  if (!user || !password || !verifyPassword(password, user.password_hash)) bad('That email and password do not match.', 401);
+  const address = String(email || '').trim().toLowerCase().slice(0, 200);
+  // Second limit per account, so guesses spread over many addresses still run out.
+  if (recentHits(`fail:${address}`, 15 * 60000).length >= 30) return res.status(429).json({ error: TOO_MANY });
+  const user = q.get('SELECT * FROM users WHERE email = ? AND active = 1', address);
+  const matches = verifyPassword(pw(password), user ? user.password_hash : DUMMY_HASH);
+  if (!user || !matches) {
+    takeHit(`fail:${address}`, Infinity, 15 * 60000);
+    bad('That email and password do not match.', 401);
+  }
   startSession(req, res, user.id);
   res.json({ ok: true });
 });
@@ -119,7 +152,7 @@ api.post('/login', rateLimit('login', 20, 10 * 60000), (req, res) => {
 const publicJobCols = `id, title, department, location, work_mode, employment_type,
   CASE WHEN salary_public = 1 THEN salary_min END AS salary_min, CASE WHEN salary_public = 1 THEN salary_max END AS salary_max`;
 function careersClient(slug) {
-  const c = q.get(`SELECT id, name, slug, brand_color, tagline, about, website, location, industry, currency FROM clients WHERE slug = ? AND status != 'ended'`, slug);
+  const c = q.get(`SELECT id, name, slug, brand_color, tagline, about, website, privacy_url, location, industry, currency FROM clients WHERE slug = ? AND status != 'ended'`, slug);
   if (!c) bad('This careers page does not exist.', 404);
   return c;
 }
@@ -135,59 +168,73 @@ api.get('/public/careers/:slug/jobs/:id', (req, res) => {
   const job = q.get(`SELECT ${publicJobCols}, description, questions FROM jobs WHERE id = ? AND client_id = ? AND status = 'open'`, int(req.params.id), client.id);
   if (!job) bad('This role is no longer open.', 404);
   job.questions = json(job.questions, []);
-  res.json({ client, job });
+  res.json({ client, job, agencyName: getSetting('agency_name', '') });
 });
 
+const PUBLIC_SOURCES = ['careers_page', 'linkedin', 'job_board', 'referral'];
+
 api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 60000), upload.single('resume'), async (req, res) => {
-  const fail = (message, status) => { removeUpload(req.file?.filename); bad(message, status); };
-  const client = q.get(`SELECT * FROM clients WHERE slug = ? AND status != 'ended'`, req.params.slug);
-  const job = client && q.get(`SELECT * FROM jobs WHERE id = ? AND client_id = ? AND status = 'open'`, int(req.params.id), client.id);
-  if (!job) fail('This role is no longer open.', 404);
-  const b = req.body || {};
-  if (b.company_website) return res.json({ ok: true }); // honeypot field, filled only by bots
-  const email = String(b.email || '').trim().toLowerCase();
-  if (!str(b.name) || !validEmail(email)) fail('Please enter your name and a valid email address.');
-  if (b.consent !== 'yes') fail('Please confirm that we may process your application.');
+  let stored = false; // true once the uploaded résumé belongs to a saved application
+  try {
+    const client = q.get(`SELECT * FROM clients WHERE slug = ? AND status != 'ended'`, req.params.slug);
+    const job = client && q.get(`SELECT * FROM jobs WHERE id = ? AND client_id = ? AND status = 'open'`, int(req.params.id), client.id);
+    if (!job) bad('This role is no longer open.', 404);
+    const b = req.body || {};
+    if (b.company_website) return res.json({ ok: true }); // honeypot field, filled only by bots
+    const email = String(b.email || '').trim().toLowerCase();
+    const name = clean(b.name, 120);
+    if (!name || /:\/\/|www\./i.test(name) || !validEmail(email)) bad('Please enter your name and a valid email address.');
+    if (b.consent !== 'yes') bad('Please confirm that we may process your application.');
 
-  const questions = json(job.questions, []);
-  const given = json(b.answers, {});
-  const answers = [];
-  for (const question of questions) {
-    const answer = str(given[question.id]);
-    if (question.required && !answer) fail(`Please answer: ${question.label}`);
-    answers.push({ question: question.label, answer: answer ? answer.slice(0, 4000) : '' });
-  }
-  const source = Object.hasOwn(SOURCE_LABELS, b.source) ? b.source : 'careers_page';
-
-  const result = tx(() => {
-    let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', client.id, email);
-    if (cand) {
-      if (q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ? AND job_id = ?', cand.id, job.id)) return { duplicate: true };
-      q.run('UPDATE candidates SET name = ?, phone = COALESCE(?, phone), linkedin = COALESCE(?, linkedin), location = COALESCE(?, location) WHERE id = ?',
-        str(b.name), str(b.phone), str(b.linkedin), str(b.location), cand.id);
-    } else {
-      const id = q.insert('INSERT INTO candidates (client_id, name, email, phone, linkedin, location, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        client.id, str(b.name), email, str(b.phone), str(b.linkedin), str(b.location), now());
-      cand = { id };
+    const questions = json(job.questions, []);
+    const parsed = json(b.answers, {});
+    const given = parsed && typeof parsed === 'object' ? parsed : {};
+    const answers = [];
+    for (const question of questions) {
+      const answer = text(given[question.id], 4000);
+      if (question.required && !answer) bad(`Please answer: ${question.label}`);
+      answers.push({ question: question.label, answer: answer || '' });
     }
-    const stage = q.get(`SELECT id FROM stages WHERE job_id = ? AND kind = 'applied'`, job.id);
-    const t = now();
-    const appId = q.insert(
-      `INSERT INTO applications (candidate_id, job_id, stage_id, source, answers, cover_note, resume_file, resume_name, applied_at, stage_entered_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      cand.id, job.id, stage.id, source, JSON.stringify(answers), str(b.cover_note)?.slice(0, 6000) ?? null,
-      req.file?.filename ?? null, req.file?.originalname?.slice(0, 200) ?? null, t, t, t);
-    q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
-    logActivity(appId, null, 'applied', `Applied via ${SOURCE_LABELS[source].toLowerCase()}`);
-    return { appId };
-  });
+    const source = PUBLIC_SOURCES.includes(b.source) ? b.source : 'careers_page';
+    const phone = clean(b.phone, 40), linkedin = safeUrl(b.linkedin), location = clean(b.location, 120);
 
-  if (result.duplicate) removeUpload(req.file?.filename);
-  else await sendTemplate('application_received', {
-    applicationId: result.appId, to: email,
-    vars: { candidate_first_name: str(b.name).split(' ')[0], candidate_name: str(b.name), job_title: job.title, company: client.name, sender_name: client.name },
-  });
-  res.json({ ok: true });
+    const result = tx(() => {
+      let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', client.id, email);
+      if (cand) {
+        if (q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ? AND job_id = ?', cand.id, job.id)) return { duplicate: true };
+        // An anonymous form must never change an existing person's details. It may only fill in blanks.
+        q.run('UPDATE candidates SET phone = COALESCE(phone, ?), linkedin = COALESCE(linkedin, ?), location = COALESCE(location, ?) WHERE id = ?',
+          phone, linkedin, location, cand.id);
+      } else {
+        const id = q.insert('INSERT INTO candidates (client_id, name, email, phone, linkedin, location, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          client.id, name, email, phone, linkedin, location, now());
+        cand = { id };
+      }
+      const stage = q.get(`SELECT id FROM stages WHERE job_id = ? AND kind = 'applied'`, job.id);
+      const t = now();
+      const appId = q.insert(
+        `INSERT INTO applications (candidate_id, job_id, stage_id, source, answers, cover_note, resume_file, resume_name, consent_at, applied_at, stage_entered_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        cand.id, job.id, stage.id, source, JSON.stringify(answers), text(b.cover_note, 6000),
+        req.file?.filename ?? null, clean(req.file?.originalname, 200), t, t, t, t);
+      q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
+      logActivity(appId, null, 'applied', `Applied via ${SOURCE_LABELS[source].toLowerCase()}`);
+      return { appId };
+    });
+    stored = Boolean(result.appId);
+
+    // The address is unverified, so cap how many confirmations any one address can be sent.
+    const recent = q.get('SELECT COUNT(*) AS n FROM emails WHERE to_email = ? AND created_at > ?', email, new Date(Date.now() - 3600000).toISOString()).n;
+    if (result.appId && recent < 3) {
+      await sendTemplate('application_received', {
+        applicationId: result.appId, to: email,
+        vars: { candidate_first_name: name.split(/\s+/)[0].slice(0, 40), candidate_name: name, job_title: job.title, company: client.name, sender_name: client.name },
+      });
+    }
+    res.json({ ok: true });
+  } finally {
+    if (!stored) removeUpload(req.file?.filename);
+  }
 });
 
 // ---------- everything below requires a signed-in user ----------
@@ -217,8 +264,8 @@ api.get('/me', (req, res) => {
 
 api.post('/me/password', (req, res) => {
   const { current, next } = req.body || {};
-  if (!verifyPassword(current || '', req.user.password_hash)) bad('Your current password is not correct.');
-  if (!next || next.length < 8) bad('Choose a password of at least 8 characters.');
+  if (!verifyPassword(pw(current), req.user.password_hash)) bad('Your current password is not correct.');
+  if (pw(next).length < 8) bad('Choose a password of at least 8 characters.');
   q.run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(next), req.user.id);
   q.run('DELETE FROM sessions WHERE user_id = ? AND token != ?', req.user.id, req.user.sid);
   res.json({ ok: true });
@@ -235,28 +282,29 @@ api.get('/nav', (req, res) => {
     pending_review: count(`SELECT COUNT(*) n FROM applications a JOIN jobs j ON j.id = a.job_id
       WHERE a.status = 'active' AND a.review_status = 'pending' ${where}`, ...p),
     scorecards_due: count(`SELECT COUNT(*) n FROM interviews i JOIN interview_panel p ON p.interview_id = i.id
+      JOIN applications a ON a.id = i.application_id JOIN jobs j ON j.id = a.job_id
       WHERE p.user_id = ? AND i.status != 'cancelled' AND i.starts_at < ?
-      AND NOT EXISTS (SELECT 1 FROM scorecards sc WHERE sc.interview_id = i.id AND sc.user_id = p.user_id)`, req.user.id, now()),
+      AND NOT EXISTS (SELECT 1 FROM scorecards sc WHERE sc.interview_id = i.id AND sc.user_id = p.user_id) ${where}`, req.user.id, now(), ...p),
   });
 });
 
 // ---------- settings + templates ----------
 api.put('/settings', adminOnly, (req, res) => {
-  if (!str(req.body?.agencyName)) bad('Agency name is required.');
-  setSetting('agency_name', str(req.body.agencyName));
+  if (!clean(req.body?.agencyName)) bad('Agency name is required.');
+  setSetting('agency_name', clean(req.body.agencyName, 120));
   res.json({ ok: true });
 });
 
 api.get('/templates', (req, res) => res.json(q.all('SELECT * FROM email_templates ORDER BY key IS NULL, id')));
 api.post('/templates', agencyOnly, (req, res) => {
   const { name, subject, body } = req.body || {};
-  if (!str(name) || !str(subject) || !str(body)) bad('Name, subject and body are required.');
-  res.json({ id: q.insert('INSERT INTO email_templates (name, subject, body) VALUES (?, ?, ?)', str(name), str(subject), body) });
+  if (!clean(name) || !clean(subject) || !text(body)) bad('Name, subject and body are required.');
+  res.json({ id: q.insert('INSERT INTO email_templates (name, subject, body) VALUES (?, ?, ?)', clean(name, 120), clean(subject, 300), text(body, 20000)) });
 });
 api.put('/templates/:id', agencyOnly, (req, res) => {
   const { name, subject, body } = req.body || {};
-  if (!str(name) || !str(subject) || !str(body)) bad('Name, subject and body are required.');
-  q.run('UPDATE email_templates SET name = ?, subject = ?, body = ? WHERE id = ?', str(name), str(subject), body, int(req.params.id));
+  if (!clean(name) || !clean(subject) || !text(body)) bad('Name, subject and body are required.');
+  q.run('UPDATE email_templates SET name = ?, subject = ?, body = ? WHERE id = ?', clean(name, 120), clean(subject, 300), text(body, 20000), int(req.params.id));
   res.json({ ok: true });
 });
 api.delete('/templates/:id', agencyOnly, (req, res) => {
@@ -282,13 +330,13 @@ api.post('/users', agencyOnly, (req, res) => {
   const role = ['admin', 'recruiter', 'client'].includes(b.role) ? b.role : 'client';
   if (role !== 'client' && req.user.role !== 'admin') bad('Only an agency admin can add agency team members.', 403);
   const email = String(b.email || '').trim().toLowerCase();
-  if (!str(b.name) || !validEmail(email)) bad('Name and a valid email are required.');
-  if (!b.password || b.password.length < 8) bad('Set a temporary password of at least 8 characters.');
+  if (!clean(b.name) || !validEmail(email)) bad('Name and a valid email are required.');
+  if (pw(b.password).length < 8) bad('Set a temporary password of at least 8 characters.');
   const clientId = role === 'client' ? int(b.client_id) : null;
   if (role === 'client' && !q.get('SELECT 1 AS x FROM clients WHERE id = ?', clientId)) bad('Choose the client this person belongs to.');
   if (q.get('SELECT 1 AS x FROM users WHERE email = ?', email)) bad('Someone with that email already has an account.');
   const id = q.insert('INSERT INTO users (email, password_hash, name, role, client_id, title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    email, hashPassword(b.password), str(b.name), role, clientId, str(b.title), now());
+    email, hashPassword(b.password), clean(b.name, 120), role, clientId, clean(b.title, 120), now());
   res.json({ id });
 });
 
@@ -297,15 +345,13 @@ api.patch('/users/:id', agencyOnly, (req, res) => {
   if (!target) bad('Not found', 404);
   if (target.role !== 'client' && req.user.role !== 'admin') bad('Only an agency admin can change agency team members.', 403);
   const b = req.body || {};
+  if (b.active !== undefined && typeof b.active !== 'boolean') bad('active must be true or false.');
   if (b.active === false && target.id === req.user.id) bad('You cannot deactivate your own account.');
+  if (b.password !== undefined && pw(b.password).length < 8) bad('Passwords need at least 8 characters.');
   q.run('UPDATE users SET name = ?, title = ?, active = ? WHERE id = ?',
-    str(b.name) ?? target.name, b.title !== undefined ? str(b.title) : target.title, b.active === undefined ? target.active : b.active ? 1 : 0, target.id);
-  if (b.password) {
-    if (b.password.length < 8) bad('Passwords need at least 8 characters.');
-    q.run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(b.password), target.id);
-    q.run('DELETE FROM sessions WHERE user_id = ?', target.id);
-  }
-  if (b.active === false) q.run('DELETE FROM sessions WHERE user_id = ?', target.id);
+    clean(b.name, 120) ?? target.name, b.title !== undefined ? clean(b.title, 120) : target.title, b.active === undefined ? target.active : b.active ? 1 : 0, target.id);
+  if (b.password !== undefined) q.run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(b.password), target.id);
+  if (b.password !== undefined || b.active === false) q.run('DELETE FROM sessions WHERE user_id = ?', target.id);
   res.json({ ok: true });
 });
 
@@ -327,13 +373,18 @@ api.get('/clients', (req, res) => {
 });
 
 function clientFields(b) {
+  const model = ['retainer', 'per_hire', 'hybrid'].includes(b.engagement_model) ? b.engagement_model : 'retainer';
   return {
-    name: str(b.name), brand_color: /^#[0-9a-f]{6}$/i.test(b.brand_color || '') ? b.brand_color : '#1f5443',
-    website: str(b.website), industry: str(b.industry), location: str(b.location), tagline: str(b.tagline), about: str(b.about),
+    name: clean(b.name, 120), brand_color: /^#[0-9a-f]{6}$/i.test(b.brand_color || '') ? b.brand_color : '#1f5443',
+    website: safeUrl(b.website), privacy_url: safeUrl(b.privacy_url), industry: clean(b.industry, 120), location: clean(b.location, 120),
+    tagline: clean(b.tagline, 200), about: text(b.about, 6000),
     status: ['active', 'paused', 'ended'].includes(b.status) ? b.status : 'active',
-    engagement_model: ['retainer', 'per_hire', 'hybrid'].includes(b.engagement_model) ? b.engagement_model : 'retainer',
-    monthly_retainer: int(b.monthly_retainer) ?? 0, fee_percent: Number(b.fee_percent) || 0,
-    currency: /^[A-Z]{3}$/.test(b.currency || '') ? b.currency : 'USD', started_at: str(b.started_at),
+    engagement_model: model,
+    // Only the terms that belong to the chosen model are kept, so revenue never counts a figure the form no longer shows.
+    monthly_retainer: model === 'per_hire' ? 0 : Math.max(0, int(b.monthly_retainer) ?? 0),
+    fee_percent: model === 'retainer' ? 0 : Math.min(100, Math.max(0, Number(b.fee_percent) || 0)),
+    currency: /^[A-Z]{3}$/.test(b.currency || '') ? b.currency : 'USD',
+    started_at: /^\d{4}-\d{2}-\d{2}$/.test(b.started_at || '') ? b.started_at : null,
   };
 }
 
@@ -343,9 +394,9 @@ api.post('/clients', agencyOnly, (req, res) => {
   let slug = slugify(req.body.slug || f.name) || 'company';
   for (let n = 2; q.get('SELECT 1 AS x FROM clients WHERE slug = ?', slug); n++) slug = `${slugify(req.body.slug || f.name)}-${n}`;
   const id = q.insert(
-    `INSERT INTO clients (name, slug, brand_color, website, industry, location, tagline, about, status, engagement_model, monthly_retainer, fee_percent, currency, started_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    f.name, slug, f.brand_color, f.website, f.industry, f.location, f.tagline, f.about, f.status, f.engagement_model, f.monthly_retainer, f.fee_percent, f.currency,
+    `INSERT INTO clients (name, slug, brand_color, website, privacy_url, industry, location, tagline, about, status, engagement_model, monthly_retainer, fee_percent, currency, started_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    f.name, slug, f.brand_color, f.website, f.privacy_url, f.industry, f.location, f.tagline, f.about, f.status, f.engagement_model, f.monthly_retainer, f.fee_percent, f.currency,
     f.started_at ?? now().slice(0, 10), now());
   res.json({ id });
 });
@@ -369,9 +420,9 @@ api.put('/clients/:id', agencyOnly, (req, res) => {
   if (!slug) bad('The careers page address cannot be empty.');
   if (q.get('SELECT 1 AS x FROM clients WHERE slug = ? AND id != ?', slug, id)) bad('Another client already uses that careers page address.');
   q.run(
-    `UPDATE clients SET name = ?, slug = ?, brand_color = ?, website = ?, industry = ?, location = ?, tagline = ?, about = ?, status = ?,
+    `UPDATE clients SET name = ?, slug = ?, brand_color = ?, website = ?, privacy_url = ?, industry = ?, location = ?, tagline = ?, about = ?, status = ?,
        engagement_model = ?, monthly_retainer = ?, fee_percent = ?, currency = ?, started_at = ? WHERE id = ?`,
-    f.name, slug, f.brand_color, f.website, f.industry, f.location, f.tagline, f.about, f.status, f.engagement_model, f.monthly_retainer, f.fee_percent, f.currency, f.started_at, id);
+    f.name, slug, f.brand_color, f.website, f.privacy_url, f.industry, f.location, f.tagline, f.about, f.status, f.engagement_model, f.monthly_retainer, f.fee_percent, f.currency, f.started_at, id);
   res.json({ ok: true });
 });
 
@@ -385,7 +436,17 @@ const jobSelect = `
     (SELECT COUNT(*) FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.job_id = j.id AND a.status = 'active' AND s.kind = 'offer') AS offers,
     (SELECT COUNT(*) FROM applications a WHERE a.job_id = j.id AND a.status = 'hired') AS hires
   FROM jobs j JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = j.hiring_manager_id`;
-const hydrateJob = (j) => ({ ...j, questions: json(j.questions, []), criteria: json(j.criteria, []) });
+/** Parse the JSON columns and drop the agency-only internal brief for client users. */
+function hydrateJob(j, user) {
+  const { ideal_profile, ...rest } = j;
+  return { ...rest, ...(isAgency(user) ? { ideal_profile } : {}), questions: json(j.questions, []), criteria: json(j.criteria, []) };
+}
+/** A hiring manager must be an active agency user or belong to the job's own client. */
+function checkHiringManager(userId, clientId) {
+  if (userId == null) return;
+  const u = q.get('SELECT role, client_id FROM users WHERE id = ? AND active = 1', userId);
+  if (!u || (u.role === 'client' && u.client_id !== clientId)) bad('Choose a hiring manager from this client or your own team.');
+}
 
 function loadJob(id, user) {
   const job = q.get(`${jobSelect} WHERE j.id = ?`, int(id));
@@ -400,20 +461,21 @@ api.get('/jobs', (req, res) => {
   if (req.query.status) { where.push('j.status = ?'); p.push(req.query.status); }
   const rows = q.all(`${jobSelect} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY CASE j.status WHEN 'open' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 ELSE 3 END, j.created_at DESC`, ...p);
-  res.json(rows.map(hydrateJob));
+  res.json(rows.map((j) => hydrateJob(j, req.user)));
 });
 
 function jobFields(b) {
   const questions = (Array.isArray(b.questions) ? b.questions : [])
     .filter((x) => str(x?.label))
-    .map((x) => ({ id: str(x.id) || crypto.randomBytes(4).toString('hex'), label: str(x.label), type: ['short', 'long', 'yesno'].includes(x.type) ? x.type : 'short', required: Boolean(x.required) }));
-  const criteria = (Array.isArray(b.criteria) ? b.criteria : []).map(str).filter(Boolean).slice(0, 12);
+    .slice(0, 25)
+    .map((x) => ({ id: clean(x.id, 20) || crypto.randomBytes(4).toString('hex'), label: clean(x.label, 300), type: ['short', 'long', 'yesno'].includes(x.type) ? x.type : 'short', required: Boolean(x.required) }));
+  const criteria = (Array.isArray(b.criteria) ? b.criteria : []).map((c) => clean(c, 80)).filter(Boolean).slice(0, 12);
   return {
-    title: str(b.title), department: str(b.department), location: str(b.location),
+    title: clean(b.title, 160), department: clean(b.department, 120), location: clean(b.location, 120),
     work_mode: ['onsite', 'hybrid', 'remote'].includes(b.work_mode) ? b.work_mode : 'hybrid',
     employment_type: ['full_time', 'part_time', 'contract'].includes(b.employment_type) ? b.employment_type : 'full_time',
     salary_min: int(b.salary_min), salary_max: int(b.salary_max), salary_public: b.salary_public === false ? 0 : 1,
-    description: str(b.description), ideal_profile: str(b.ideal_profile),
+    description: text(b.description, 20000), ideal_profile: text(b.ideal_profile, 6000),
     status: ['draft', 'open', 'paused', 'closed'].includes(b.status) ? b.status : 'draft',
     hiring_manager_id: int(b.hiring_manager_id), openings: Math.max(1, int(b.openings) ?? 1),
     questions: JSON.stringify(questions), criteria: JSON.stringify(criteria.length ? criteria : DEFAULT_CRITERIA),
@@ -426,7 +488,8 @@ api.post('/jobs', agencyOnly, (req, res) => {
   const clientId = int(b.client_id);
   if (!q.get('SELECT 1 AS x FROM clients WHERE id = ?', clientId)) bad('Choose a client for this role.');
   if (!f.title) bad('Job title is required.');
-  const stageNames = (Array.isArray(b.interview_stages) ? b.interview_stages : []).map((s) => str(s?.name)).filter(Boolean);
+  checkHiringManager(f.hiring_manager_id, clientId);
+  const stageNames = (Array.isArray(b.interview_stages) ? b.interview_stages : []).map((s) => clean(s?.name, 80)).filter(Boolean).slice(0, 12);
   const id = tx(() => {
     const t = now();
     const jobId = q.insert(
@@ -442,8 +505,7 @@ api.post('/jobs', agencyOnly, (req, res) => {
 });
 
 api.get('/jobs/:id', (req, res) => {
-  const job = hydrateJob(loadJob(req.params.id, req.user));
-  if (!isAgency(req.user)) delete job.ideal_profile;
+  const job = hydrateJob(loadJob(req.params.id, req.user), req.user);
   const stages = q.all('SELECT * FROM stages WHERE job_id = ? ORDER BY position', job.id);
   res.json({ job, stages });
 });
@@ -453,6 +515,7 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
   const b = req.body || {};
   const f = jobFields(b);
   if (!f.title) bad('Job title is required.');
+  checkHiringManager(f.hiring_manager_id, job.client_id);
   tx(() => {
     const t = now();
     q.run(
@@ -464,20 +527,24 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
       job.opened_at ?? (f.status === 'open' ? t : null), f.status === 'closed' ? job.closed_at ?? t : null, job.id);
 
     if (Array.isArray(b.interview_stages)) {
-      const wanted = b.interview_stages.filter((s) => str(s?.name));
+      const wanted = b.interview_stages.map((s) => ({ id: int(s?.id), name: clean(s?.name, 80) })).filter((s) => s.name).slice(0, 12);
       if (!wanted.length) bad('Keep at least one interview stage.');
-      const existing = q.all(`SELECT * FROM stages WHERE job_id = ? AND kind = 'interview'`, job.id);
-      const keep = new Set(wanted.map((s) => int(s.id)).filter(Boolean));
+      const existing = q.all(`SELECT * FROM stages WHERE job_id = ? AND kind = 'interview' ORDER BY position`, job.id);
+      const applied = q.get(`SELECT * FROM stages WHERE job_id = ? AND kind = 'applied'`, job.id);
+      const keep = new Set(wanted.map((s) => s.id).filter(Boolean));
       for (const s of existing) {
         if (keep.has(s.id)) continue;
-        if (q.get('SELECT 1 AS x FROM applications WHERE stage_id = ?', s.id)) bad(`Move candidates out of “${s.name}” before removing it.`);
+        if (q.get(`SELECT 1 AS x FROM applications WHERE stage_id = ? AND status IN ('active', 'hired')`, s.id)) bad(`Move candidates out of “${s.name}” before removing it.`);
+        // Rejected and withdrawn candidates should not block the change: park them in the nearest earlier stage that survives.
+        const fallback = existing.filter((e) => keep.has(e.id) && e.position < s.position).at(-1) ?? applied;
+        q.run('UPDATE applications SET stage_id = ? WHERE stage_id = ?', fallback.id, s.id);
         q.run('DELETE FROM stage_history WHERE stage_id = ?', s.id);
         q.run('DELETE FROM stages WHERE id = ?', s.id);
       }
       wanted.forEach((s, i) => {
-        const own = existing.find((e) => e.id === int(s.id));
-        if (own) q.run('UPDATE stages SET name = ?, position = ? WHERE id = ?', str(s.name), i + 1, own.id);
-        else q.run(`INSERT INTO stages (job_id, name, kind, position) VALUES (?, ?, 'interview', ?)`, job.id, str(s.name), i + 1);
+        const own = existing.find((e) => e.id === s.id);
+        if (own) q.run('UPDATE stages SET name = ?, position = ? WHERE id = ?', s.name, i + 1, own.id);
+        else q.run(`INSERT INTO stages (job_id, name, kind, position) VALUES (?, ?, 'interview', ?)`, job.id, s.name, i + 1);
       });
       q.run(`UPDATE stages SET position = ? WHERE job_id = ? AND kind = 'offer'`, wanted.length + 1, job.id);
       q.run(`UPDATE stages SET position = ? WHERE job_id = ? AND kind = 'hired'`, wanted.length + 2, job.id);
@@ -529,13 +596,15 @@ api.get('/applications', (req, res) => {
   if (req.query.status && req.query.status !== 'all') { where.push('a.status = ?'); p.push(req.query.status); }
   if (req.query.stage_kind) { where.push('s.kind = ?'); p.push(req.query.stage_kind); }
   if (req.query.review) { where.push('a.review_status = ?'); p.push(req.query.review); }
-  if (str(req.query.q)) {
+  if (clean(req.query.q)) {
     where.push(`(c.name LIKE ? OR c.email LIKE ? OR c.current_company LIKE ? OR c.current_title LIKE ?)`);
-    const like = `%${str(req.query.q)}%`;
+    const like = `%${clean(req.query.q, 100)}%`;
     p.push(like, like, like, like);
   }
   const order = req.query.sort === 'oldest' ? 'a.applied_at ASC' : 'a.applied_at DESC';
-  res.json(q.all(`${appSelect} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${order} LIMIT 500`, ...p));
+  // Cross-job lists stop at 500 rows (the screens say so); one job's pipeline is returned whole so the board never hides anyone.
+  const limit = int(req.query.job_id) ? 20000 : 500;
+  res.json(q.all(`${appSelect} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${order} LIMIT ${limit}`, ...p));
 });
 
 function loadApp(id, user) {
@@ -554,7 +623,7 @@ const mailVars = (a, user) => ({
 function moveToStage(app, stageId, user) {
   const stage = q.get('SELECT * FROM stages WHERE id = ? AND job_id = ?', int(stageId), app.job_id);
   if (!stage) bad('That stage does not belong to this job.');
-  if (stage.id === app.stage_id && app.status === 'active') return stage;
+  if (stage.id === app.stage_id && (app.status === 'active' || app.status === 'hired')) return stage;
   const t = now();
   const hired = stage.kind === 'hired';
   q.run(`UPDATE applications SET stage_id = ?, stage_entered_at = ?, updated_at = ?, status = ?, hired_at = ?, reject_reason = NULL WHERE id = ?`,
@@ -564,34 +633,47 @@ function moveToStage(app, stageId, user) {
   return stage;
 }
 
+/** Contact details as stored: single-line, capped, and links restricted to http(s). */
+const candidateFields = (c) => ({
+  name: clean(c.name, 120), phone: clean(c.phone, 40), linkedin: safeUrl(c.linkedin), location: clean(c.location, 120),
+  current_title: clean(c.current_title, 160), current_company: clean(c.current_company, 160),
+});
+
 api.post('/applications', agencyOnly, upload.single('resume'), (req, res) => {
-  const b = req.body || {};
-  const fail = (message) => { removeUpload(req.file?.filename); bad(message); };
-  const job = q.get('SELECT * FROM jobs WHERE id = ?', int(b.job_id));
-  if (!job) fail('Choose a job for this candidate.');
-  const email = String(b.email || '').trim().toLowerCase();
-  if (!str(b.name) || !validEmail(email)) fail('Name and a valid email are required.');
-  const source = Object.hasOwn(SOURCE_LABELS, b.source) ? b.source : 'agency_sourced';
-  const id = tx(() => {
-    let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', job.client_id, email);
-    if (cand && q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ? AND job_id = ?', cand.id, job.id)) fail('This person is already in the pipeline for this job.');
-    if (!cand) {
-      cand = { id: q.insert(
-        'INSERT INTO candidates (client_id, name, email, phone, linkedin, location, current_title, current_company, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        job.client_id, str(b.name), email, str(b.phone), str(b.linkedin), str(b.location), str(b.current_title), str(b.current_company), now()) };
-    }
-    const stage = q.get('SELECT * FROM stages WHERE id = ? AND job_id = ?', int(b.stage_id), job.id)
-      ?? q.get(`SELECT * FROM stages WHERE job_id = ? AND kind = 'applied'`, job.id);
-    const t = now();
-    const appId = q.insert(
-      `INSERT INTO applications (candidate_id, job_id, stage_id, source, cover_note, resume_file, resume_name, applied_at, stage_entered_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      cand.id, job.id, stage.id, source, str(b.cover_note), req.file?.filename ?? null, req.file?.originalname?.slice(0, 200) ?? null, t, t, t);
-    q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
-    logActivity(appId, req.user.id, 'added', `Added to the pipeline (${SOURCE_LABELS[source].toLowerCase()})`);
-    return appId;
-  });
-  res.json({ id });
+  let stored = false;
+  try {
+    const b = req.body || {};
+    const job = q.get('SELECT * FROM jobs WHERE id = ?', int(b.job_id));
+    if (!job) bad('Choose a job for this candidate.');
+    const email = String(b.email || '').trim().toLowerCase();
+    const c = candidateFields(b);
+    if (!c.name || !validEmail(email)) bad('Name and a valid email are required.');
+    const source = Object.hasOwn(SOURCE_LABELS, b.source) ? b.source : 'agency_sourced';
+    const id = tx(() => {
+      let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', job.client_id, email);
+      if (cand && q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ? AND job_id = ?', cand.id, job.id)) bad('This person is already in the pipeline for this job.');
+      if (!cand) {
+        cand = { id: q.insert(
+          'INSERT INTO candidates (client_id, name, email, phone, linkedin, location, current_title, current_company, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          job.client_id, c.name, email, c.phone, c.linkedin, c.location, c.current_title, c.current_company, now()) };
+      }
+      const stage = q.get('SELECT * FROM stages WHERE id = ? AND job_id = ?', int(b.stage_id), job.id)
+        ?? q.get(`SELECT * FROM stages WHERE job_id = ? AND kind = 'applied'`, job.id);
+      const t = now();
+      const hired = stage.kind === 'hired';
+      const appId = q.insert(
+        `INSERT INTO applications (candidate_id, job_id, stage_id, status, source, cover_note, resume_file, resume_name, applied_at, stage_entered_at, updated_at, hired_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        cand.id, job.id, stage.id, hired ? 'hired' : 'active', source, text(b.cover_note, 6000), req.file?.filename ?? null, clean(req.file?.originalname, 200), t, t, t, hired ? t : null);
+      q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
+      logActivity(appId, req.user.id, 'added', `Added to the pipeline (${SOURCE_LABELS[source].toLowerCase()})`);
+      return appId;
+    });
+    stored = true;
+    res.json({ id });
+  } finally {
+    if (!stored) removeUpload(req.file?.filename);
+  }
 });
 
 api.get('/applications/:id', (req, res) => {
@@ -635,12 +717,12 @@ api.patch('/applications/:id', (req, res) => {
     q.run('UPDATE applications SET rating = ?, updated_at = ? WHERE id = ?', rating >= 1 && rating <= 5 ? rating : null, now(), a.id);
   }
   if (b.candidate && isAgency(req.user)) {
-    const c = b.candidate;
-    const email = String(c.email || '').trim().toLowerCase();
-    if (!str(c.name) || !validEmail(email)) bad('Name and a valid email are required.');
+    const c = candidateFields(b.candidate);
+    const email = String(b.candidate.email || '').trim().toLowerCase();
+    if (!c.name || !validEmail(email)) bad('Name and a valid email are required.');
     if (q.get('SELECT 1 AS x FROM candidates WHERE client_id = ? AND email = ? AND id != ?', a.client_id, email, a.candidate_id)) bad('Another candidate at this client already uses that email.');
     q.run('UPDATE candidates SET name = ?, email = ?, phone = ?, linkedin = ?, location = ?, current_title = ?, current_company = ? WHERE id = ?',
-      str(c.name), email, str(c.phone), str(c.linkedin), str(c.location), str(c.current_title), str(c.current_company), a.candidate_id);
+      c.name, email, c.phone, c.linkedin, c.location, c.current_title, c.current_company, a.candidate_id);
   }
   res.json({ ok: true });
 });
@@ -651,37 +733,54 @@ api.post('/applications/:id/move', (req, res) => {
   res.json({ ok: true, stage });
 });
 
+/** A candidate who has left the pipeline should not keep interviews in people's diaries. */
+function cancelUpcomingInterviews(appId, userId) {
+  const cancelled = q.run(`UPDATE interviews SET status = 'cancelled' WHERE application_id = ? AND status = 'scheduled' AND starts_at >= ?`, appId, now()).changes;
+  if (cancelled) logActivity(appId, userId, 'interview', cancelled === 1 ? 'Cancelled the upcoming interview' : `Cancelled ${cancelled} upcoming interviews`);
+}
+
 api.post('/applications/:id/reject', async (req, res) => {
   const a = loadApp(req.params.id, req.user);
-  const reason = str(req.body?.reason) || 'Not specified';
-  q.run(`UPDATE applications SET status = 'rejected', reject_reason = ?, hired_at = NULL, updated_at = ? WHERE id = ?`, reason, now(), a.id);
-  logActivity(a.id, req.user.id, 'rejected', `Rejected: ${reason}`);
-  if (req.body?.send_email) await sendTemplate('rejection', { applicationId: a.id, to: a.candidate_email, vars: mailVars(a, req.user), userId: req.user.id });
+  const reason = clean(req.body?.reason, 300) || 'Not specified';
+  tx(() => {
+    q.run(`UPDATE applications SET status = 'rejected', reject_reason = ?, updated_at = ? WHERE id = ?`, reason, now(), a.id);
+    logActivity(a.id, req.user.id, 'rejected', `Rejected: ${reason}`);
+    cancelUpcomingInterviews(a.id, req.user.id);
+  });
+  if (req.body?.send_email === true) await sendTemplate('rejection', { applicationId: a.id, to: a.candidate_email, vars: mailVars(a, req.user), userId: req.user.id });
   res.json({ ok: true });
 });
 
 api.post('/applications/:id/restore', (req, res) => {
   const a = loadApp(req.params.id, req.user);
-  if (a.status === 'active') return res.json({ ok: true });
+  if (a.status === 'active' || a.status === 'hired') return res.json({ ok: true });
   const stage = q.get('SELECT kind FROM stages WHERE id = ?', a.stage_id);
-  q.run(`UPDATE applications SET status = ?, reject_reason = NULL, updated_at = ? WHERE id = ?`, stage.kind === 'hired' ? 'hired' : 'active', now(), a.id);
+  const hired = stage.kind === 'hired';
+  q.run(`UPDATE applications SET status = ?, hired_at = ?, reject_reason = NULL, updated_at = ? WHERE id = ?`,
+    hired ? 'hired' : 'active', hired ? a.hired_at ?? a.stage_entered_at : null, now(), a.id);
   logActivity(a.id, req.user.id, 'restored', 'Returned to the pipeline');
   res.json({ ok: true });
 });
 
 api.post('/applications/:id/withdraw', (req, res) => {
   const a = loadApp(req.params.id, req.user);
-  q.run(`UPDATE applications SET status = 'withdrawn', reject_reason = ?, hired_at = NULL, updated_at = ? WHERE id = ?`, str(req.body?.reason), now(), a.id);
-  logActivity(a.id, req.user.id, 'withdrawn', `Candidate withdrew${str(req.body?.reason) ? `: ${str(req.body.reason)}` : ''}`);
+  const reason = clean(req.body?.reason, 300);
+  tx(() => {
+    q.run(`UPDATE applications SET status = 'withdrawn', reject_reason = ?, updated_at = ? WHERE id = ?`, reason, now(), a.id);
+    logActivity(a.id, req.user.id, 'withdrawn', `Candidate withdrew${reason ? `: ${reason}` : ''}`);
+    cancelUpcomingInterviews(a.id, req.user.id);
+  });
   res.json({ ok: true });
 });
 
 // Agency -> client hand-off: the recruiter submits a shortlisted candidate with a write-up, the hiring team approves or declines.
 api.post('/applications/:id/submit', agencyOnly, (req, res) => {
   const a = loadApp(req.params.id, req.user);
-  if (!str(req.body?.note)) bad('Add a short write-up so the hiring team knows why this candidate is worth meeting.');
+  if (a.status !== 'active') bad('Return this candidate to the pipeline before submitting them to the hiring team.');
+  const note = text(req.body?.note, 6000);
+  if (!note) bad('Add a short write-up so the hiring team knows why this candidate is worth meeting.');
   q.run(`UPDATE applications SET review_status = 'pending', submission_note = ?, submitted_by = ?, review_note = NULL, reviewed_by = NULL, reviewed_at = NULL, updated_at = ? WHERE id = ?`,
-    str(req.body.note), req.user.id, now(), a.id);
+    note, req.user.id, now(), a.id);
   logActivity(a.id, req.user.id, 'submitted', 'Submitted to the hiring team for review');
   res.json({ ok: true });
 });
@@ -689,9 +788,10 @@ api.post('/applications/:id/submit', agencyOnly, (req, res) => {
 api.post('/applications/:id/review', (req, res) => {
   const a = loadApp(req.params.id, req.user);
   if (a.review_status !== 'pending') bad('This candidate is not waiting for review.');
+  if (a.status !== 'active') bad('This candidate is no longer in the pipeline.');
   const approve = req.body?.decision === 'approved';
   if (!approve && req.body?.decision !== 'declined') bad('Choose approve or decline.');
-  const note = str(req.body?.note);
+  const note = text(req.body?.note, 4000);
   if (!approve && !note) bad('Please say why, so the recruiter can calibrate the search.');
   tx(() => {
     const t = now();
@@ -704,6 +804,7 @@ api.post('/applications/:id/review', (req, res) => {
       if (next && current.kind !== 'offer' && current.kind !== 'hired') moveToStage(a, next.id, req.user);
     } else {
       q.run(`UPDATE applications SET status = 'rejected', reject_reason = 'Declined by hiring team at review' WHERE id = ?`, a.id);
+      cancelUpcomingInterviews(a.id, req.user.id);
     }
   });
   res.json({ ok: true });
@@ -711,9 +812,10 @@ api.post('/applications/:id/review', (req, res) => {
 
 api.post('/applications/:id/notes', (req, res) => {
   const a = loadApp(req.params.id, req.user);
-  if (!str(req.body?.body)) bad('Write a note first.');
+  const body = text(req.body?.body, 10000);
+  if (!body) bad('Write a note first.');
   const id = q.insert('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, ?, ?)',
-    a.id, req.user.id, str(req.body.body), isAgency(req.user) && req.body.private ? 1 : 0, now());
+    a.id, req.user.id, body, isAgency(req.user) && req.body.private ? 1 : 0, now());
   q.run('UPDATE applications SET updated_at = ? WHERE id = ?', now(), a.id);
   res.json({ id });
 });
@@ -727,9 +829,12 @@ api.delete('/notes/:id', (req, res) => {
 
 api.post('/applications/:id/emails', async (req, res) => {
   const a = loadApp(req.params.id, req.user);
-  if (!str(req.body?.subject) || !str(req.body?.body)) bad('Subject and message are required.');
-  const result = await sendMail({ applicationId: a.id, to: a.candidate_email, subject: str(req.body.subject), body: req.body.body, userId: req.user.id });
-  logActivity(a.id, req.user.id, 'email', `Emailed candidate: ${str(req.body.subject)}`);
+  // Both must be plain strings. Anything else (an object, say) must never reach the mail library, which would treat it as a file or URL to read.
+  const subject = clean(req.body?.subject, 300);
+  const body = text(req.body?.body, 20000);
+  if (!subject || !body) bad('Subject and message are required.');
+  const result = await sendMail({ applicationId: a.id, to: a.candidate_email, subject, body, userId: req.user.id });
+  logActivity(a.id, req.user.id, 'email', `Emailed candidate: ${subject}`);
   res.json(result);
 });
 
@@ -739,8 +844,9 @@ api.put('/applications/:id/offer', agencyOnly, (req, res) => {
   const status = ['draft', 'sent', 'accepted', 'declined'].includes(b.status) ? b.status : 'draft';
   const existing = q.get('SELECT * FROM offers WHERE application_id = ?', a.id);
   const t = now();
-  if (existing) q.run('UPDATE offers SET salary = ?, start_date = ?, status = ?, notes = ?, updated_at = ? WHERE id = ?', int(b.salary), str(b.start_date), status, str(b.notes), t, existing.id);
-  else q.run('INSERT INTO offers (application_id, salary, start_date, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', a.id, int(b.salary), str(b.start_date), status, str(b.notes), t, t);
+  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(b.start_date || '') ? b.start_date : null;
+  if (existing) q.run('UPDATE offers SET salary = ?, start_date = ?, status = ?, notes = ?, updated_at = ? WHERE id = ?', int(b.salary), startDate, status, text(b.notes, 4000), t, existing.id);
+  else q.run('INSERT INTO offers (application_id, salary, start_date, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', a.id, int(b.salary), startDate, status, text(b.notes, 4000), t, t);
   if (!existing || existing.status !== status) logActivity(a.id, req.user.id, 'offer', `Offer ${status === 'draft' ? 'drafted' : status}`);
   res.json({ ok: true });
 });
@@ -749,18 +855,35 @@ api.get('/applications/:id/resume', (req, res) => {
   const a = loadApp(req.params.id, req.user);
   if (!a.resume_file) bad('No résumé on file.', 404);
   const safeName = (a.resume_name || 'resume').replace(/[^\w.\- ]+/g, '_');
-  res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
-  res.sendFile(path.join(UPLOAD_DIR, path.basename(a.resume_file)));
+  // Always a download, never rendered inside this site: the file came from an anonymous upload.
+  res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+  res.sendFile(path.join(UPLOAD_DIR, path.basename(a.resume_file)), (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'The résumé file is missing.' });
+  });
 });
 
-// Permanently erase a candidate's application (and the candidate record if this was their only one).
+// Remove one application (and the candidate record if this was their only one).
 api.delete('/applications/:id', agencyOnly, (req, res) => {
   const a = loadApp(req.params.id, req.user);
-  removeUpload(a.resume_file);
   tx(() => {
     q.run('DELETE FROM applications WHERE id = ?', a.id);
     if (!q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ?', a.candidate_id)) q.run('DELETE FROM candidates WHERE id = ?', a.candidate_id);
   });
+  removeUpload(a.resume_file);
+  res.json({ ok: true });
+});
+
+// Erase a person completely: every application they made at this client, with its notes, scorecards, interviews,
+// emails and résumé files, and their contact record.
+api.delete('/candidates/:id', agencyOnly, (req, res) => {
+  const cand = q.get('SELECT * FROM candidates WHERE id = ?', int(req.params.id));
+  if (!cand || !canSee(req.user, cand.client_id)) bad('Not found', 404);
+  const files = q.all('SELECT resume_file FROM applications WHERE candidate_id = ?', cand.id).map((r) => r.resume_file);
+  tx(() => {
+    q.run('DELETE FROM applications WHERE candidate_id = ?', cand.id);
+    q.run('DELETE FROM candidates WHERE id = ?', cand.id);
+  });
+  files.forEach(removeUpload);
   res.json({ ok: true });
 });
 
@@ -816,19 +939,21 @@ api.post('/interviews', async (req, res) => {
   const b = req.body || {};
   const a = loadApp(b.application_id, req.user);
   const starts = new Date(b.starts_at);
-  if (!str(b.title) || Number.isNaN(starts.getTime())) bad('Give the interview a title and a start time.');
+  const title = clean(b.title, 160);
+  if (!title || Number.isNaN(starts.getTime())) bad('Give the interview a title and a start time.');
+  if (a.status !== 'active') bad('Return this candidate to the pipeline before scheduling an interview.');
   const kind = Object.hasOwn(KIND_LABELS, b.kind) ? b.kind : 'video';
   const id = tx(() => {
     const iid = q.insert(
       `INSERT INTO interviews (application_id, title, kind, starts_at, duration_min, location, notes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      a.id, str(b.title), kind, starts.toISOString(), Math.max(10, int(b.duration_min) ?? 45), str(b.location), str(b.notes), req.user.id, now());
-    setPanel(iid, a.client_id, b.panel);
-    logActivity(a.id, req.user.id, 'interview', `Scheduled ${str(b.title)}`);
+      a.id, title, kind, starts.toISOString(), Math.min(480, Math.max(10, int(b.duration_min) ?? 45)), clean(b.location, 300), text(b.notes, 4000), req.user.id, now());
+    setPanel(iid, a.client_id, Array.isArray(b.panel) ? b.panel.slice(0, 20) : []);
+    logActivity(a.id, req.user.id, 'interview', `Scheduled ${title}`);
     return iid;
   });
   if (b.notify) await sendTemplate('interview_invite', {
     applicationId: a.id, to: a.candidate_email, userId: req.user.id,
-    vars: { ...mailVars(a, req.user), interview_time: str(b.time_label) || starts.toUTCString(), interview_format: KIND_LABELS[kind], interview_location: str(b.location) || 'Details to follow' },
+    vars: { ...mailVars(a, req.user), interview_time: clean(b.time_label, 120) || starts.toUTCString(), interview_format: KIND_LABELS[kind], interview_location: clean(b.location, 300) || 'Details to follow' },
   });
   res.json({ id });
 });
@@ -845,11 +970,11 @@ api.patch('/interviews/:id', (req, res) => {
       const starts = new Date(b.starts_at);
       if (Number.isNaN(starts.getTime())) bad('That start time is not valid.');
       q.run('UPDATE interviews SET title = ?, kind = ?, starts_at = ?, duration_min = ?, location = ?, notes = ? WHERE id = ?',
-        str(b.title) ?? i.title, Object.hasOwn(KIND_LABELS, b.kind) ? b.kind : i.kind, starts.toISOString(),
-        Math.max(10, int(b.duration_min) ?? i.duration_min), str(b.location), str(b.notes), i.id);
+        clean(b.title, 160) ?? i.title, Object.hasOwn(KIND_LABELS, b.kind) ? b.kind : i.kind, starts.toISOString(),
+        Math.min(480, Math.max(10, int(b.duration_min) ?? i.duration_min)), clean(b.location, 300), text(b.notes, 4000), i.id);
       if (starts.toISOString() !== i.starts_at) logActivity(i.application_id, req.user.id, 'interview', `Rescheduled ${i.title}`);
     }
-    if (Array.isArray(b.panel)) setPanel(i.id, i.client_id, b.panel);
+    if (Array.isArray(b.panel)) setPanel(i.id, i.client_id, b.panel.slice(0, 20));
   });
   res.json({ ok: true });
 });
@@ -857,7 +982,7 @@ api.patch('/interviews/:id', (req, res) => {
 api.get('/interviews/:id/ics', (req, res) => {
   const i = loadInterview(req.params.id, req.user);
   const stamp = (d) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-  const esc = (s) => String(s || '').replace(/([,;\\])/g, '\\$1').replace(/\n/g, '\\n');
+  const esc = (s) => String(s || '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ').replace(/([,;\\])/g, '\\$1').replace(/\n/g, '\\n');
   const end = new Date(new Date(i.starts_at).getTime() + i.duration_min * 60000);
   const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Embed//Recruiting//EN', 'BEGIN:VEVENT',
     `UID:interview-${i.id}@embed`, `DTSTAMP:${stamp(new Date())}`, `DTSTART:${stamp(i.starts_at)}`, `DTEND:${stamp(end)}`,
@@ -873,13 +998,13 @@ api.post('/interviews/:id/scorecard', (req, res) => {
   const b = req.body || {};
   if (!['strong_yes', 'yes', 'no', 'strong_no'].includes(b.recommendation)) bad('Choose an overall recommendation.');
   const ratings = {};
-  for (const [k, v] of Object.entries(b.ratings || {})) if (int(v) >= 1 && int(v) <= 4) ratings[String(k).slice(0, 80)] = int(v);
+  for (const [k, v] of Object.entries(b.ratings && typeof b.ratings === 'object' ? b.ratings : {}).slice(0, 20)) if (int(v) >= 1 && int(v) <= 4) ratings[String(k).slice(0, 80)] = int(v);
   const label = { strong_yes: 'Strong yes', yes: 'Yes', no: 'No', strong_no: 'Strong no' }[b.recommendation];
   tx(() => {
     q.run(
       `INSERT INTO scorecards (interview_id, user_id, recommendation, ratings, notes, submitted_at) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(interview_id, user_id) DO UPDATE SET recommendation = excluded.recommendation, ratings = excluded.ratings, notes = excluded.notes, submitted_at = excluded.submitted_at`,
-      i.id, req.user.id, b.recommendation, JSON.stringify(ratings), str(b.notes), now());
+      i.id, req.user.id, b.recommendation, JSON.stringify(ratings), text(b.notes, 10000), now());
     q.run('INSERT OR IGNORE INTO interview_panel (interview_id, user_id) VALUES (?, ?)', i.id, req.user.id);
     if (i.status === 'scheduled') q.run(`UPDATE interviews SET status = 'completed' WHERE id = ?`, i.id);
     logActivity(i.application_id, req.user.id, 'scorecard', `Submitted a scorecard for ${i.title}: ${label}`);
@@ -927,6 +1052,7 @@ const RANK = { applied: 0, interview: 1, offer: 2, hired: 3 };
 api.get('/reports', (req, res) => {
   const cid = scopeOf(req);
   const jobId = int(req.query.job_id);
+  if (jobId) loadJob(jobId, req.user);
   const days = int(req.query.days);
   const since = days ? daysAgo(days) : '1970-01-01';
   const where = [], p = [];
@@ -1018,7 +1144,8 @@ api.get('/reports', (req, res) => {
 api.use((req, res) => res.status(404).json({ error: 'Not found' }));
 api.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'That file is larger than 8 MB.' : 'Upload failed.' });
-  if (err.status) return res.status(err.status).json({ error: err.message });
+  if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+  if (err.status >= 400 && err.status < 500) return res.status(err.status).json({ error: 'That request could not be read.' });
   console.error(err);
   res.status(500).json({ error: 'Something went wrong on our side.' });
 });

@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Copy, ExternalLink, Pencil, Plus, UserPlus, Briefcase } from 'lucide-react';
-import { useApp, useApi } from '../state.jsx';
+import { useApp, useApi, Pending } from '../state.jsx';
 import { api, url, fmtDate, ENGAGEMENTS } from '../lib.js';
-import { Avatar, Badge, Button, Card, CardHeader, Empty, Loading, Page, Stat, useAction, useToast } from '../ui.jsx';
+import { Avatar, Badge, Button, Card, CardHeader, Empty, Page, Stat, useAction, useToast } from '../ui.jsx';
 import { JobList } from './Jobs.jsx';
 import { engagementSummary } from './Clients.jsx';
 import { ClientForm, UserForm } from '../components/Forms.jsx';
@@ -16,11 +16,11 @@ export default function ClientDetail() {
   const navigate = useNavigate();
   const [modal, setModal] = useState(null);
   const { data, error } = useApi(`/clients/${id}`);
-  const { data: jobs } = useApi(url('/jobs', { client_id: id }));
+  const { data: jobs, error: jobsError } = useApi(url('/jobs', { client_id: id }));
   const [setActive] = useAction(async (user, active) => { await api.patch(`/users/${user.id}`, { active }); toast(active ? `${user.name} can sign in again` : `${user.name} can no longer sign in`); bump(); });
 
   if (error) return <Page title="Client not found"><Link to="/clients"><Button>Back to clients</Button></Link></Page>;
-  if (!data || !jobs) return <Loading />;
+  if (!data || !jobs) return <Pending error={jobsError} />;
   const { client, team } = data;
   const careersUrl = `${window.location.origin}/careers/${client.slug}`;
   const copy = async () => { try { await navigator.clipboard.writeText(careersUrl); toast('Careers page link copied'); } catch { window.prompt('Copy this link', careersUrl); } };

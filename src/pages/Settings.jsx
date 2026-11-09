@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Plus, UserPlus, Trash2 } from 'lucide-react';
-import { useApp, useApi } from '../state.jsx';
+import { useApp, useApi, Pending } from '../state.jsx';
 import { api } from '../lib.js';
-import { Avatar, Badge, Button, Card, CardHeader, Field, Input, Loading, Modal, Page, Tabs, Textarea, useAction, useToast } from '../ui.jsx';
+import { Avatar, Badge, Button, Card, CardHeader, Field, Input, Modal, Page, Tabs, Textarea, useAction, useToast } from '../ui.jsx';
 import { UserForm } from '../components/Forms.jsx';
 
 function Account() {
@@ -60,10 +60,10 @@ function Agency() {
 function Team() {
   const { isAdmin, user, bump } = useApp();
   const toast = useToast();
-  const { data: people } = useApi('/users');
+  const { data: people, error } = useApi('/users');
   const [adding, setAdding] = useState(false);
   const [setActive] = useAction(async (u, active) => { await api.patch(`/users/${u.id}`, { active }); toast(active ? 'Reactivated' : 'Deactivated'); bump(); });
-  if (!people) return <Loading />;
+  if (!people) return <Pending error={error} />;
   const groups = [['Agency team', people.filter((p) => p.role !== 'client')], ['Client hiring teams', people.filter((p) => p.role === 'client')]];
   return (
     <div className="max-w-3xl space-y-6">
@@ -102,7 +102,7 @@ const MERGE_FIELDS = ['candidate_first_name', 'candidate_name', 'job_title', 'co
 function Templates() {
   const { bump } = useApp();
   const toast = useToast();
-  const { data: templates } = useApi('/templates');
+  const { data: templates, error } = useApi('/templates');
   const [editing, setEditing] = useState(null);
   const [save, busy] = useAction(async () => {
     if (editing.id) await api.put(`/templates/${editing.id}`, editing);
@@ -112,7 +112,7 @@ function Templates() {
     bump();
   });
   const [remove] = useAction(async () => { await api.del(`/templates/${editing.id}`); setEditing(null); bump(); });
-  if (!templates) return <Loading />;
+  if (!templates) return <Pending error={error} />;
   return (
     <div className="max-w-3xl">
       <Card>

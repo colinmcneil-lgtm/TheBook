@@ -27,6 +27,11 @@ function Workspace() {
 
   const reloadMe = useCallback(() => api.get('/me').then(setMe).catch(() => setMe(null)), []);
   useEffect(() => { reloadMe(); }, [reloadMe]);
+  useEffect(() => {
+    const expired = () => setMe(null);
+    window.addEventListener('auth:expired', expired);
+    return () => window.removeEventListener('auth:expired', expired);
+  }, []);
 
   const ctx = useMemo(() => {
     if (!me) return null;
