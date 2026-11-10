@@ -13,7 +13,8 @@ export async function extractResumeText(file) {
 }
 
 async function pdfText(buffer) {
-  const [pdfjs, { default: workerUrl }] = await Promise.all([import('pdfjs-dist'), import('pdfjs-dist/build/pdf.worker.min.mjs?url')]);
+  // The "legacy" build carries its own polyfills, so it also runs in browsers a year or two old.
+  const [pdfjs, { default: workerUrl }] = await Promise.all([import('pdfjs-dist/legacy/build/pdf.mjs'), import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')]);
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   const task = pdfjs.getDocument({ data: buffer, isEvalSupported: false, disableFontFace: true });
   const doc = await task.promise;
@@ -21,16 +22,26 @@ async function pdfText(buffer) {
   try {
     for (let n = 1; n <= Math.min(doc.numPages, 4); n++) {
       const content = await (await doc.getPage(n)).getTextContent();
-      let line = '', lastY = null;
+      // A PDF is a list of positioned text fragments: sometimes whole lines, sometimes single letters (résumés made
+      // in design tools). Fragments are joined by where they sit: no gap means the same word, a small gap a new word,
+      // a large gap a new column.
+      let line = '', last = null;
+      const flush = () => { if (line.trim()) lines.push(line); line = ''; last = null; };
       for (const item of content.items) {
         if (typeof item.str !== 'string') continue;
-        const y = Math.round(item.transform[5]);
-        if (lastY !== null && Math.abs(y - lastY) > 2 && line.trim()) { lines.push(line); line = ''; }
-        line += (line && !line.endsWith(' ') && item.str && !item.str.startsWith(' ') && lastY === y ? ' ' : '') + item.str;
-        lastY = y;
-        if (item.hasEOL && line.trim()) { lines.push(line); line = ''; lastY = null; }
+        const x = item.transform[4], y = item.transform[5];
+        const size = item.height || Math.abs(item.transform[3]) || 10;
+        if (last && Math.abs(y - last.y) > size * 0.5) flush();
+        if (last && item.str) {
+          const gap = x - (last.x + last.width);
+          if (gap > size * 2 || gap < -size) line += ' · ';
+          else if (gap > size * 0.18 && !line.endsWith(' ') && !item.str.startsWith(' ')) line += ' ';
+        }
+        line += item.str;
+        if (item.str) last = { x, y, width: item.width || 0 };
+        if (item.hasEOL) flush();
       }
-      if (line.trim()) lines.push(line);
+      flush();
     }
   } finally {
     await task.destroy?.(); // frees the worker's copy of the file
@@ -81,12 +92,11 @@ export function parseResume(text) {
 
   // Name: the first short line near the top made only of name-like words.
   for (const l of head.slice(0, 8)) {
-    const candidate = l.split(/\s*[|•·]\s*/)[0].trim();
-    const words = candidate.split(' ');
-    if (words.length >= 2 && words.length <= 4 && /^[\p{L}][\p{L} .'’-]+$/u.test(candidate) && !NOT_A_NAME.test(candidate) && !TITLE_WORDS.test(candidate)) {
-      out.name = candidate === candidate.toUpperCase() ? titleCase(candidate) : candidate;
-      break;
-    }
+    const candidate = l.split(/\s*[|•·]\s*/).map((part) => part.trim()).find((part) => {
+      const words = part.split(' ');
+      return words.length >= 2 && words.length <= 4 && /^[\p{L}][\p{L} .'’-]+$/u.test(part) && !NOT_A_NAME.test(part) && !TITLE_WORDS.test(part);
+    });
+    if (candidate) { out.name = candidate === candidate.toUpperCase() ? titleCase(candidate) : candidate; break; }
   }
 
   // Location: "City, Region" in the header block, or a labelled line.
@@ -120,4 +130,39 @@ export function parseResume(text) {
   }
   for (const k of ['current_title', 'current_company']) if (out[k] && (out[k].length > 80 || out[k].length < 2)) delete out[k];
   return out;
+}
+
+/** A person's name taken from a file name such as "Raphael Rivero - Resume__112026.pdf", or '' if it does not hold one. */
+export function nameFromFilename(filename) {
+  const base = filename.replace(/\.[^.]+$/, '').replace(/_+/g, ' ')
+    .replace(/\b(resume|résumé|cv|curriculum vitae|cover letter|final|updated|latest|new|copy|draft|v\d+)\b/gi, ' ').replace(/[\d()[\]]+/g, ' ');
+  const part = base.split(/\s+[-–—|]\s+|\s{2,}/).map((p) => p.replace(/^[\s-]+|[\s-]+$/g, '')).find((p) => {
+    const words = p.split(' ');
+    return words.length >= 2 && words.length <= 4 && /^[\p{L}][\p{L} .'’-]+$/u.test(p) && !TITLE_WORDS.test(p);
+  });
+  if (!part) return '';
+  return part === part.toLowerCase() || part === part.toUpperCase() ? titleCase(part) : part;
+}
+
+/**
+ * Read a résumé file and return what could be found, with the reason when little or nothing could be:
+ * 'ok', 'no_text' (a scan or image with no selectable text), 'unreadable' (old .doc and similar),
+ * 'protected' (password-protected) or 'error'.
+ */
+export async function readResume(file) {
+  let text = '', status = 'ok';
+  try {
+    text = await extractResumeText(file);
+    if (!text.trim()) status = /\.(pdf|docx|rtf|txt)$/i.test(file.name) ? 'no_text' : 'unreadable';
+  } catch (err) {
+    console.warn('The résumé could not be read automatically:', err);
+    status = /password/i.test(`${err?.name} ${err?.message}`) ? 'protected' : 'error';
+  }
+  const fields = parseResume(text);
+  let nameFromFile = false;
+  if (!fields.name) {
+    const guess = nameFromFilename(file.name);
+    if (guess) { fields.name = guess; nameFromFile = true; }
+  }
+  return { fields, status, nameFromFile };
 }

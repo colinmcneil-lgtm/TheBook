@@ -285,6 +285,20 @@ export function EditCandidateModal({ data, onClose }) {
   );
 }
 
+/** What to tell the recruiter after a résumé was dropped in: what was filled, or exactly why it could not be. */
+function resumeNote({ labels, status, nameFromFile }) {
+  const fromName = nameFromFile ? ' The name was taken from the file name.' : '';
+  const why = {
+    no_text: 'This file has no selectable text (it is a scan or an image saved as a PDF), so it could not be read.',
+    unreadable: 'This type of file cannot be read automatically. PDF and .docx files can.',
+    protected: 'This PDF is password-protected, so it could not be read.',
+    error: 'This file could not be opened for reading.',
+  }[status];
+  if (why) return `Attached. ${why}${fromName} Fill in the ${nameFromFile ? 'rest' : 'details'} below.`;
+  if (!labels.length) return 'Attached. No contact details were recognised in it, so fill in the details below.';
+  return `Filled in ${labels.join(', ')} from the résumé.${fromName} Please check them.`;
+}
+
 /** Add a sourced or referred candidate straight into a job's pipeline. Dropping a résumé in fills the form from it. */
 export function AddCandidateModal({ jobId, onClose, onAdded }) {
   const { bump, scope } = useApp();
@@ -293,7 +307,7 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
   const [form, setForm, bind] = useForm({ job_id: jobId || '', source: 'agency_sourced', stage_id: '' });
   const [file, setFile] = useState(null);
   const [reading, setReading] = useState(false);
-  const [filled, setFilled] = useState(null); // labels of the fields taken from the résumé
+  const [filled, setFilled] = useState(null); // what was taken from the résumé: { labels, status, nameFromFile }
   const [over, setOver] = useState(false);
   const { data: jobData } = useApi(form.job_id ? `/jobs/${form.job_id}` : null);
   useEffect(() => setForm((f) => ({ ...f, stage_id: '' })), [form.job_id]);
@@ -305,19 +319,19 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
     setFilled(null);
     setReading(true);
     try {
-      const { extractResumeText, parseResume } = await import('../resume.js');
-      const found = parseResume(await extractResumeText(picked));
-      const used = [];
+      const { readResume } = await import('../resume.js');
+      const { fields: found, status, nameFromFile } = await readResume(picked);
+      const labels = [];
       // Only fill what is still empty, so nothing already typed is replaced.
       setForm((f) => {
         const next = { ...f };
-        for (const [key, label] of CANDIDATE_FIELDS) if (found[key] && !String(f[key] || '').trim()) { next[key] = found[key]; used.push(key === 'linkedin' ? 'LinkedIn link' : label.toLowerCase()); }
+        for (const [key, label] of CANDIDATE_FIELDS) if (found[key] && !String(f[key] || '').trim()) { next[key] = found[key]; labels.push(key === 'linkedin' ? 'LinkedIn link' : label.toLowerCase()); }
         return next;
       });
-      setFilled(used);
+      setFilled({ labels, status, nameFromFile });
     } catch (err) {
       console.warn('The résumé could not be read automatically:', err);
-      setFilled([]);
+      setFilled({ labels: [], status: 'error' });
     } finally {
       setReading(false);
     }
@@ -346,10 +360,7 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
         <span className="min-w-0 flex-1 text-sm">
           <span className="block font-medium text-stone-900">{file ? file.name : 'Drop a résumé here, or click to choose one'}</span>
           <span className="block text-[13px] text-stone-500">
-            {reading ? 'Reading the résumé…'
-              : filled?.length ? `Filled in ${filled.join(', ')} from the résumé. Please check them.`
-              : filled ? 'Attached. Nothing could be read from this file automatically, so fill in the details below.'
-              : 'The details below are filled in from it. PDF, Word, RTF or text, up to 8 MB.'}
+            {reading ? 'Reading the résumé…' : filled ? resumeNote(filled) : 'The details below are filled in from it. PDF, Word, RTF or text, up to 8 MB.'}
           </span>
         </span>
         <input type="file" accept=".pdf,.doc,.docx,.rtf,.txt" className="sr-only" aria-label="Résumé" onChange={(e) => takeFile(e.target.files[0])} />
