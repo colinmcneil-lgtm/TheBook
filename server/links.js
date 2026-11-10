@@ -34,7 +34,8 @@ function stored(u) {
   if (member) {
     let slug = member[1];
     try { slug = decodeURIComponent(slug); } catch { /* keep the text as it came */ }
-    slug = slug.toLowerCase();
+    // Custom addresses ("jane-doe") work in any capitalisation; LinkedIn's own member ids ("ACoAAB...") only as written.
+    if (!/^ACo[A-Za-z0-9_-]{15,}$/.test(slug)) slug = slug.toLowerCase();
     if ([...slug].length >= 3) return `https://www.linkedin.com/in/${encodeURIComponent(slug)}`;
   }
   if (/^\/pub\/[^/]/i.test(u.pathname)) return `https://www.linkedin.com${u.pathname.toLowerCase().replace(/\/+$/, '')}`;

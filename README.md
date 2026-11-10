@@ -70,6 +70,10 @@ Everyone on the team can download it from Settings, Browser extension, which als
 (Chrome, Load unpacked). `npm run build` packs the folder into that download. To offer it through the Chrome Web
 Store instead, zip the folder and submit it from a Chrome developer account.
 
+On LinkedIn Recruiter, Sales Navigator, search and company pages there is no stable member link, so the link
+field is left empty there: paste the person's public profile link. The first time it connects, the extension
+confirms which workspace it is talking to.
+
 LinkedIn changes its page markup from time to time. The reader has fallbacks (it was tested against signed-in,
 public and renamed-class versions of a profile page), and every field can be corrected before saving, but if a
 field stops filling in, `extension/extract.js` is the one file to adjust. LinkedIn's terms restrict tools that
