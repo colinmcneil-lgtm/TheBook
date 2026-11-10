@@ -19,7 +19,7 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   }
   console.log(`Wiping ${DATA_DIR} ...`);
   tx(() => {
-    for (const t of ['calls', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
+    for (const t of ['phone_webhooks', 'phone_calls', 'calls', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
       db.exec(`DELETE FROM ${t}`);
     db.exec('DELETE FROM sqlite_sequence'); // a wiped database starts numbering from 1 again
   });
@@ -46,6 +46,17 @@ const LAST = ['Adeyemi', 'Bergström', 'Castillo', 'Dunne', 'Eriksen', 'Fontaine
 const COMPANIES = ['Brightwater', 'Coppermill', 'Ostrava Labs', 'Finchley & Co', 'Halden Systems', 'Juniper Row', 'Marlowe Group', 'Northgate Digital', 'Pellham', 'Quillon', 'Redfern Works', 'Sable Analytics', 'Tidewell', 'Varsity Freight', 'Wexcombe'];
 const CITIES = ['London', 'Manchester', 'Bristol', 'Leeds', 'Edinburgh', 'Dublin', 'Birmingham', 'Remote, UK'];
 const SOURCES = ['careers_page', 'careers_page', 'careers_page', 'careers_page', 'agency_sourced', 'agency_sourced', 'linkedin', 'linkedin', 'referral', 'job_board'];
+// Phone numbers from the range kept for fiction (555-0100 to 555-0199), so nothing in the demo can ring a real
+// person. No two candidates share one, and none is the mobile saved for Priya below.
+const AREA_CODES = ['416', '647', '437', '905', '289', '613'];
+const PRIYA_MOBILE = '+16475550142';
+const takenPhones = new Set(['647-42']);
+const demoPhone = () => {
+  let area = between(100, 999) % AREA_CODES.length, last = between(100000, 999999) % 100;
+  while (takenPhones.has(`${AREA_CODES[area]}-${last}`)) { last = (last + 1) % 100; if (!last) area = (area + 1) % AREA_CODES.length; }
+  takenPhones.add(`${AREA_CODES[area]}-${last}`);
+  return `(${AREA_CODES[area]}) 555-01${String(last).padStart(2, '0')}`;
+};
 const REJECT_REASONS = ['Not enough relevant experience', 'Salary expectations too far apart', 'Stronger candidates in process', 'Location or right-to-work mismatch', 'Skills not a match for this role'];
 
 tx(() => {
@@ -228,7 +239,7 @@ tx(() => {
       const title = `${pick(['Senior ', '', '', 'Lead ', ''])}${meta.title.replace(/^(Senior|Head of|Lead) /, '')}`.replace(/^Sales$/, 'Sales Manager');
       const candId = q.insert(
         'INSERT INTO candidates (client_id, name, email, phone, linkedin, location, current_title, current_company, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        meta.client_id, name, email, `+44 7${between(100, 999)} ${between(100000, 999999)}`, `https://www.linkedin.com/in/${email.split('@')[0].replace(/\./g, '-')}`,
+        meta.client_id, name, email, demoPhone(), `https://www.linkedin.com/in/${email.split('@')[0].replace(/\./g, '-')}`,
         pick(CITIES), title, pick(COMPANIES), ago(appliedDays));
 
       // How far this candidate got. The first few per job go deep so every stage has someone in it.
@@ -445,6 +456,79 @@ tx(() => {
       'Next steps\n- Rowan to send a portfolio.\n- Add them to the Product Designer role.',
     ].join('\n\n'),
   });
+
+  // Phone calls: Priya's mobile is saved, and three calls went through The Book's number. One she placed and that
+  // was answered (so it is in the Oracle, on the candidate), one where the line was busy, and one that came in while
+  // she was away, where the caller left a message. As with the calls above, the demo holds no audio.
+  q.run('UPDATE users SET phone = ? WHERE id = ?', PRIYA_MOBILE, priya);
+  const NOTICE = 'This call from Harbour Talent Partners is recorded and transcribed for recruitment notes. Tell your recruiter if you\'d prefer it wasn\'t.';
+  const e164 = (typed) => `+1${typed.replace(/\D/g, '')}`;
+  /** Somebody active in a job who has a phone number and no call yet, to ring. */
+  const reachable = (jobId) => q.get(
+    `SELECT a.id, a.candidate_id, c.name, c.phone FROM applications a JOIN candidates c ON c.id = a.candidate_id
+     WHERE a.job_id = ? AND a.status = 'active' AND c.phone IS NOT NULL AND c.id NOT IN (SELECT candidate_id FROM calls WHERE candidate_id IS NOT NULL) ORDER BY a.id LIMIT 1`, jobId);
+  const demoPhoneCall = ({ app, days, direction, outcome, reason = null, voicemail = false, turns = null, notes = null }) => {
+    const at = ago(days, 15);
+    const seconds = turns ? Math.round(turns.at(-1).end + 2) : null;
+    const number = e164(app.phone);
+    let callId = null;
+    if (turns) {
+      const inbound = direction === 'inbound';
+      callId = q.insert(
+        `INSERT INTO calls (recording_id, title, status, source, direction, phone_number, speaker_roles, audio_channels, voicemail, duration_ms, transcript, transcript_source, speakers,
+           notes, notes_at, notes_auto, application_id, candidate_id, consent_by, consent_at, consent_wording, created_by, created_at, updated_at)
+         VALUES (?, ?, 'ready', 'phone', ?, ?, ?, ?, ?, ?, ?, 'deepgram', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        crypto.randomBytes(16).toString('hex'), voicemail ? `Voicemail from ${app.name}` : `Call with ${app.name}`, inbound ? 'inbound' : 'outbound', number,
+        JSON.stringify(voicemail ? { 0: 'candidate' } : inbound ? { 0: 'candidate', 1: 'recruiter' } : { 0: 'recruiter', 1: 'candidate' }), voicemail ? 1 : 2, voicemail ? 1 : 0,
+        seconds * 1000, JSON.stringify(turns), JSON.stringify(voicemail ? { 0: app.name } : inbound ? { 0: app.name, 1: 'Priya Nair' } : { 0: 'Priya Nair', 1: app.name }),
+        notes, at, app.id, app.candidate_id, priya, at,
+        inbound ? `The Book played this notice to ${app.name} when they rang, before the call was put through: “Thanks for calling Harbour Talent Partners. ${NOTICE.replace(' from Harbour Talent Partners', '')}”`
+          : `The Book played this notice to ${app.name} when they answered, before the call was connected: “${NOTICE}”`,
+        priya, at, at);
+      act(app.id, priya, 'call', voicemail ? `Voicemail left, ${seconds} sec` : `Phone call, ${Math.max(1, Math.round(seconds / 60))} min`, at);
+    }
+    q.run(
+      `INSERT INTO phone_calls (user_id, direction, status, outcome, reason, to_number, user_number, candidate_id, application_id, record, notice_at, answered_at, ended_at, talk_sec, voicemail,
+         recording_state, recording_channels, recording_sec, recording_deleted_at, call_id, call_made, started_at, updated_at)
+       VALUES (?, ?, 'ended', ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      priya, direction, outcome, reason, number, PRIYA_MOBILE, app.candidate_id, app.id, turns ? at : null, turns && !voicemail ? at : null, at, voicemail ? null : seconds, voicemail ? 1 : 0,
+      turns ? 'stored' : null, turns ? (voicemail ? 1 : 2) : null, seconds, turns ? at : null, callId, callId ? 1 : 0, at, at);
+  };
+
+  const designer = reachable(jobs[1].id);
+  if (designer) {
+    const first = designer.name.split(' ')[0];
+    demoPhoneCall({
+      app: designer, days: 3, direction: 'outbound', outcome: 'completed',
+      turns: timed([
+        [0, `Hi ${first}, it is Priya from Harbour Talent. Is now still a good time for a quick call?`],
+        [1, 'Yes, I have ten minutes before my next meeting.'],
+        [0, 'Perfect. I wanted to check two things before I put you forward: your notice period, and whether three days a week in the office works for you.'],
+        [1, 'My notice is one month. Three days is fine as long as two of them can be flexible, because I do the school run on Wednesdays.'],
+        [0, 'That should be workable; I will raise it. And on salary, are you still looking for around 68,000?'],
+        [1, 'Yes, 68,000 would be right. I would not move for less than 65,000.'],
+        [0, 'Understood. I will send you the details this afternoon and come back to you by Friday.'],
+        [1, 'Great, thank you.'],
+      ]),
+      notes: [
+        `${first} confirmed their notice period, working pattern and salary ahead of being put forward. Details to follow this afternoon, with an answer by Friday.`,
+        'Pay (current and expected)\n- Looking for around 68,000.\n- Would not move for less than 65,000.',
+        'Notice period and availability\n- One month.',
+        'Location and working pattern\n- Three days a week in the office is fine if two of them can be flexible.\n- Does the school run on Wednesdays (personal: not for the client).',
+        'Next steps\n- Send the details this afternoon.\n- Come back to them by Friday.',
+      ].join('\n\n'),
+    });
+  }
+  const unavailable = reachable(jobs[2].id);
+  if (unavailable) demoPhoneCall({ app: unavailable, days: 2, direction: 'outbound', outcome: 'busy' });
+  const caller = reachable(jobs[3].id);
+  if (caller) {
+    demoPhoneCall({
+      app: caller, days: 1, direction: 'inbound', outcome: 'no_answer', reason: 'missed', voicemail: true,
+      turns: timed([[0, `Hi Priya, it is ${caller.name.split(' ')[0]} returning your call. I am free after four today or any time tomorrow morning. Speak soon.`]]),
+      notes: `${caller.name.split(' ')[0]} returned a call and left a message.\n\nNext steps\n- Call them back after four today, or tomorrow morning.`,
+    });
+  }
 });
 
 console.log(`Demo data loaded.
