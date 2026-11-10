@@ -71,8 +71,9 @@ function useReorder(list, onChange) {
       if (!step) return;
       e.preventDefault();
       const to = move(index, index + step);
-      // The row moved, so the grip to keep focus on is the one at its new place.
-      if (to !== index) setTimeout(() => box.current?.querySelectorAll('[data-reorder-grip]')[to]?.focus());
+      // The row moved, so the grip to keep focus on is the one at its new place. Done at once, not a moment later:
+      // a key held down sends the next press straight away, and it must land on the row that was just moved.
+      if (to !== index) box.current?.querySelectorAll('[data-reorder-grip]')[to]?.focus();
     },
   });
   return { box, grip, dragging };
