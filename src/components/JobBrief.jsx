@@ -3,6 +3,7 @@ import { Ban, Building2, Check, Copy, ExternalLink, MapPin, NotebookPen, Pencil,
 import { api, money, salaryRange, WORK_MODES, EMPLOYMENT } from '../lib.js';
 import { useApp } from '../state.jsx';
 import { Badge, Button, Card, Empty, Field, Modal, Textarea, useAction, useToast } from '../ui.jsx';
+import JobAutofill from './JobAutofill.jsx';
 
 // The recruiter brief for a job: everything someone sourcing for the role needs. Agency only.
 
@@ -196,10 +197,19 @@ function BriefForm({ job, onClose }) {
     <Field label={label} hint="One per line."><Textarea rows={rows} {...bind(key)} placeholder={placeholder} /></Field>
   );
   const heading = (title) => <h3 className="border-t border-line pt-4 text-sm font-semibold text-stone-900 first:border-0 first:pt-0">{title}</h3>;
+  // A draft only fills sections that are still empty, so nothing already written is replaced.
+  const applyDraft = (result) => setForm((f) => {
+    const next = { ...f };
+    for (const key of TEXTS) if (!f[key].trim() && result.brief[key]) next[key] = result.brief[key];
+    for (const key of LISTS) if (!f[key].trim() && result.brief[key]?.length) next[key] = lines(result.brief[key]);
+    if (!f.ideal_profile.trim() && result.ideal_profile) next.ideal_profile = result.ideal_profile;
+    return next;
+  });
 
   return (
     <Modal title="Recruiter brief" subtitle={`${job.title} · ${job.client_name}. Only your agency sees this.`} size="lg" onClose={onClose} onSubmit={save}
       footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Save brief</Button></>}>
+      <JobAutofill collapsible what="the brief" onResult={applyDraft} />
       {heading('About the role')}
       <Field label="The role, the team and why it is open"><Textarea rows={4} {...bind('about')} placeholder="What the person will own, who they report to, how big the team is, why the role exists now." /></Field>
       <Field label="Who we are looking for"><Textarea rows={3} {...bind('ideal_profile')} placeholder="The ideal person in a few sentences, including what the hiring manager cares about most." /></Field>

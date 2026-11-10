@@ -29,6 +29,27 @@ function Account() {
   );
 }
 
+function AiCard() {
+  const { data: status } = useApi('/jobs/autofill/status');
+  if (!status) return null;
+  const code = (text) => <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">{text}</code>;
+  return (
+    <Card>
+      <CardHeader title="AI drafting" action={<Badge tone={status.ai ? 'green' : 'amber'}>{status.ai ? 'Connected' : 'Not connected'}</Badge>} />
+      <div className="space-y-2 p-4 text-sm leading-relaxed text-stone-600">
+        {status.ai ? (
+          <p>When a recruiter fills in a job from a job description or an intake call, those documents are sent to Claude (Anthropic) to draft the job and its recruiter brief. Each use is billed to your Anthropic account.</p>
+        ) : (
+          <>
+            <p>New jobs can be filled in from a job description or intake call. Without AI, only details a job description states outright are picked up (title, location, salary, requirement lists).</p>
+            <p>To have the whole job and recruiter brief drafted, including from a call transcript, create an API key at console.anthropic.com and set {code('ANTHROPIC_API_KEY')} where the app is hosted, then restart it. Documents are then sent to Anthropic when a recruiter uses autofill, and each use is billed to that account.</p>
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function Agency() {
   const { agencyName, isAdmin, reloadMe, mailConfigured } = useApp();
   const toast = useToast();
@@ -43,6 +64,7 @@ function Agency() {
           {isAdmin && <Button type="submit" variant="primary" busy={busy}>Save</Button>}
         </form>
       </Card>
+      <AiCard />
       <Card>
         <CardHeader title="Email delivery" action={<Badge tone={mailConfigured ? 'green' : 'amber'}>{mailConfigured ? 'Connected' : 'Not connected'}</Badge>} />
         <div className="space-y-2 p-4 text-sm leading-relaxed text-stone-600">

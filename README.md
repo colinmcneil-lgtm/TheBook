@@ -14,6 +14,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Clients** | Each company you embed in has its own jobs, candidates, hiring-team logins, brand colour and engagement terms (retainer, fee per hire, or both). A switcher scopes the whole workspace to one client or all of them. |
 | **Careers pages** | Every client gets a public, branded careers page at `/careers/<client>` listing open roles, each with an application form (résumé upload, custom screening questions, consent). Link to it from the client's website. Add `?src=linkedin`, `?src=job_board` or `?src=referral` to an apply link to track where applicants came from. |
 | **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
+| **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **Inbox** | Every new application across all clients lands in one review queue, oldest first. |
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
 | **Shortlist hand-off** | Submit a candidate to the hiring team with your write-up. They approve (the candidate moves to the next interview stage) or decline with a reason, so you can calibrate. |
@@ -107,6 +108,10 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   Without a mounted volume they are lost on every redeploy. Back this folder up.
 - **Serve it over HTTPS** (every host above does this for you) and point a domain at it, for example
   `hiring.youragency.com`. Careers pages then live at `hiring.youragency.com/careers/<client>`.
+- **Connect AI drafting (optional)** by setting `ANTHROPIC_API_KEY` (create one at console.anthropic.com). Job autofill
+  then sends the job description and intake notes a recruiter provides to Anthropic's API to draft the job and brief,
+  billed to that account per use. It uses `claude-opus-5-5`; set `AUTOFILL_MODEL` to use a different Claude model.
+  Without a key, autofill still works in its basic form and nothing is sent anywhere.
 - **Tell the app about proxies.** Leave `TRUST_PROXY` unset when the app is reached directly (plain `docker run`).
   Behind a reverse proxy set it to the number of proxies in front, or sign-in and application rate limits will
   either lump every visitor together or be trivially bypassed.

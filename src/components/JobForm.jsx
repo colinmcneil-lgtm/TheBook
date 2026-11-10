@@ -3,6 +3,11 @@ import { Plus, Trash2 } from 'lucide-react';
 import { api, url, WORK_MODES, EMPLOYMENT } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Button, Checkbox, Field, Input, Modal, Select, Textarea, useAction, useToast } from '../ui.jsx';
+import JobAutofill from './JobAutofill.jsx';
+
+const BRIEF_LABELS = { must_haves: ['must-have', 'must-haves'], nice_to_haves: ['nice-to-have', 'nice-to-haves'], not_a_fit: ['not-a-fit note', 'not-a-fit notes'],
+  target_companies: ['target company', 'target companies'], where_to_look: ['place to look', 'places to look'], search_titles: ['job title to search', 'job titles to search'],
+  search_keywords: ['keyword', 'keywords'], selling_points: ['selling point', 'selling points'], screening_questions: ['first-call question', 'first-call questions'] };
 
 const DEFAULT_STAGES = ['Recruiter screen', 'Hiring manager interview', 'Final interview'];
 const DEFAULT_CRITERIA = ['Role-specific skills', 'Problem solving', 'Communication', 'Values and motivation'];
@@ -33,6 +38,22 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
     criteria: job?.criteria ?? DEFAULT_CRITERIA,
   }));
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const [draft, setDraft] = useState(null); // the last autofill result, for the notes shown about it
+  // Autofill replaces the fields it found something for and leaves the rest as they are.
+  const applyDraft = (result) => {
+    const j = result.job;
+    setForm((f) => ({
+      ...f,
+      title: j.title || f.title, department: j.department || f.department, location: j.location || f.location,
+      work_mode: j.work_mode || f.work_mode, employment_type: j.employment_type || f.employment_type,
+      salary_min: j.salary_min ?? f.salary_min, salary_max: j.salary_max ?? f.salary_max, openings: j.openings ?? f.openings,
+      description: j.description || f.description,
+      interview_stages: j.interview_stages.length ? j.interview_stages.map((name) => ({ name })) : f.interview_stages,
+      brief: result.brief, ideal_profile: result.ideal_profile || undefined,
+    }));
+    setDraft(result);
+  };
+  const briefParts = draft ? Object.entries(BRIEF_LABELS).filter(([key]) => draft.brief[key]?.length).map(([key, [one, many]]) => `${draft.brief[key].length} ${draft.brief[key].length === 1 ? one : many}`) : [];
   const bind = (key) => ({ value: form[key] ?? '', onChange: (e) => set(key, e.target.value) });
   const editList = (key, index, patch) => set(key, form[key].map((item, i) => (i === index ? (typeof item === 'string' ? patch : { ...item, ...patch }) : item)));
   const dropFrom = (key, index) => set(key, form[key].filter((_, i) => i !== index));
@@ -50,6 +71,12 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
   return (
     <Modal title={job ? 'Edit job' : 'New job'} size="lg" onClose={onClose} onSubmit={save}
       footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>{job ? 'Save changes' : 'Create job'}</Button></>}>
+      {!job && <JobAutofill onResult={applyDraft} />}
+      {draft && (briefParts.length > 0 || draft.brief.about) && (
+        <p className="rounded-lg bg-violet-50 px-3 py-2 text-[13px] leading-relaxed text-violet-900">
+          A recruiter brief was drafted too{briefParts.length ? `: ${briefParts.join(', ')}` : ''}. It is saved with the job, and you can review and edit it on the job’s Brief tab.
+        </p>
+      )}
       <Section title="The role">
         <div className="grid gap-4 sm:grid-cols-6">
           <Field label="Client" className="sm:col-span-3">
@@ -77,7 +104,10 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
             <Select {...bind('employment_type')}>{Object.entries(EMPLOYMENT).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
           </Field>
           <Field label={`Salary from${client ? ` (${client.currency})` : ''}`} className="sm:col-span-2"><Input type="number" min="0" step="500" {...bind('salary_min')} /></Field>
-          <Field label="Salary to" className="sm:col-span-2"><Input type="number" min="0" step="500" {...bind('salary_max')} /></Field>
+          <Field label="Salary to" className="sm:col-span-2"
+            hint={draft?.job.salary_currency && client && draft.job.salary_currency !== client.currency ? `The documents give the salary in ${draft.job.salary_currency}; this client is set to ${client.currency}.` : undefined}>
+            <Input type="number" min="0" step="500" {...bind('salary_max')} />
+          </Field>
           <Field label="Openings" className="sm:col-span-2"><Input type="number" min="1" {...bind('openings')} /></Field>
           <Field label="Hiring manager" className="sm:col-span-3">
             <Select {...bind('hiring_manager_id')} disabled={!form.client_id}>

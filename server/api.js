@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
+import { registerAutofill } from './autofill.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -361,6 +362,9 @@ api.use((req, res, next) => {
 const agencyOnly = (req, res, next) => (isAgency(req.user) ? next() : res.status(403).json({ error: 'Only the agency team can do this.' }));
 const adminOnly = (req, res, next) => (req.user.role === 'admin' ? next() : res.status(403).json({ error: 'Only an agency admin can do this.' }));
 
+// Drafting a job from a job description and intake notes lives in its own module.
+registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, briefFields: (b) => briefFields(b) });
+
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);
 
@@ -677,6 +681,8 @@ api.post('/jobs', agencyOnly, (req, res) => {
       clientId, f.title, f.department, f.location, f.work_mode, f.employment_type, f.salary_min, f.salary_max, f.salary_public, f.description, f.ideal_profile,
       f.status, f.hiring_manager_id, f.openings, f.questions, f.criteria, req.user.id, t, f.status === 'open' ? t : null);
     createStages(jobId, stageNames.length ? stageNames : DEFAULT_INTERVIEW_STAGES);
+    // A brief drafted while filling in the form (from an intake call or job description) is saved with the new job.
+    if (b.brief && typeof b.brief === 'object') q.run('UPDATE jobs SET brief = ? WHERE id = ?', JSON.stringify(briefFields(b.brief)), jobId);
     return jobId;
   });
   res.json({ id });
