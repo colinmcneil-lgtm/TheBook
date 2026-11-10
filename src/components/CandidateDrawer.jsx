@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
-  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge,
+  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines,
 } from 'lucide-react';
 import { api, url, ago, since, extUrl, photoUrl, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import ResumeViewer from './ResumeViewer.jsx';
+import { CallStatus, callName, fmtLength } from '../oracle/bits.jsx';
 import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal } from './CandidateModals.jsx';
 
 const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
@@ -65,6 +66,9 @@ function CandidateView({ data, onClose }) {
     toast('Records merged');
     bump();
   });
+
+  // Recorded calls (The Oracle) belong to the agency: the hiring team never sees that they exist.
+  const { data: calls, error: callsError } = useApi(isAgency ? url('/oracle/calls', { candidate_id: candidate.id }) : null);
 
   const scorecardsDue = data.interviews.filter((i) => i.status !== 'cancelled' && new Date(i.starts_at) < new Date() && i.panel.some((p) => p.id === user.id) && !i.scorecards.some((s) => s.user_id === user.id));
 
@@ -142,6 +146,7 @@ function CandidateView({ data, onClose }) {
             { id: 'overview', label: 'Overview' },
             app.resume_file && { id: 'resume', label: 'Résumé' },
             { id: 'interviews', label: 'Interviews', count: data.interviews.length || undefined },
+            isAgency && { id: 'calls', label: 'Calls', count: calls?.length || undefined },
             { id: 'activity', label: 'Activity' },
             { id: 'emails', label: 'Emails', count: data.emails.length || undefined },
           ].filter(Boolean)}
@@ -177,6 +182,7 @@ function CandidateView({ data, onClose }) {
         {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onResume={() => setTab('resume')} />}
         {tab === 'resume' && app.resume_file && <ResumeViewer app={app} />}
         {tab === 'interviews' && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onScorecard={(i) => setModal({ scorecard: i })} />}
+        {tab === 'calls' && isAgency && <CallsTab data={data} calls={calls} error={callsError} />}
         {tab === 'activity' && <ActivityTab data={data} />}
         {tab === 'emails' && <EmailsTab data={data} onCompose={() => setModal('email')} />}
       </div>
@@ -443,6 +449,41 @@ function InterviewsTab({ data, onSchedule, onScorecard }) {
           </Card>
         );
       })}
+    </div>
+  );
+}
+
+/** Calls recorded with this person in The Oracle, for any of the jobs they are being considered for. Agency only. */
+function CallsTab({ data, calls, error }) {
+  const navigate = useNavigate();
+  const { application: app, candidate } = data;
+  const record = <Button variant="primary" icon={Mic} size="sm" onClick={() => navigate(`/oracle?application=${app.id}`)}>Record a call</Button>;
+  if (error) return <Card><Empty icon={CircleAlert} title="The calls could not be loaded">{error}</Empty></Card>;
+  if (!calls) return <Loading />;
+  if (!calls.length)
+    return <Card><Empty icon={AudioLines} title="No calls recorded yet" action={record}>Record your calls with {firstName(candidate.name)} in The Oracle and they are kept here with their transcript and notes. Only your agency sees them.</Empty></Card>;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="inline-flex items-center gap-1.5 text-xs text-stone-500"><Lock className="size-3.5" />Only your agency sees calls.</span>
+        {record}
+      </div>
+      <Card className="divide-y divide-line overflow-hidden">
+        {calls.map((c) => (
+          <Link key={c.id} to={`/oracle/${c.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 hover:bg-stone-50">
+            <span className="min-w-0 flex-1 basis-56">
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="truncate text-sm font-medium text-stone-900">{callName(c)}</span>
+                <CallStatus status={c.status} />
+              </span>
+              <span className="block truncate text-[13px] text-stone-500">
+                Recorded by {c.created_by_name || 'someone who has left'}{c.application_id !== app.id && c.job_title ? ` · about ${c.job_title}` : ''}
+              </span>
+            </span>
+            <span className="tabular text-right text-[13px] text-stone-600">{fmtDateTime(c.created_at)}{c.duration_ms ? ` · ${fmtLength(c.duration_ms)}` : ''}</span>
+          </Link>
+        ))}
+      </Card>
     </div>
   );
 }

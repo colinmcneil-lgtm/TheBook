@@ -243,6 +243,9 @@ export function Stars({ value, onChange, size = 16 }) {
 }
 
 // ---------- overlays ----------
+// Dialogs and drawers cover the window from just below the call-recording strip (when there is one), so the strip and
+// its Stop button stay in view whatever is open.
+const belowRecordingBar = { top: 'var(--recording-bar, 0px)' };
 // Open overlays, oldest first. Escape closes only the last one, so a modal on top of the drawer does not take the drawer with it.
 const overlays = [];
 function useEscape(onClose) {
@@ -269,13 +272,13 @@ export function Modal({ title, subtitle, onClose, children, footer, size = 'md',
   const widths = { sm: 'max-w-md', md: 'max-w-xl', lg: 'max-w-3xl' };
   const Body = onSubmit ? 'form' : 'div';
   return (
-    <div className="animate-fade-in fixed inset-0 z-[60] flex items-end justify-center bg-stone-950/40 p-0 sm:items-center sm:p-6" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="animate-fade-in fixed inset-0 z-[60] flex items-end justify-center bg-stone-950/40 p-0 sm:items-center sm:p-6" style={belowRecordingBar} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <Body
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onSubmit={onSubmit ? (e) => { e.preventDefault(); onSubmit(e); } : undefined}
-        className={cx('animate-pop-in flex max-h-[92dvh] w-full flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl', widths[size])}
+        className={cx('animate-pop-in flex max-h-[calc(92dvh-var(--recording-bar,0px))] w-full flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl', widths[size])}
       >
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div>
@@ -296,7 +299,7 @@ export function Modal({ title, subtitle, onClose, children, footer, size = 'md',
 export function Drawer({ onClose, children, label }) {
   useEscape(onClose);
   return (
-    <div className="animate-fade-in fixed inset-0 z-50 flex justify-end bg-stone-950/30" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="animate-fade-in fixed inset-0 z-50 flex justify-end bg-stone-950/30" style={belowRecordingBar} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div role="dialog" aria-modal="true" aria-label={label} className="animate-slide-in flex h-full w-full max-w-[880px] flex-col bg-paper shadow-2xl">
         {children}
       </div>
