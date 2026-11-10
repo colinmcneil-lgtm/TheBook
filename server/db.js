@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { profileUrl } from './links.js';
 
 export const DATA_DIR = path.resolve(process.env.DATA_DIR || 'data');
 export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS clients (
 );
 
 CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused, so a stale Approve or Decline cannot land on a newer request
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   name TEXT NOT NULL,
@@ -218,13 +219,17 @@ function addColumn(table, column, type) {
 }
 /**
  * Rebuild a table with a changed definition (SQLite cannot alter a column in place). `change` receives the table's
- * CREATE statement and returns the new one; nothing happens if it returns it unchanged. Rows and ids are kept.
+ * CREATE statement and returns the new one; nothing happens if it returns it unchanged. Rows and ids are kept, and
+ * so is the table's record of the highest id it ever gave out, so the id of a deleted row is still never reused.
  */
 function rebuildTable(table, change) {
   const { sql } = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
   const changed = change(sql);
   if (changed === sql) return;
   const rebuilt = changed.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?\w+["`]?/i, `CREATE TABLE ${table}__new`);
+  // sqlite_sequence only exists once some table uses AUTOINCREMENT, and dropping a table discards its row.
+  const hasSequences = db.prepare(`SELECT 1 AS x FROM sqlite_master WHERE name = 'sqlite_sequence'`).get();
+  const highest = hasSequences ? db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table)?.seq : undefined;
   db.exec('PRAGMA foreign_keys = OFF'); // must be off, or dropping the old table would cascade into its children
   db.exec('BEGIN');
   try {
@@ -232,6 +237,11 @@ function rebuildTable(table, change) {
     db.exec(`INSERT INTO ${table}__new SELECT * FROM ${table}`);
     db.exec(`DROP TABLE ${table}`);
     db.exec(`ALTER TABLE ${table}__new RENAME TO ${table}`);
+    if (highest != null && /AUTOINCREMENT/i.test(changed)) {
+      // The copy only counted up to the highest row that still exists; put back the real high-water mark.
+      const kept = db.prepare('UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = ?').run(highest, table).changes;
+      if (!kept) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, highest);
+    }
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
@@ -258,9 +268,27 @@ if (!db.prepare('PRAGMA table_info(applications)').all().some((c) => c.name === 
     SELECT ac.user_id FROM activities ac JOIN users u ON u.id = ac.user_id AND u.role != 'client'
     WHERE ac.application_id = applications.id AND ac.type = 'added' ORDER BY ac.id LIMIT 1)`);
 }
-for (const table of ['candidates', 'applications', 'interviews']) ensureAutoincrement(table);
+for (const table of ['users', 'candidates', 'applications', 'interviews']) ensureAutoincrement(table);
 // People sourced from a profile often have no known email yet, so it is no longer required.
 rebuildTable('candidates', (sql) => sql.replace(/\bemail TEXT NOT NULL\b/, 'email TEXT'));
+// Profile links used to be saved as typed. People are recognised by the stored form of a LinkedIn profile link, so
+// links saved by an earlier version are rewritten once into that form. Two records that end up with the same link
+// are both kept: the workspace points them out as possible duplicates and leaves the decision to a person.
+if (!db.prepare(`SELECT 1 AS x FROM settings WHERE key = 'links_normalised'`).get()) {
+  db.exec('BEGIN');
+  try {
+    const save = db.prepare('UPDATE candidates SET linkedin = ? WHERE id = ?');
+    for (const row of db.prepare(`SELECT id, linkedin FROM candidates WHERE linkedin IS NOT NULL AND linkedin != ''`).all()) {
+      const link = profileUrl(row.linkedin);
+      if (link && link !== row.linkedin) save.run(link, row.id);
+    }
+    db.prepare(`INSERT INTO settings (key, value) VALUES ('links_normalised', '1')`).run();
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
 
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_jobs_client ON jobs(client_id);

@@ -21,7 +21,41 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Email** | Templates with merge fields; every message is recorded on the candidate. Application confirmations, interview invitations and rejections can be sent automatically. |
 | **Reports** | Funnel conversion, source effectiveness, weekly application volume, time to hire, open-role ageing and hires. Printable for client reviews. Your retainer and placement-fee revenue is shown to your agency only. |
 | **Access** | Agency admins and recruiters see every client. Client users see only their own company, and never see your fees, internal brief or agency-only notes. |
-| **Accounts** | Send a one-time invitation link (from a client's page or Settings, Team) and the person sets their own password. Or people can use "Create an account" on the sign-in page: the account stays locked until you approve it and choose which client's hiring team it joins. |
+| **Accounts** | Send a one-time invitation link (from a client's page or Settings, Team) and the person sets their own password. Or people can use "Create an account" on the sign-in page to ask for access: nothing is granted until you approve the request and choose which client's hiring team it joins, and the person then sets their password from a one-time link sent to the address they gave. |
+
+## Accounts and getting back in
+
+- **Invitations.** A link works once, for 7 days, and can be tied to one email address. It stops working if the
+  person who created it is deactivated (their unused links are removed), and a link that grants agency access
+  also needs its creator to still be an admin.
+- **Account requests.** "Create an account" on the sign-in page takes a name, email, company and job title, and no
+  password. A request cannot sign in and is not an account. When you approve it, it becomes an invitation tied to
+  that email address: with email connected the person is sent the link, otherwise you are shown the link to pass
+  on yourself. Either way the password is chosen by whoever opens the link, not by whoever filled in the form.
+  Requests nobody answers are removed after 14 days, and sign-up pauses while 200 are waiting.
+- **Forgotten password.** Deactivate the account (Settings, Team), then invite the person again at the same email
+  address. Accepting that invitation brings the same account back with a new password and the access chosen on
+  the invitation; everything it did before stays attributed to it. Only an invitation tied to that exact address
+  can do this.
+- **Someone has left.** Deactivate them. They are signed out everywhere, their unused invitation links stop
+  working, and candidates they own stay under their name (shown as deactivated in the owner filter) until you
+  reassign them.
+
+## Who counts as the same person
+
+Within one client, a person is recognised by their **email address**, or failing that by their **LinkedIn profile
+link** (`linkedin.com/in/<name>`, stored in one form however it was copied). No other link identifies anyone: a
+GitHub page, a personal site, a company's team page, a LinkedIn Recruiter or Sales Navigator address and the old
+`linkedin.com/pub/...` form are kept for reference only, because many people can share one.
+
+- Adding someone whose email or LinkedIn link is already on a record at that client adds them to that record
+  (and says so) rather than creating a second one.
+- If the LinkedIn link is on a record with a plainly different name, nothing is merged: you are shown the
+  existing record and asked to open it or check the link.
+- The public application form never joins an applicant to an existing record by link, since anyone can type any
+  link there. If the link matches someone already on file, both records are kept, each profile shows
+  "Possible duplicate", and an agency user can merge them. Merging moves every application, note, interview and
+  email onto the record you keep.
 
 ## Chrome extension
 
@@ -73,7 +107,7 @@ Demo sign-ins (password `demo1234` for all):
 
 Public careers page for the demo: http://localhost:3000/careers/lumen-health
 
-To wipe the database and reload the demo: `npm run seed -- --reset`. This deletes every record and uploaded résumé
+To wipe the database and reload the demo: `npm run seed -- --reset`. This deletes every record, invitation link and uploaded résumé
 in `DATA_DIR`, so it refuses to run when `NODE_ENV=production` unless you add `--force`.
 
 ## Put it online
@@ -116,8 +150,9 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
     whose Hobby plan blocks SMTP. Create a Resend account, verify your sending domain there, create an API key,
     and set `MAIL_FROM` to an address on that domain, for example `Your Agency <hiring@youragency.com>`.
   - `SMTP_URL` and `MAIL_FROM`: sends through any SMTP server. With email connected, admins are also emailed
-  when someone requests an account, and people are emailed when their account is approved. Set `APP_URL` to the
-  workspace's address so those emails can link to it (Railway is detected automatically).
+  when someone requests an account, and people are emailed their link to set a password when their request is
+  approved. Set `APP_URL` to the workspace's address (Railway is detected automatically): without it the app
+  does not know its own address, so it emails no link and shows it to the approver instead.
 
 ## How it is built
 
@@ -126,6 +161,7 @@ server/
   index.js   Express server; serves the API and the built front end
   api.js     All API routes: auth, careers pages, jobs, pipeline, interviews, reports
   db.js      SQLite schema and helpers (Node's built-in node:sqlite, no native modules)
+  links.js   How profile links are stored, and which ones identify a person
   mail.js    Optional SMTP delivery; every email is logged either way
   seed.js    Demo data
 src/
@@ -148,9 +184,9 @@ they made at that client, and their résumé files.
 ## Not built yet
 
 - Calendar integration (Google or Microsoft) for live availability and automatic invites; today you get a calendar file to download.
-- Self-service password reset by email. Until then, deactivate the old account and send the person a new invitation link.
-- Email verification for self-registered accounts and an email when an account is approved (both need email delivery
-  connected); for now the approver confirms who the person is and lets them know.
+- Self-service password reset by email. Until then, an agency user deactivates the account and invites the person
+  again at the same address (see "Accounts and getting back in").
+- Declining many account requests at once; each is declined on its own, and unanswered ones expire after 14 days.
 - AI-assisted screening or candidate summaries.
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
 - Automated tests in the repository (the flows were verified end to end in a browser during development).

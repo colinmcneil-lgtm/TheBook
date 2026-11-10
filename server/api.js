@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
+import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -13,48 +14,56 @@ api.use(express.json({ limit: '1mb' }));
 
 // ---------- helpers ----------
 class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, extra) { super(message); this.status = status; this.extra = extra; }
 }
-const bad = (message, status = 400) => { throw new HttpError(status, message); };
+/** Refuse the request. `extra` adds fields to the answer for screens that can do more than show the message. */
+const bad = (message, status = 400, extra) => { throw new HttpError(status, message, extra); };
 const isAgency = (u) => u.role !== 'client';
 const canSee = (u, clientId) => isAgency(u) || u.client_id === clientId;
-const str = (v) => (typeof v === 'string' ? v.trim() : v == null ? null : String(v)) || null;
+const str = (v) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : null) || null;
 const int = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Math.round(Number(v)));
 const json = (v, fallback) => { try { return JSON.parse(v); } catch { return fallback; } };
 const DAY = 86400000;
 const daysAgo = (n) => new Date(Date.now() - n * DAY).toISOString();
 const slugify = (s) => String(s).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
-const validEmail = (e) => typeof e === 'string' && e.length <= 200 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+// Invisible and control characters are refused as well as spaces, so an address cannot be dressed up to look like another one.
+const validEmail = (e) => typeof e === 'string' && e.length <= 200 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && !/[\p{Cc}\p{Cf}\p{Z}]/u.test(e);
+/** An email address as typed into a form. Anything that is not text counts as not given. */
+const emailOf = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
 /** Single-line text from untrusted input: control characters removed, whitespace collapsed, length capped. */
 const clean = (v, max = 200) =>
   (typeof v === 'string' || typeof v === 'number' ? String(v).replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '') || null;
 /** Multi-line free text with a length cap. */
 const text = (v, max = 6000) => (typeof v === 'string' ? v.replace(/\r\n?/g, '\n').trim().slice(0, max) : '') || null;
 /** Links are only stored when they are http(s); a bare domain gets https:// in front. */
-function safeUrl(v) {
-  const s = clean(v, 300);
-  if (!s) return null;
-  // "example.com:8080/x" is a host and port, not a scheme; only "scheme://" and the well-known non-web schemes count as one.
-  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^(javascript|data|vbscript|mailto|tel|file|blob|about):/i.test(s);
-  try {
-    const u = new URL(hasScheme ? s : `https://${s}`);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-    return u.pathname === '/' && !u.search && !u.hash ? u.origin : u.href; // no stray trailing slash on a bare site address
-  } catch { return null; }
-}
-/** A profile link in one canonical form, so the same LinkedIn profile is recognised however its address was copied. */
-function profileUrl(value, label) {
-  const url = label ? linkField(value, label) : safeUrl(value);
-  if (!url) return null;
-  const u = new URL(url);
-  const m = /(^|\.)linkedin\.com$/i.test(u.hostname) ? /^\/(in|pub)\/([^/]+)/i.exec(u.pathname) : null;
-  return m ? `https://www.linkedin.com/${m[1].toLowerCase()}/${m[2].toLowerCase()}` : url;
-}
+const safeUrl = (v) => webUrl(clean(v, 300));
 /** For forms filled in by the agency: a link that was typed but is not a usable web address is refused, not silently dropped. */
 function linkField(value, label) {
   const url = safeUrl(value);
   if (clean(value, 300) && !url) bad(`${label} does not look like a web address.`);
   return url;
+}
+/** The profile link on a form the agency fills in. One that cannot be stored whole is refused with the reason, never cut short. */
+function profileField(value) {
+  const { url, problem } = checkLink(value);
+  if (problem === 'too_long') bad('That link is too long. Paste the address of the profile page itself, without the extra text after it.');
+  if (problem) bad('The profile link does not look like a web address.');
+  return url;
+}
+/** A name reduced to its words: lower case, accents and punctuation removed. */
+const nameWords = (name) =>
+  String(name || '').normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+/**
+ * Could these two names belong to one person? Yes when the first and last names agree, or when one name is the
+ * other with something added ("Ana Ruiz" and "Ana Ruiz Ortega", "Dr Sam Cole" and "Sam Cole"). Anything else is
+ * treated as a different person, which is the safe answer: the caller then asks instead of merging two people.
+ */
+function samePerson(a, b) {
+  const x = nameWords(a), y = nameWords(b);
+  if (!x.length || !y.length) return false;
+  if (x[0] === y[0] && x.at(-1) === y.at(-1)) return true;
+  const [few, many] = x.length <= y.length ? [x, y] : [y, x];
+  return few.every((word) => many.includes(word));
 }
 const pw = (v) => (typeof v === 'string' ? v : '');
 const isStr = (v) => typeof v === 'string';
@@ -176,44 +185,60 @@ api.post('/setup', (req, res) => {
 
 api.post('/login', rateLimit('login', 20, 10 * 60000), (req, res) => {
   const { email, password } = req.body || {};
-  const address = String(email || '').trim().toLowerCase().slice(0, 200);
-  const user = q.get('SELECT * FROM users WHERE email = ?', address);
+  // An account request that is still waiting is not an account yet: it has no password, and it answers exactly like
+  // an address nobody has registered, so signing in cannot be used to find out who has asked for access.
+  const user = q.get('SELECT * FROM users WHERE email = ? AND pending = 0', emailOf(email).slice(0, 200));
   const matches = verifyPassword(pw(password), user ? user.password_hash : DUMMY_HASH);
   if (!user || !matches) bad('That email and password do not match.', 401);
   // Only someone who knows the password learns the state of the account.
-  if (user.pending) bad(`Your account is waiting for approval by ${getSetting('agency_name', 'the agency')}. You will be able to sign in once it is approved.`, 403);
   if (!user.active) bad('This account has been deactivated.', 403);
   startSession(req, res, user.id);
   res.json({ ok: true });
 });
 
 // ---------- unauthenticated: creating an account ----------
-// Anyone may ask for an account. It stays locked (it cannot sign in or see anything) until an agency user approves it
-// and decides which client's hiring team it belongs to.
-api.post('/signup', rateLimit('signup', 5, 60 * 60000), (req, res) => {
+const PENDING_DAYS = 14;
+/** Requests nobody has answered are dropped after two weeks, so abandoned or junk ones cannot pile up and close sign-up. */
+const expireAccountRequests = () => q.run('DELETE FROM users WHERE pending = 1 AND created_at < ?', daysAgo(PENDING_DAYS));
+expireAccountRequests();
+/** Never matches any password. Stored on an account request, which has no password until its owner sets one from the approval link. */
+const unusableHash = () => `!${crypto.randomBytes(16).toString('hex')}`;
+/** Anything in typed text that an email program would turn into a link: an address with a scheme, a www. name, or a bare domain. */
+const LINK_LIKE = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S*|(?:[\p{L}\p{N}-]+\.)+\p{L}{2,}(?:[/:?#]\S*)?/giu;
+const withoutLinks = (value) => (value ? value.replace(LINK_LIKE, '[link removed]') : value);
+
+// Anyone may ask for an account. A request is not an account: it holds no password and cannot sign in. When an agency
+// user approves it, the person is sent a one-time link to set their password, so only whoever reads that mailbox can
+// take up the access that was approved.
+api.post('/signup', (req, res) => {
   if (!q.get('SELECT 1 AS x FROM users LIMIT 1')) bad('This workspace has not been set up yet.', 403);
   const b = req.body || {};
-  const email = String(b.email || '').trim().toLowerCase();
-  const name = clean(b.name, 120);
+  const email = emailOf(b.email);
+  const name = clean(b.name, 120), company = clean(b.company, 160), title = clean(b.title, 120);
   if (!name || !validEmail(email)) bad('Your name and a valid email are required.');
-  if (pw(b.password).length < 8) bad('Choose a password of at least 8 characters.');
+  // Counted only once the form is complete, so a typing mistake does not use up an office's allowance.
+  if (!takeHit(`signup:${addressKey(req.ip)}`, 20, 60 * 60000)) bad('Too many account requests have come from your network. Please try again in about an hour.', 429);
+  expireAccountRequests();
   if (q.get('SELECT COUNT(*) AS n FROM users WHERE pending = 1').n >= 200) bad('Account requests are paused for now. Please contact the agency directly.', 429);
-  const hash = hashPassword(b.password); // always computed, so the response time does not reveal whether the address is registered
-  // Same answer whether or not the address already has an account, for the same reason.
-  if (!q.get('SELECT 1 AS x FROM users WHERE email = ?', email)) {
+  // Same answer whether or not the address is already known, and a write either way so the two cases take the same time.
+  if (q.get('SELECT 1 AS x FROM users WHERE email = ?', email)) {
+    q.run('UPDATE users SET email = email WHERE email = ?', email);
+  } else {
     q.run(`INSERT INTO users (email, password_hash, name, role, client_id, title, active, pending, requested_company, created_at)
-           VALUES (?, ?, ?, 'client', NULL, ?, 0, 1, ?, ?)`, email, hash, name, clean(b.title, 120), clean(b.company, 160), now());
+           VALUES (?, ?, ?, 'client', NULL, ?, 0, 1, ?, ?)`, email, unusableHash(), name, title, company, now());
     // Tell the agency's admins. Not awaited (the response must take the same time either way) and capped per hour,
     // so a burst of fake sign-ups cannot flood their inboxes.
     if (takeHit('notify:signup', 20, 60 * 60000)) {
       const admins = q.all(`SELECT email FROM users WHERE role = 'admin' AND active = 1`).map((u) => u.email);
       const link = appUrl() ? `${appUrl()}/settings?tab=team` : 'Settings, then Team, in your hiring workspace';
+      // The message goes out under the agency's own name, so nothing the visitor typed is allowed to steer it: the
+      // subject is fixed, each typed value sits on its own labelled line, and links are taken out of the free text.
       notify({
         to: admins,
-        subject: `Account request from ${name}`,
-        body: `Someone has asked for an account in your hiring workspace.\n\n` +
-          `Name: ${name}\nEmail: ${email}\nCompany: ${clean(b.company, 160) || 'not given'}\nJob title: ${clean(b.title, 120) || 'not given'}\n\n` +
-          `These details were typed by the person and have not been verified. The account cannot sign in until you approve it.\n\n` +
+        subject: 'New account request',
+        body: `Someone has asked for an account in your hiring workspace. They typed these details, and none of them have been verified:\n\n` +
+          `Name: ${withoutLinks(name)}\nEmail: ${email}\nCompany: ${withoutLinks(company) || 'not given'}\nJob title: ${withoutLinks(title) || 'not given'}\n\n` +
+          `Nothing is granted until you approve the request. If you approve it, the person is sent a link to set their password at the email address above.\n\n` +
           `Approve or decline: ${link}\n`,
       });
     }
@@ -222,12 +247,24 @@ api.post('/signup', rateLimit('signup', 5, 60 * 60000), (req, res) => {
 });
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+// An invitation is only as good as the person behind it: it stops working when its creator is deactivated or
+// removed, and one that grants agency access also stops if its creator is no longer an admin.
+const INVITER_STILL_ALLOWED = `u.active = 1 AND (i.role = 'client' OR u.role = 'admin')`;
 function loadInvite(token) {
   const inv = /^[a-f0-9]{48}$/.test(token || '')
-    ? q.get(`SELECT i.*, c.name AS client_name FROM invites i LEFT JOIN clients c ON c.id = i.client_id WHERE i.token_hash = ?`, hashToken(token))
+    ? q.get(`SELECT i.*, c.name AS client_name, (${INVITER_STILL_ALLOWED}) AS inviter_ok
+             FROM invites i LEFT JOIN clients c ON c.id = i.client_id LEFT JOIN users u ON u.id = i.created_by WHERE i.token_hash = ?`, hashToken(token))
     : null;
-  if (!inv || inv.used_at || inv.expires_at < now() || (inv.role === 'client' && !inv.client_id)) bad('This invitation link is no longer valid. Please ask for a new one.', 404);
+  if (!inv || inv.used_at || inv.expires_at < now() || !inv.inviter_ok || (inv.role === 'client' && !inv.client_id)) bad('This invitation link is no longer valid. Please ask for a new one.', 404);
   return inv;
+}
+/** Store a new one-time invitation and return the token for its link. Only the token's hash is kept. */
+function createInvite({ role, clientId, email, createdBy }) {
+  const token = crypto.randomBytes(24).toString('hex');
+  const expiresAt = new Date(Date.now() + 7 * DAY).toISOString();
+  q.run('INSERT INTO invites (token_hash, role, client_id, email, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    hashToken(token), role, clientId, email, createdBy, now(), expiresAt);
+  return { token, expires_at: expiresAt };
 }
 
 api.get('/invites/:token', rateLimit('invite', 40, 10 * 60000), (req, res) => {
@@ -238,16 +275,32 @@ api.get('/invites/:token', rateLimit('invite', 40, 10 * 60000), (req, res) => {
 api.post('/invites/:token/accept', rateLimit('invite', 40, 10 * 60000), (req, res) => {
   const inv = loadInvite(req.params.token);
   const b = req.body || {};
-  const email = inv.email || String(b.email || '').trim().toLowerCase();
+  const email = inv.email || emailOf(b.email);
   const name = clean(b.name, 120);
   if (!name || !validEmail(email)) bad('Your name and a valid email are required.');
   if (pw(b.password).length < 8) bad('Choose a password of at least 8 characters.');
-  if (q.get('SELECT 1 AS x FROM users WHERE email = ?', email)) bad('An account with this email already exists. Sign in instead, or ask for it to be reactivated.');
+  const clientId = inv.role === 'client' ? inv.client_id : null;
   const id = tx(() => {
+    const existing = q.get('SELECT * FROM users WHERE email = ?', email);
+    // A deactivated account comes back only when the agency invited that exact address: an open link must not be
+    // a way to take over whichever old account its holder happens to name.
+    const reactivate = existing && !existing.pending && !existing.active && Boolean(inv.email);
+    if (existing && !existing.pending && !reactivate) {
+      // An open link could otherwise be used to test which addresses have accounts; a handful of tries is plenty for a typing mistake.
+      if (!inv.email && !takeHit(`invite-taken:${inv.id}`, 5, 60 * 60000)) bad(TOO_MANY, 429);
+      bad('An account with this email already exists. Sign in instead, or ask for it to be reactivated.');
+    }
     // Claim the invitation first; if another request used it a moment ago, nothing is created.
     if (!q.run('UPDATE invites SET used_at = ? WHERE id = ? AND used_at IS NULL', now(), inv.id).changes) bad('This invitation link has already been used.', 404);
+    if (reactivate) {
+      q.run('UPDATE users SET password_hash = ?, name = ?, role = ?, client_id = ?, title = ?, active = 1 WHERE id = ?',
+        hashPassword(b.password), name, inv.role, clientId, clean(b.title, 120) ?? existing.title, existing.id);
+      q.run('DELETE FROM sessions WHERE user_id = ?', existing.id);
+      return existing.id;
+    }
+    if (existing) q.run('DELETE FROM users WHERE id = ? AND pending = 1', existing.id); // an unanswered request for the same address is settled by this invitation
     return q.insert('INSERT INTO users (email, password_hash, name, role, client_id, title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      email, hashPassword(b.password), name, inv.role, inv.role === 'client' ? inv.client_id : null, clean(b.title, 120), now());
+      email, hashPassword(b.password), name, inv.role, clientId, clean(b.title, 120), now());
   });
   startSession(req, res, id);
   res.json({ ok: true });
@@ -286,7 +339,7 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
     if (!job) bad('This role is no longer open.', 404);
     const b = req.body || {};
     if (b.company_website) return res.json({ ok: true }); // honeypot field, filled only by bots
-    const email = String(b.email || '').trim().toLowerCase();
+    const email = emailOf(b.email);
     const name = clean(b.name, 120);
     if (!name || /:\/\/|www\./i.test(name) || !validEmail(email)) bad('Please enter your name and a valid email address.');
     if (b.consent !== 'yes') bad('Please confirm that we may process your application.');
@@ -323,6 +376,11 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
         req.file?.filename ?? null, clean(req.file?.originalname, 200), t, t, t, t);
       q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
       logActivity(appId, null, 'applied', `Applied via ${SOURCE_LABELS[source].toLowerCase()}`);
+      // Anyone can type any link here, so it never joins this applicant to an existing record. If it is the profile
+      // link of someone already on file, both records are kept and the team is told, so a person can decide.
+      const key = existing ? null : identityKey(linkedin);
+      const twin = key && q.get('SELECT name FROM candidates WHERE client_id = ? AND linkedin = ? AND id != ? ORDER BY id LIMIT 1', client.id, key, cand.id);
+      if (twin) logActivity(appId, null, 'applied', `Possible duplicate of ${twin.name} (same LinkedIn link)`);
       if (existing) {
         const given = [existing.name !== name && `name “${name}”`, phone && phone !== existing.phone && `phone ${phone}`,
           linkedin && linkedin !== existing.linkedin && `link ${linkedin}`, location && location !== existing.location && `location ${location}`].filter(Boolean);
@@ -450,20 +508,27 @@ function accessFrom(b, user) {
   return { role, clientId };
 }
 
-// Approve a self-registered account and decide what it can see.
+// Approve an account request and decide what the person will see. Approval does not switch an account on: the
+// request is replaced by a one-time invitation tied to the address it named, and the person sets their own password
+// from that link. Whoever asked can only use the access if they can read that mailbox (or are handed the link).
 api.post('/users/:id/approve', agencyOnly, async (req, res) => {
   const target = q.get('SELECT * FROM users WHERE id = ?', int(req.params.id));
   if (!target || !target.pending) bad('This request has already been handled.', 404);
   const { role, clientId } = accessFrom(req.body || {}, req.user);
-  q.run('UPDATE users SET role = ?, client_id = ?, active = 1, pending = 0 WHERE id = ? AND pending = 1', role, clientId, target.id);
-  // Let the person know (when email is connected). The response says whether that happened, so the approver knows if they need to tell them.
-  const agency = getSetting('agency_name', 'the agency');
-  const notified = await notify({
-    to: target.email,
-    subject: `Your ${agency} account is ready`,
-    body: `Hi ${greetingName(target.name)},\n\nYour account has been approved. You can now sign in${appUrl() ? ` at ${appUrl()}` : ''} with this email address and the password you chose.\n\n${agency}\n`,
+  const invite = tx(() => {
+    if (!q.run('DELETE FROM users WHERE id = ? AND pending = 1', target.id).changes) bad('This request has already been handled.', 404);
+    return createInvite({ role, clientId, email: target.email, createdBy: req.user.id });
   });
-  res.json({ ok: true, notified });
+  // Email the link when delivery is connected and the workspace knows its own address. The response says whether
+  // that happened and carries the link, so the approver can pass it on themselves when it did not.
+  const agency = getSetting('agency_name', 'the agency');
+  const notified = appUrl() ? await notify({
+    to: target.email,
+    subject: `Your ${agency} account request was approved`,
+    body: `Hi ${greetingName(target.name)},\n\nYour request for an account has been approved. Open this link to choose your password and sign in:\n\n` +
+      `${appUrl()}/join/${invite.token}\n\nThe link works once and expires in 7 days. If you did not ask for an account, you can ignore this email.\n\n${agency}\n`,
+  }) : false;
+  res.json({ ok: true, notified, ...invite });
 });
 
 // Decline a self-registered account. Approved accounts are deactivated instead, so their history stays attributed.
@@ -479,21 +544,19 @@ api.get('/invites', agencyOnly, (req, res) => {
   res.json(q.all(
     `SELECT i.id, i.role, i.client_id, i.email, i.created_at, i.expires_at, c.name AS client_name, u.name AS created_by_name
      FROM invites i LEFT JOIN clients c ON c.id = i.client_id LEFT JOIN users u ON u.id = i.created_by
-     WHERE i.used_at IS NULL AND i.expires_at > ? ORDER BY i.created_at DESC`, now()));
+     WHERE i.used_at IS NULL AND i.expires_at > ? AND ${INVITER_STILL_ALLOWED} ORDER BY i.created_at DESC`, now()));
 });
 
 api.post('/invites', agencyOnly, (req, res) => {
   const b = req.body || {};
   const { role, clientId } = accessFrom(b, req.user);
-  const email = String(b.email || '').trim().toLowerCase() || null;
+  const email = emailOf(b.email) || null;
   if (email && !validEmail(email)) bad('That email address does not look right.');
-  if (email && q.get('SELECT 1 AS x FROM users WHERE email = ?', email)) bad('Someone with that email already has an account.');
+  // Only a working account stands in the way. Someone whose request is still waiting, or whose old account was
+  // deactivated (the way back in after a forgotten password), can be invited at that address.
+  if (email && q.get('SELECT 1 AS x FROM users WHERE email = ? AND active = 1', email)) bad('Someone with that email already has an account.');
   if (q.get('SELECT COUNT(*) AS n FROM invites WHERE used_at IS NULL AND expires_at > ?', now()).n >= 500) bad('There are too many unused invitations. Revoke some first.');
-  const token = crypto.randomBytes(24).toString('hex');
-  const expiresAt = new Date(Date.now() + 7 * DAY).toISOString();
-  q.run('INSERT INTO invites (token_hash, role, client_id, email, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    hashToken(token), role, clientId, email, req.user.id, now(), expiresAt);
-  res.json({ token, expires_at: expiresAt }); // the only time the link can be read; just its hash is stored
+  res.json(createInvite({ role, clientId, email, createdBy: req.user.id })); // the only time the link can be read; just its hash is stored
 });
 
 api.delete('/invites/:id', agencyOnly, (req, res) => {
@@ -516,6 +579,8 @@ api.patch('/users/:id', agencyOnly, (req, res) => {
     clean(b.name, 120) ?? target.name, b.title !== undefined ? clean(b.title, 120) : target.title, b.active === undefined ? target.active : b.active ? 1 : 0, target.id);
   if (b.password !== undefined) q.run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(b.password), target.id);
   if (b.password !== undefined || b.active === false) q.run('DELETE FROM sessions WHERE user_id = ?', target.id);
+  // Links this person handed out stop working with them, so nobody can be let in on their say-so after they have left.
+  if (b.active === false) q.run('DELETE FROM invites WHERE created_by = ? AND used_at IS NULL', target.id);
   res.json({ ok: true });
 });
 
@@ -831,7 +896,7 @@ function moveToStage(app, stageId, user) {
 
 /** Contact details as stored: single-line, capped, and links restricted to http(s). */
 const candidateFields = (c) => ({
-  name: clean(c.name, 120), phone: clean(c.phone, 40), linkedin: profileUrl(c.linkedin, 'The profile link'), location: clean(c.location, 120),
+  name: clean(c.name, 120), phone: clean(c.phone, 40), linkedin: profileField(c.linkedin), location: clean(c.location, 120),
   current_title: clean(c.current_title, 160), current_company: clean(c.current_company, 160),
 });
 
@@ -841,28 +906,44 @@ api.post('/applications', agencyOnly, upload.single('resume'), (req, res) => {
     const b = req.body || {};
     const job = q.get('SELECT * FROM jobs WHERE id = ?', int(b.job_id));
     if (!job) bad('Choose a job for this candidate.');
-    const email = String(b.email || '').trim().toLowerCase() || null;
+    const email = emailOf(b.email) || null;
     const c = candidateFields(b);
     if (!c.name) bad('A name is required.');
     if (email && !validEmail(email)) bad('That email address does not look right.');
     if (!email && !c.linkedin) bad('Add an email address or a profile link, so this person can be told apart from others.');
     const source = isStr(b.source) && Object.hasOwn(SOURCE_LABELS, b.source) ? b.source : 'agency_sourced';
     const result = tx(() => {
-      // The same person is recognised by email, or failing that by their profile link.
-      let cand = (email && q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', job.client_id, email))
-        || (c.linkedin && q.get('SELECT * FROM candidates WHERE client_id = ? AND linkedin = ?', job.client_id, c.linkedin))
-        || null;
+      // The same person is recognised by email, or failing that by a LinkedIn profile link. No other kind of link
+      // identifies anyone, and a link alone is not trusted when the name on the record is plainly someone else's
+      // (a mistyped or shared link, or one an applicant typed on the public form): that is put to the recruiter.
+      let cand = email ? q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', job.client_id, email) ?? null : null;
+      const key = cand ? null : identityKey(c.linkedin);
+      if (key) {
+        const sameLink = q.all('SELECT * FROM candidates WHERE client_id = ? AND linkedin = ? ORDER BY id', job.client_id, key);
+        cand = sameLink.find((other) => samePerson(other.name, c.name)) ?? null;
+        if (!cand && sameLink.length) {
+          const matches = q.all(
+            `SELECT a.id AS application_id, j.id AS job_id, j.title AS job_title, cl.name AS client_name, c.name
+             FROM candidates c JOIN applications a ON a.candidate_id = c.id JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id
+             WHERE c.client_id = ? AND c.linkedin = ? ORDER BY a.applied_at DESC LIMIT 20`, job.client_id, key);
+          bad(`This LinkedIn link is already on ${sameLink[0].name}'s record. Open their record, or check the link.`, 409, { code: 'link_conflict', matches });
+        }
+      }
       const known = Boolean(cand);
+      const remarks = []; // what the record's history should say about how this person was matched
       if (cand) {
         const dup = q.get(`SELECT a.id, s.name AS stage_name FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.candidate_id = ? AND a.job_id = ?`, cand.id, job.id);
         if (dup) bad(`${cand.name} is already in the pipeline for this job (${dup.stage_name}).`, 409);
+        if (key) remarks.push(`Recognised as ${cand.name} by LinkedIn link and added to their existing record`);
+        else if (!samePerson(cand.name, c.name)) remarks.push(`Entered as “${c.name}”; this email address belongs to ${cand.name}, so they were added to that record`);
+        if (email && cand.email && cand.email !== email) remarks.push(`A different email address was entered (${email}); the record keeps ${cand.email}`);
         // The agency is adding them again, so its details are the newer ones: fill in what was missing and refresh the role.
         q.run(`UPDATE candidates SET email = COALESCE(email, ?), phone = COALESCE(phone, ?), linkedin = COALESCE(linkedin, ?), location = COALESCE(?, location),
                current_title = COALESCE(?, current_title), current_company = COALESCE(?, current_company) WHERE id = ?`,
           email && !q.get('SELECT 1 AS x FROM candidates WHERE client_id = ? AND email = ?', job.client_id, email) ? email : null,
           c.phone, c.linkedin, c.location, c.current_title, c.current_company, cand.id);
       } else {
-        cand = { id: q.insert(
+        cand = { name: c.name, id: q.insert(
           'INSERT INTO candidates (client_id, name, email, phone, linkedin, location, current_title, current_company, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
           job.client_id, c.name, email, c.phone, c.linkedin, c.location, c.current_title, c.current_company, now()) };
       }
@@ -876,9 +957,11 @@ api.post('/applications', agencyOnly, upload.single('resume'), (req, res) => {
         cand.id, job.id, stage.id, hired ? 'hired' : 'active', source, text(b.cover_note, 6000), req.file?.filename ?? null, clean(req.file?.originalname, 200), t, t, t, hired ? t : null, req.user.id);
       q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
       logActivity(appId, req.user.id, 'added', `Added to the pipeline (${SOURCE_LABELS[source].toLowerCase()})`);
+      for (const remark of remarks) logActivity(appId, req.user.id, 'added', remark);
       const note = text(b.note, 10000);
       if (note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, ?, ?)', appId, req.user.id, note, b.note_private === 'true' || b.note_private === true ? 1 : 0, t);
-      return { id: appId, known };
+      // `name` is the name on the record they ended up on, which is not always the one that was typed.
+      return { id: appId, known, merged: known, name: cand.name };
     });
     stored = true;
     res.json(result);
@@ -887,16 +970,27 @@ api.post('/applications', agencyOnly, upload.single('resume'), (req, res) => {
   }
 });
 
-// Has this person (by profile link or email) already been added anywhere? Used by the browser extension before adding.
+// Has this person (by LinkedIn profile link or email) already been added anywhere? Used by the browser extension before adding.
 api.get('/candidates/lookup', agencyOnly, (req, res) => {
-  const link = profileUrl(req.query.linkedin);
-  const email = String(req.query.email || '').trim().toLowerCase();
+  const link = identityKey(req.query.linkedin);
+  const email = emailOf(req.query.email);
   if (!link && !validEmail(email)) return res.json([]);
   res.json(q.all(
     `SELECT a.id AS application_id, a.status, c.name, j.id AS job_id, j.title AS job_title, cl.name AS client_name, s.name AS stage_name
      FROM candidates c JOIN applications a ON a.candidate_id = c.id JOIN jobs j ON j.id = a.job_id
      JOIN clients cl ON cl.id = j.client_id JOIN stages s ON s.id = a.stage_id
      WHERE c.linkedin = ? OR c.email = ? ORDER BY a.applied_at DESC LIMIT 20`, link ?? '', validEmail(email) ? email : ''));
+});
+
+// Who can own a candidate, for the owner filter and the owner picker: everyone active on the agency team, plus
+// anyone who still owns someone in view (a recruiter who has since been deactivated), so their candidates stay reachable.
+api.get('/owners', (req, res) => {
+  const cid = scopeOf(req);
+  res.json(q.all(
+    `SELECT u.id, u.name, u.active FROM users u
+     WHERE (u.role != 'client' AND u.active = 1)
+        OR u.id IN (SELECT a.owner_id FROM applications a JOIN jobs j ON j.id = a.job_id WHERE a.owner_id IS NOT NULL ${cid ? 'AND j.client_id = ?' : ''})
+     ORDER BY u.active DESC, u.name`, ...(cid ? [cid] : [])));
 });
 
 api.get('/applications/:id', (req, res) => {
@@ -924,11 +1018,19 @@ api.get('/applications/:id', (req, res) => {
   const others = q.all(
     `SELECT a.id, a.status, j.title AS job_title, s.name AS stage_name FROM applications a JOIN jobs j ON j.id = a.job_id JOIN stages s ON s.id = a.stage_id
      WHERE a.candidate_id = ? AND a.id != ?`, a.candidate_id, a.id);
+  // Other records at this client that carry the same LinkedIn profile link: probably the same person entered twice
+  // (sourced, then applied on the careers page). Each is shown with their latest application so it can be opened.
+  const key = identityKey(candidate.linkedin);
+  const duplicates = key ? q.all(
+    `SELECT c.id AS candidate_id, c.name, a.id AS application_id, j.title AS job_title, s.name AS stage_name, a.status
+     FROM candidates c JOIN applications a ON a.id = (SELECT x.id FROM applications x WHERE x.candidate_id = c.id ORDER BY x.applied_at DESC, x.id DESC LIMIT 1)
+     JOIN jobs j ON j.id = a.job_id JOIN stages s ON s.id = a.stage_id
+     WHERE c.client_id = ? AND c.linkedin = ? AND c.id != ? ORDER BY c.id LIMIT 20`, a.client_id, key, candidate.id) : [];
   const names = (id) => (id ? q.get('SELECT name FROM users WHERE id = ?', id)?.name ?? null : null);
   const { client_id, job_title, candidate_name, candidate_email, client_name, ...application } = a;
   res.json({
     application: { ...application, answers: json(a.answers, []), submitted_by_name: names(a.submitted_by), reviewed_by_name: names(a.reviewed_by), owner_name: names(a.owner_id) },
-    candidate, job, client, stages, notes, activities, interviews, offer, emails, others,
+    candidate, job, client, stages, notes, activities, interviews, offer, emails, others, duplicates,
   });
 });
 
@@ -940,7 +1042,10 @@ api.patch('/applications/:id', (req, res) => {
     q.run('UPDATE applications SET rating = ?, updated_at = ? WHERE id = ?', rating >= 1 && rating <= 5 ? rating : null, now(), a.id);
   }
   if (b.owner_id !== undefined && isAgency(req.user)) {
-    const owner = b.owner_id === null || b.owner_id === '' ? null : q.get(`SELECT id, name FROM users WHERE id = ? AND active = 1 AND role != 'client'`, int(b.owner_id));
+    // Anyone active on the agency team, or whoever owns them now: saving the form must not fail just because the current owner has since been deactivated.
+    const owner = b.owner_id === null || b.owner_id === ''
+      ? null
+      : q.get(`SELECT id, name FROM users WHERE id = ? AND ((active = 1 AND role != 'client') OR id = ?)`, int(b.owner_id), a.owner_id);
     if (owner === undefined) bad('Choose someone on your own team as the owner.');
     if ((owner?.id ?? null) !== a.owner_id) {
       q.run('UPDATE applications SET owner_id = ?, updated_at = ? WHERE id = ?', owner?.id ?? null, now(), a.id);
@@ -949,7 +1054,7 @@ api.patch('/applications/:id', (req, res) => {
   }
   if (b.candidate && isAgency(req.user)) {
     const c = candidateFields(b.candidate);
-    const email = String(b.candidate.email || '').trim().toLowerCase() || null;
+    const email = emailOf(b.candidate.email) || null;
     if (!c.name) bad('A name is required.');
     if (email && !validEmail(email)) bad('That email address does not look right.');
     if (!email && !c.linkedin) bad('Keep an email address or a profile link, so this person can be told apart from others.');
@@ -1119,6 +1224,32 @@ api.delete('/candidates/:id', agencyOnly, (req, res) => {
   });
   files.forEach(removeUpload);
   res.json({ ok: true });
+});
+
+// Join two records that turned out to be one person (sourced without an email, then applied on the careers page,
+// say). Everything on :id moves to `into`: its applications with their notes, interviews and emails. `into` keeps
+// its own details and takes only the contact details it was missing.
+api.post('/candidates/:id/merge', agencyOnly, (req, res) => {
+  const from = q.get('SELECT * FROM candidates WHERE id = ?', int(req.params.id));
+  const into = q.get('SELECT * FROM candidates WHERE id = ?', int(req.body?.into));
+  if (!from || !into) bad('Not found', 404);
+  if (from.id === into.id) bad('Choose a different record to merge with.');
+  if (from.client_id !== into.client_id) bad('Only records at the same client can be merged.');
+  tx(() => {
+    const clash = q.get(
+      `SELECT j.title FROM applications a JOIN applications b ON b.job_id = a.job_id AND b.candidate_id = ? JOIN jobs j ON j.id = a.job_id
+       WHERE a.candidate_id = ? ORDER BY a.id LIMIT 1`, into.id, from.id);
+    if (clash) bad(`Both records are in ${clash.title}. Remove one of them from that job first.`, 409);
+    const moved = q.all('SELECT id FROM applications WHERE candidate_id = ?', from.id);
+    q.run('UPDATE applications SET candidate_id = ?, updated_at = ? WHERE candidate_id = ?', into.id, now(), from.id);
+    q.run('DELETE FROM candidates WHERE id = ?', from.id); // gone before its email is copied, so the address is never held twice
+    const email = into.email || !from.email || q.get('SELECT 1 AS x FROM candidates WHERE client_id = ? AND email = ?', into.client_id, from.email) ? into.email : from.email;
+    q.run('UPDATE candidates SET email = ?, phone = ?, linkedin = ?, location = ?, current_title = ?, current_company = ? WHERE id = ?',
+      email, into.phone || from.phone, into.linkedin || from.linkedin, into.location || from.location,
+      into.current_title || from.current_title, into.current_company || from.current_company, into.id);
+    for (const app of moved) logActivity(app.id, req.user.id, 'merged', `Merged with ${into.name}'s record`);
+  });
+  res.json({ ok: true, id: into.id });
 });
 
 // ---------- interviews + scorecards ----------
@@ -1378,7 +1509,7 @@ api.get('/reports', (req, res) => {
 api.use((req, res) => res.status(404).json({ error: 'Not found' }));
 api.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'That file is larger than 8 MB.' : 'Upload failed.' });
-  if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+  if (err instanceof HttpError) return res.status(err.status).json({ error: err.message, ...err.extra });
   if (err.status >= 400 && err.status < 500) return res.status(err.status).json({ error: 'That request could not be read.' });
   console.error(err);
   res.status(500).json({ error: 'Something went wrong on our side.' });
