@@ -165,8 +165,9 @@ export class ChunkUploader extends EventTarget {
     this.#release = null;
   }
 
-  async create({ mimeType, consent, title, application_id, userId }) {
-    const made = await api.post(this.base, { mimeType, consent, title: title || undefined, application_id: application_id || undefined });
+  async create({ mimeType, consent, title, application_id, event_key, userId }) {
+    // event_key: the calendar event this call is being recorded for, so the event can show that its call was recorded.
+    const made = await api.post(this.base, { mimeType, consent, title: title || undefined, application_id: application_id || undefined, event_key: event_key || undefined });
     this.id = made.id;
     this.callId = made.call_id;
     this.userId = userId;
@@ -332,7 +333,7 @@ export class CallRecorder extends EventTarget {
    * consent: { confirmed: true, wording } is sent with the request that creates the recording.
    * Resolves with { id, call_id } once the call exists on the server and recording has begun.
    */
-  async start({ consent, title, application_id, userId, bitsPerSecond = SPEECH_BITRATE, timeslice = TIMESLICE_MS, uploader = new ChunkUploader() } = {}) {
+  async start({ consent, title, application_id, event_key, userId, bitsPerSecond = SPEECH_BITRATE, timeslice = TIMESLICE_MS, uploader = new ChunkUploader() } = {}) {
     if (this.state !== 'idle') throw new Error('A call is already being recorded.');
     const mimeType = pickMimeType();
     if (mimeType === null) throw Object.assign(new Error('This browser cannot record audio.'), { name: 'NotSupportedError' });
@@ -356,7 +357,7 @@ export class CallRecorder extends EventTarget {
 
       this.#recorder = new MediaRecorder(this.#dest.stream, { ...(mimeType ? { mimeType } : {}), audioBitsPerSecond: bitsPerSecond });
       this.mimeType = this.#recorder.mimeType || mimeType;
-      made = await uploader.create({ mimeType: this.mimeType, consent, title, application_id, userId });
+      made = await uploader.create({ mimeType: this.mimeType, consent, title, application_id, event_key, userId });
     } catch (err) {
       this.#release();
       uploader.letGo();

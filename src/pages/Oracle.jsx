@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { AudioLines, FileAudio, Mic, MonitorSpeaker, Pause, Play, Square, Upload, UserPlus } from 'lucide-react';
+import { AudioLines, FileAudio, Mic, MonitorSpeaker, Pause, Phone, Play, Square, Upload, UserPlus } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, url, fmtDateTime, photoUrl } from '../lib.js';
-import { Avatar, Button, Card, CardHeader, Checkbox, Empty, Field, Input, Modal, Page, useAction, useToast, cx } from '../ui.jsx';
+import { Avatar, Badge, Button, Card, CardHeader, Empty, Field, Input, Modal, Page, useAction, useToast, cx } from '../ui.jsx';
 import { CONSENT_WORDING, UPLOAD_CONSENT_WORDING, Elapsed, LevelMeter, MicBadge, limitWords, sessionLabel, useRecorder } from '../oracle/RecorderProvider.jsx';
 import { CallRecorder } from '../oracle/recorder.js';
-import { AttachModal, CallStatus, CandidatePicker, Notice, callName, fmtLength, pickOf, useLive } from '../oracle/bits.jsx';
+import { AttachModal, CallStatus, CandidatePicker, CardIntro, ConsentTick, Notice, PhoneMark, callName, fmtLength, madeBy, pickOf, useLive } from '../oracle/bits.jsx';
+import { CallCard, usePhone } from '../oracle/phone.jsx';
+import { CalendarCard } from '../oracle/calendar.jsx';
 
 const code = (text) => <code className="rounded bg-stone-200/70 px-1 py-0.5 text-xs text-stone-800">{text}</code>;
 
@@ -33,18 +35,9 @@ function ConnectionNotice({ status }) {
   );
 }
 
-/** The consent tick box, shared by recording and uploading. It turns red when someone tries to go on without it. */
-function ConsentTick({ checked, onChange, missing, wording = CONSENT_WORDING }) {
-  return (
-    <div className={cx('rounded-lg border px-3 py-2.5', missing ? 'border-red-300 bg-red-50' : 'border-line bg-stone-50')}>
-      <Checkbox checked={checked} onChange={(e) => onChange(e.target.checked)} label={wording}
-        hint={missing ? 'Tick this box first. Calls may only be recorded when everyone on them has agreed.' : 'Your confirmation is kept with the call.'} />
-    </div>
-  );
-}
-
 function RecordForm({ picked, setPicked }) {
   const recorder = useRecorder();
+  const { cannotRecord } = usePhone();
   const [title, setTitle] = useState('');
   const [agreed, setAgreed] = useState(false);
   const [missing, setMissing] = useState(false);
@@ -52,6 +45,7 @@ function RecordForm({ picked, setPicked }) {
   const starting = recorder.state === 'starting';
 
   const begin = async () => {
+    if (cannotRecord) return undefined;
     if (!agreed) return setMissing(true);
     setProblem(null);
     try {
@@ -60,25 +54,27 @@ function RecordForm({ picked, setPicked }) {
         subject: picked ? { name: picked.name, job_title: picked.job_title } : null,
       });
     } catch (err) { setProblem(err.message); }
+    return undefined;
   };
 
   return (
-    <form className="flex-1 space-y-4 p-5" onSubmit={(e) => { e.preventDefault(); begin(); }}>
-      {/* grid-cols-1 lets the columns shrink: without it a long name or job title pushes the card wider than a phone. */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <CandidatePicker value={picked} onChange={setPicked} hint="Optional. You can add the call to a candidate afterwards." />
-        <Field label="Title" hint="Optional, for example “First call” or “Salary follow-up”.">
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} placeholder={picked ? `Call with ${picked.name}` : 'Candidate call'} />
-        </Field>
-      </div>
-      <ConsentTick checked={agreed} onChange={(v) => { setAgreed(v); if (v) setMissing(false); }} missing={missing} />
+    <form className="flex-1 space-y-3 p-4 sm:p-5" onSubmit={(e) => { e.preventDefault(); begin(); }}>
+      <CardIntro icon={Mic} title="Record a live conversation">For a call on Meet, Zoom or Teams, on speaker, or in person. It is written up when you stop.</CardIntro>
+      {/* Both are optional and say so in their labels: a call can be added to a candidate afterwards. */}
+      <CandidatePicker value={picked} onChange={setPicked} label="Who is this call with? (optional)" />
+      <Field label="Title (optional)">
+        <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} placeholder={picked ? `Call with ${picked.name}` : 'For example “First call”'} className="max-sm:!h-11 max-sm:!text-base" />
+      </Field>
+      <ConsentTick checked={agreed} onChange={(v) => { setAgreed(v); if (v) setMissing(false); }} missing={missing} wording={CONSENT_WORDING} />
+      {/* One call at a time: a phone call is recorded on the phone line, so the microphone stays off until it is over. */}
+      {cannotRecord && <Notice tone="warn">{cannotRecord}</Notice>}
       {problem && <Notice tone="bad">{problem}</Notice>}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <Button type="submit" variant="primary" busy={starting} className="!h-11 !px-5 !text-[15px]">
+        <Button type="submit" variant="primary" busy={starting} disabled={Boolean(cannotRecord)} className="!h-11 !px-5 !text-[15px] max-sm:w-full">
           {!starting && <span className="size-2.5 rounded-full bg-red-500 ring-2 ring-white/30" aria-hidden="true" />}
           Record now
         </Button>
-        <span className="min-w-0 flex-1 basis-56 text-[13px] text-stone-500">Your browser asks to use the microphone the first time. You can keep working in The Book while the call is recorded.</span>
+        <span className="min-w-0 flex-1 basis-48 text-xs leading-snug text-stone-500">Your browser asks to use the microphone the first time. You can keep working in The Book while the call is recorded.</span>
       </div>
     </form>
   );
@@ -103,7 +99,7 @@ function RecordingPanel() {
   const stopping = state === 'stopping';
   const canShare = CallRecorder.canShareCallAudio();
   return (
-    <div className="flex-1 space-y-4 p-5">
+    <div className="flex-1 space-y-4 p-4 sm:p-5">
       <div className="space-y-2.5">
         <div className="flex items-center gap-3 text-[13px] text-stone-600">
           <span className="w-28 shrink-0">Your microphone</span>
@@ -137,7 +133,7 @@ function RecordingPanel() {
             <p className="min-w-0 flex-1 basis-64 text-[13px] leading-relaxed text-stone-600">
               <span className="font-medium text-stone-900">Only your microphone is being recorded.</span> If the call is in Google Meet, Zoom or Teams in your browser, share that tab and tick “Also share tab audio”. Otherwise put the call on speaker.
             </p>
-            <Button icon={MonitorSpeaker} busy={sharing} disabled={stopping} onClick={share}>Add the other side of the call</Button>
+            <Button icon={MonitorSpeaker} busy={sharing} disabled={stopping} onClick={share} className="max-sm:!h-11">Add the other side of the call</Button>
           </div>
         ) : (
           <p className="text-[13px] leading-relaxed text-stone-600"><span className="font-medium text-stone-900">Only your microphone is being recorded.</span> Put the call on speaker so the other person is picked up too.</p>
@@ -145,8 +141,8 @@ function RecordingPanel() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button icon={paused ? Play : Pause} disabled={stopping} onClick={paused ? resume : pause}>{paused ? 'Resume' : 'Pause'}</Button>
-        <Button variant="dangerSolid" icon={Square} busy={stopping} onClick={stop}>{stopping ? 'Saving the call…' : 'Stop and save'}</Button>
+        <Button icon={paused ? Play : Pause} disabled={stopping} onClick={paused ? resume : pause} className="max-sm:!h-11">{paused ? 'Resume' : 'Pause'}</Button>
+        <Button variant="dangerSolid" icon={Square} busy={stopping} onClick={stop} className="max-sm:!h-11">{stopping ? 'Saving the call…' : 'Stop and save'}</Button>
         <span className="min-w-0 flex-1 basis-56 text-[13px] text-stone-500">
           {stopping ? 'The recording has stopped and the call is being saved.'
             : session?.subject
@@ -158,38 +154,29 @@ function RecordingPanel() {
   );
 }
 
-/** The card at the top of the page: one obvious button to start, and everything about the call while it is being recorded. */
+/** "Record now": the form with its one obvious button, and everything about the call while it is being recorded. */
 function RecordCard({ picked, setPicked }) {
   const { state, live, session } = useRecorder();
   const active = live || state === 'stopping';
   const paused = state === 'paused';
+  if (!active) return <Card><RecordForm picked={picked} setPicked={setPicked} /></Card>;
   return (
-    <Card className={cx('overflow-hidden md:flex', active && (paused ? 'border-stone-400 ring-2 ring-stone-200' : 'border-red-300 ring-2 ring-red-200'))}>
-      <div className={cx('flex flex-col gap-3 p-5 text-white md:w-72 md:shrink-0 md:justify-center md:p-6', active ? (paused ? 'bg-stone-800' : 'bg-red-700') : 'bg-brand-950')}>
-        {active ? (
-          <>
-            <span className="inline-flex items-center gap-2.5 text-sm font-semibold tracking-wide uppercase">
-              <span className="relative flex size-3" aria-hidden="true">
-                {state === 'recording' && <span className="absolute inline-flex size-full animate-ping rounded-full bg-white/70" />}
-                <span className={cx('relative inline-flex size-3 rounded-full', paused ? 'bg-stone-400' : 'bg-white')} />
-              </span>
-              {state === 'stopping' ? 'Saving the call' : paused ? 'Paused' : 'Recording'}
+    <Card className={cx('overflow-hidden', paused ? 'border-stone-400 ring-2 ring-stone-200' : 'border-red-300 ring-2 ring-red-200')}>
+      <div className={cx('flex items-center gap-4 px-4 py-4 text-white sm:px-5', paused ? 'bg-stone-800' : 'bg-red-700')}>
+        <div className="min-w-0 flex-1">
+          <span className="inline-flex items-center gap-2.5 text-[13px] font-semibold tracking-wide uppercase">
+            <span className="relative flex size-3" aria-hidden="true">
+              {state === 'recording' && <span className="absolute inline-flex size-full animate-ping rounded-full bg-white/70" />}
+              <span className={cx('relative inline-flex size-3 rounded-full', paused ? 'bg-stone-400' : 'bg-white')} />
             </span>
-            <Elapsed className="text-5xl leading-none font-semibold tracking-tight" />
-            <span className="text-sm text-white/85">
-              <span className="block truncate font-medium text-white">{sessionLabel(session)}</span>
-              {session?.subject?.job_title && <span className="block truncate">{session.subject.job_title}</span>}
-            </span>
-          </>
-        ) : (
-          <>
-            <span className="flex size-12 items-center justify-center rounded-full bg-gold/15 text-gold ring-1 ring-gold/40"><Mic className="size-6" /></span>
-            <h2 className="text-lg font-semibold tracking-tight">Record a call</h2>
-            <p className="text-sm leading-relaxed text-brand-200">Speak to a candidate with The Book open. When you stop, the call is written up for you: who said what, a notes summary, and a draft to send the hiring team.</p>
-          </>
-        )}
+            {state === 'stopping' ? 'Saving the call' : paused ? 'Paused' : 'Recording'}
+          </span>
+          <span className="mt-1 block truncate text-sm font-medium text-white">{sessionLabel(session)}</span>
+          {session?.subject?.job_title && <span className="block truncate text-[13px] text-white/85">{session.subject.job_title}</span>}
+        </div>
+        <Elapsed className="text-4xl leading-none font-semibold tracking-tight sm:text-5xl" />
       </div>
-      {active ? <RecordingPanel /> : <RecordForm picked={picked} setPicked={setPicked} />}
+      <RecordingPanel />
     </Card>
   );
 }
@@ -299,23 +286,27 @@ function UploadModal({ maxMb, initial, onClose }) {
 }
 
 function CallRow({ call, onAttach }) {
-  // A call named after the candidate does not repeat their name on the second line.
-  const who = [!callName(call).includes(call.candidate_name) && call.candidate_name, call.job_title, call.client_name].filter(Boolean).join(' · ');
+  const phone = usePhone();
+  const onThePhone = phone.live && phone.call.call_id === call.id; // this is the phone call under way right now
+  // A call named after the candidate does not repeat their name on the second line. A phone call adds the other number.
+  const who = [!callName(call).includes(call.candidate_name) && call.candidate_name, call.job_title, call.client_name, call.phone_display].filter(Boolean).join(' · ');
+  const phoned = call.source === 'phone';
   return (
     <li className="relative flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 hover:bg-stone-50">
-      {call.candidate_id ? <Avatar name={call.candidate_name} size={36} src={photoUrl(call.candidate_id, call.candidate_photo)} /> : <MicBadge size={36} />}
+      {call.candidate_id ? <Avatar name={call.candidate_name} size={36} src={photoUrl(call.candidate_id, call.candidate_photo)} /> : <MicBadge size={36} icon={phoned ? Phone : undefined} />}
       <div className="min-w-0 flex-1 basis-56">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <Link to={`/oracle/${call.id}`} className="truncate text-sm font-medium text-stone-900 after:absolute after:inset-0">{callName(call)}</Link>
-          <CallStatus status={call.status} />
+          <PhoneMark call={call} />
+          {onThePhone ? <Badge tone="red">On the phone now</Badge> : <CallStatus status={call.status} source={call.source} />}
         </div>
         {call.candidate_id
           ? <p className="truncate text-[13px] text-stone-500">{who}</p>
-          : <p className="text-[13px] font-medium text-amber-800">Not added to a candidate yet</p>}
+          : <p className="text-[13px] font-medium text-amber-800">Not added to a candidate yet{call.phone_display ? <span className="tabular font-normal text-stone-500"> · {call.phone_display}</span> : null}</p>}
       </div>
       <div className="text-right text-[13px] text-stone-500 max-sm:basis-full max-sm:pl-[52px] max-sm:text-left">
         <span className="tabular block text-stone-700">{fmtDateTime(call.created_at)}{call.duration_ms ? ` · ${fmtLength(call.duration_ms)}` : ''}</span>
-        <span className="block">{call.source === 'uploaded' ? 'Uploaded' : 'Recorded'} by {call.created_by_name || 'someone who has left'}</span>
+        <span className="block">{madeBy(call)}</span>
       </div>
       {!call.candidate_id && call.status !== 'recording' && (
         <Button size="sm" icon={UserPlus} onClick={onAttach} className="relative z-10 max-sm:ml-[52px]">Add to a candidate</Button>
@@ -327,6 +318,7 @@ function CallRow({ call, onAttach }) {
 export default function Oracle() {
   const { scope } = useApp();
   const recorder = useRecorder();
+  const phone = usePhone();
   const [params, setParams] = useSearchParams();
   const { data: status } = useApi('/oracle/status');
   const everyone = params.get('show') === 'everyone';
@@ -358,6 +350,8 @@ export default function Oracle() {
   // The list shows the call being recorded, and loses the "Recording" chip as soon as it stops, or as soon as a
   // recording that was cut off (by a reload, say) has been saved.
   useEffect(() => { calls.reload(); }, [recorder.live, recorder.recovered]);
+  // A phone call that was recorded appears in the list once it is over and its recording has arrived.
+  useEffect(() => { calls.reload(); }, [phone.call?.status, phone.call?.call_id, phone.call?.message]);
 
   const show = (who) => { const next = new URLSearchParams(params); who === 'everyone' ? next.set('show', 'everyone') : next.delete('show'); setParams(next, { replace: true }); };
   const toggle = (label, on, who) => (
@@ -366,17 +360,25 @@ export default function Oracle() {
   );
 
   return (
-    <Page title="The Oracle" subtitle="Record your calls with candidates. Each one comes back as a transcript, a notes summary and a draft submission."
+    <Page title="The Oracle" subtitle="Call a candidate, record a conversation, or work from your calendar. Every call is written up for you."
       actions={<Button icon={Upload} onClick={() => setUploading(true)}>Upload a recording</Button>}>
-      <RecordCard picked={picked} setPicked={setPicked} />
+      {/* Two columns on a computer: calling and recording on the left, the day on the right, as tall as the two together.
+          On a phone they stack in the order they are most used on the move: call, record, calendar. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-4">
+          <CallCard />
+          <RecordCard picked={picked} setPicked={setPicked} />
+        </div>
+        <CalendarCard className="min-w-0" />
+      </div>
       <ConnectionNotice status={status} />
 
-      <Card className="mt-6 overflow-hidden">
+      <Card className="mt-4 overflow-hidden">
         <CardHeader title="Calls" count={calls.data?.length || undefined}
           action={<div className="flex gap-0.5 rounded-lg bg-stone-100 p-0.5" role="group" aria-label="Whose calls to show">{toggle('Mine', !everyone, 'mine')}{toggle('Everyone', everyone, 'everyone')}</div>} />
         {!calls.data ? <Pending error={calls.error} /> : !calls.data.length ? (
           <Empty icon={AudioLines} title={everyone ? 'No calls yet' : 'You have not recorded any calls yet'}>
-            The Oracle records your calls with candidates and writes them up: a transcript, a notes summary and a draft submission for the hiring team. Press Record now when your next call starts, or upload one you recorded elsewhere.
+            The Oracle writes up your calls with candidates: a transcript, a notes summary and a draft submission for the hiring team. Call a candidate, press Record now when your next conversation starts, or upload one you recorded elsewhere.
           </Empty>
         ) : (
           <ul className="divide-y divide-line">

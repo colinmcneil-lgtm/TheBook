@@ -1,11 +1,13 @@
 // Pieces shared by The Oracle's pages and the Calls tab on a candidate's profile.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, Copy, Info, LoaderCircle, Search, UserPlus, X } from 'lucide-react';
+import { Check, Copy, Info, LoaderCircle, Phone, PhoneIncoming, PhoneOutgoing, Search, UserPlus, Voicemail, X } from 'lucide-react';
 import { api, url, fmtDate, photoUrl } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
-import { Avatar, Badge, Button, Input, Modal, useAction, useToast, cx } from '../ui.jsx';
+import { Avatar, Badge, Button, Checkbox, Input, Modal, useAction, useToast, cx } from '../ui.jsx';
 import { AddCandidateModal } from '../components/CandidateModals.jsx';
+
+export { madeBy } from './calls.js';
 
 // ---- words for a call ---------------------------------------------------------------------------------------------------
 const STATUS = {
@@ -15,7 +17,12 @@ const STATUS = {
   ready: { label: 'Ready', tone: 'green' },
   failed: { label: 'Could not be transcribed', tone: 'red' },
 };
-export function CallStatus({ status }) {
+/**
+ * Where a call has got to. A call made on the phone line is in The Oracle from the moment it is placed, and its
+ * recording arrives from the phone service a little after it ends: until then it is waiting, not "Recording".
+ */
+export function CallStatus({ status, source }) {
+  if (source === 'phone' && status === 'recording') return <Badge tone="amber" icon={Spinner}>Waiting for the recording</Badge>;
   const s = STATUS[status] || STATUS.uploaded;
   return <Badge tone={s.tone} icon={status === 'transcribing' ? Spinner : undefined}>{s.label}</Badge>;
 }
@@ -23,6 +30,15 @@ const Spinner = ({ className }) => <LoaderCircle className={cx(className, 'anima
 
 /** What to call a call: its own title, else who it was with, else the day it was recorded. */
 export const callName = (call) => call.title || (call.candidate_name ? `Call with ${call.candidate_name}` : `Call on ${fmtDate(call.created_at)}`);
+
+/** Marks a call that was made on The Book's phone line, and which way it went. Nothing for calls recorded in the browser or uploaded. */
+export function PhoneMark({ call }) {
+  if (call.source !== 'phone') return null;
+  // A caller who reached nobody and left a message is still a call that came in, but there is only their side of it.
+  if (call.voicemail) return <Badge icon={Voicemail}>Voicemail</Badge>;
+  const inbound = call.direction === 'inbound';
+  return <Badge icon={inbound ? PhoneIncoming : call.direction === 'outbound' ? PhoneOutgoing : Phone}>{inbound ? 'Inbound call' : call.direction === 'outbound' ? 'Outbound call' : 'Phone call'}</Badge>;
+}
 
 /** "45 sec", "12 min", "1 h 05 min". Empty while the length is not known yet. */
 export function fmtLength(ms) {
@@ -126,9 +142,9 @@ export function CandidatePicker({ value, onChange, label = 'Who is this call wit
       <label className="block">
         <span className="mb-1 block text-[13px] font-medium text-stone-700">{label}</span>
         <span className="relative block">
-          <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-stone-400" />
+          <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-stone-400 max-sm:top-3.5" />
           {/* Enter here must not submit the form around it: on The Oracle that form starts a recording. */}
-          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search candidates by name" className="pl-9" autoFocus={autoFocus} autoComplete="off"
+          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search candidates by name" className="pl-9 max-sm:!h-11 max-sm:!text-base" autoFocus={autoFocus} autoComplete="off"
             onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} />
         </span>
       </label>
@@ -223,6 +239,30 @@ export function AttachModal({ call, current, onClose, onDone }) {
 }
 
 // ---- small things -----------------------------------------------------------------------------------------------------------
+/** The top of each of The Oracle's three cards: a round badge, what the card is called, and what it is for in a line or two. */
+export function CardIntro({ icon: Icon, title, action, children }) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-950 text-gold ring-1 ring-gold/50"><Icon className="size-5" /></span>
+      <div className="min-w-0 flex-1">
+        <h2 className="text-[15px] font-semibold tracking-tight text-stone-900">{title}</h2>
+        {children && <p className="mt-0.5 text-[13px] leading-snug text-stone-500">{children}</p>}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+/** The consent tick box, shared by recording and uploading. It turns red when someone tries to go on without it. */
+export function ConsentTick({ checked, onChange, missing, wording }) {
+  return (
+    <div className={cx('rounded-lg border px-3 py-2.5', missing ? 'border-red-300 bg-red-50' : 'border-line bg-stone-50')}>
+      <Checkbox checked={checked} onChange={(e) => onChange(e.target.checked)} label={wording}
+        hint={missing ? 'Tick this box first. Calls may only be recorded when everyone on them has agreed.' : 'Your confirmation is kept with the call.'} />
+    </div>
+  );
+}
+
 /** A quiet explanation box. */
 export function Notice({ tone = 'info', className, children }) {
   const tones = { info: 'border-line bg-stone-50 text-stone-600', warn: 'border-amber-200 bg-amber-50 text-amber-950', bad: 'border-red-200 bg-red-50 text-red-900' };

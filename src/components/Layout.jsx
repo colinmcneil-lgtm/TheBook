@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
 import { LayoutDashboard, Inbox, Briefcase, Users, CalendarDays, AudioLines, ChartColumn, Building2, Settings, ChevronsUpDown, Check, LogOut, Menu as MenuIcon, X } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate } from '../state.jsx';
@@ -7,6 +7,30 @@ import { Avatar, ClientDot, Menu, cx } from '../ui.jsx';
 import { Logo } from '../pages/Login.jsx';
 import CandidateDrawer from './CandidateDrawer.jsx';
 import { RecorderStrip, useRecorder } from '../oracle/RecorderProvider.jsx';
+import { PhoneStrip } from '../oracle/phone.jsx';
+import { EventPrompt } from '../oracle/calendar.jsx';
+
+/**
+ * Whatever sits across the top of the workspace: the recording strip, a phone call under way, the reminder that an
+ * event is starting. Drawers and dialogs cover the whole window; they start below all of this, however tall it is,
+ * so none of it is ever hidden.
+ */
+function TopBars({ children }) {
+  const box = useRef(null);
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const measure = () => {
+      const height = box.current?.offsetHeight || 0;
+      if (height) root.style.setProperty('--recording-bar', `${height}px`);
+      else root.style.removeProperty('--recording-bar');
+    };
+    measure();
+    const watcher = new ResizeObserver(measure);
+    watcher.observe(box.current);
+    return () => { watcher.disconnect(); root.style.removeProperty('--recording-bar'); };
+  }, []);
+  return <div ref={box} className="shrink-0">{children}</div>;
+}
 
 function ScopeSwitcher() {
   const { clients, scope, scopeClient, setScope, isAgency } = useApp();
@@ -97,7 +121,7 @@ export default function Layout({ children }) {
 
   return (
     <div className="flex h-full flex-col">
-    {isAgency && <RecorderStrip />}
+    {isAgency && <TopBars><RecorderStrip /><PhoneStrip /><EventPrompt /></TopBars>}
     <div className="flex min-h-0 flex-1">
       <aside className="no-print hidden w-60 shrink-0 lg:block">{sidebar}</aside>
       {open && (
