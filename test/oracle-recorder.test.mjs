@@ -60,21 +60,6 @@ function server(routes) {
   return seen;
 }
 
-test('a recording started for a calendar event tells the server which event', async () => {
-  fresh();
-  const seen = server({ 'POST /api/oracle/recordings': () => [201, { id: ID, call_id: 7 }] });
-  const forEvent = new ChunkUploader();
-  await forEvent.create({ mimeType: 'audio/webm', consent: { confirmed: true, wording: 'Agreed.' }, application_id: 3, event_key: 'ev-abc', userId: 1 });
-  forEvent.letGo();
-  assert.equal(seen[0].body.event_key, 'ev-abc');
-  assert.equal(seen[0].body.application_id, 3);
-  // An ordinary recording sends no event at all.
-  const plain = new ChunkUploader();
-  await plain.create({ mimeType: 'audio/webm', consent: { confirmed: true, wording: 'Agreed.' }, userId: 1 });
-  plain.letGo();
-  assert.equal('event_key' in seen[1].body, false);
-});
-
 test('nothing to recover when no recording was in progress', async () => {
   fresh();
   const seen = server({});

@@ -7,9 +7,8 @@ import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_C
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
 import { registerAutofill } from './autofill.js';
 import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCalls, forgetSavedNote } from './oracle.js';
-import { registerPhone, registerPhoneWebhooks } from './phone.js';
+import { registerMetaview } from './metaview.js';
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
-import { registerCalendar } from './calendar.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -480,10 +479,6 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
   }
 });
 
-// ---------- phone calls: the routes the phone service itself calls ----------
-// These take no sign-in (Twilio has no cookie): each request is trusted only by Twilio's signature. See phone.js.
-registerPhoneWebhooks(api);
-
 // ---------- everything below requires a signed-in user ----------
 api.use((req, res, next) => {
   req.user = readSession(req);
@@ -503,10 +498,8 @@ const adminOnly = (req, res, next) => (req.user.role === 'admin' ? next() : res.
 registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, briefFields: (b) => briefFields(b) });
 // The Oracle (recording calls with candidates, transcripts, notes and submission drafts) lives in its own module too.
 registerOracle(api, { agencyOnly, bad, clean, int, takeHit, logActivity, loadApp: (id, user) => loadApp(id, user) });
-// Phone calls (click to call, the switchboard, calls coming in to The Book's number) live in their own module as well.
-registerPhone(api, { agencyOnly, bad, clean, int, logActivity, loadApp: (id, user) => loadApp(id, user) });
-// Your calendar in The Oracle (a saved calendar link, the day's events and who they are with) is a module of its own as well.
-registerCalendar(api, { agencyOnly, bad, takeHit, loadApp: (id, user) => loadApp(id, user) });
+// Metaview in The Oracle (the agency's conversations recorded in Metaview, listed and brought in as calls) is a module of its own as well.
+registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, takeHit });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);
@@ -671,10 +664,6 @@ api.patch('/users/:id', agencyOnly, (req, res) => {
   if (b.password !== undefined || b.active === false) q.run('DELETE FROM sessions WHERE user_id = ?', target.id);
   // Links this person handed out stop working with them, so nobody can be let in on their say-so after they have left.
   if (b.active === false) q.run('DELETE FROM invites WHERE created_by = ? AND used_at IS NULL', target.id);
-  // Their mobile and its PIN go too: a number says who is ringing in, so it must be free for whoever has that phone next.
-  if (b.active === false) {
-    q.run('UPDATE users SET phone = NULL, phone_pin_hash = NULL, phone_pin_fails = 0, phone_locked_until = NULL, phone_lock_level = 0, phone_pin_wrong = 0, phone_pin_wrong_since = NULL WHERE id = ?', target.id);
-  }
   res.json({ ok: true });
 });
 
