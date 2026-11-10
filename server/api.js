@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
 import { registerAutofill } from './autofill.js';
+import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCalls } from './oracle.js';
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
 
 export const api = express.Router();
@@ -462,6 +463,8 @@ const adminOnly = (req, res, next) => (req.user.role === 'admin' ? next() : res.
 
 // Drafting a job from a job description and intake notes lives in its own module.
 registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, briefFields: (b) => briefFields(b) });
+// The Oracle (recording calls with candidates, transcripts, notes and submission drafts) lives in its own module too.
+registerOracle(api, { agencyOnly, bad, clean, int, takeHit, logActivity, loadApp: (id, user) => loadApp(id, user) });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);
@@ -868,15 +871,19 @@ api.patch('/jobs/:id/status', agencyOnly, (req, res) => {
 api.delete('/jobs/:id', adminOnly, (req, res) => {
   const job = loadJob(req.params.id, req.user);
   for (const a of q.all('SELECT resume_file FROM applications WHERE job_id = ?', job.id)) removeUpload(a.resume_file);
-  const photos = tx(() => {
+  const gone = tx(() => {
+    // Calls recorded for this job stay with people who are in other jobs too, without the write-up drafted for this one.
+    for (const a of q.all('SELECT id FROM applications WHERE job_id = ?', job.id)) detachCallsFrom(a.id);
     q.run('DELETE FROM applications WHERE job_id = ?', job.id);
     q.run('DELETE FROM jobs WHERE id = ?', job.id);
-    // People who were only in this job go with it, and so do their photos.
-    const orphans = q.all('SELECT photo_file FROM candidates WHERE id NOT IN (SELECT candidate_id FROM applications)').map((c) => c.photo_file);
+    // People who were only in this job go with it, and so do their photos and their recorded calls.
+    const orphans = q.all('SELECT id, photo_file FROM candidates WHERE id NOT IN (SELECT candidate_id FROM applications)');
+    const calls = callFilesOf(orphans.map((c) => c.id));
     q.run('DELETE FROM candidates WHERE id NOT IN (SELECT candidate_id FROM applications)');
-    return orphans;
+    return { photos: orphans.map((c) => c.photo_file), calls };
   });
-  photos.forEach(removeUpload);
+  gone.photos.forEach(removeUpload);
+  removeCallFiles(gone.calls);
   res.json({ ok: true });
 });
 
@@ -1071,8 +1078,10 @@ api.get('/applications/:id', (req, res) => {
   const notes = q.all(
     `SELECT n.*, u.name AS user_name, u.role AS user_role FROM notes n LEFT JOIN users u ON u.id = n.user_id
      WHERE n.application_id = ? ${agency ? '' : 'AND n.private = 0'} ORDER BY n.created_at DESC`, a.id);
+  // That a call was recorded is the agency's business: clients never see anything of the Oracle, this line included.
   const activities = q.all(
-    `SELECT ac.*, u.name AS user_name FROM activities ac LEFT JOIN users u ON u.id = ac.user_id WHERE ac.application_id = ? ORDER BY ac.created_at DESC, ac.id DESC`, a.id);
+    `SELECT ac.*, u.name AS user_name FROM activities ac LEFT JOIN users u ON u.id = ac.user_id
+     WHERE ac.application_id = ? ${agency ? '' : `AND ac.type != 'call'`} ORDER BY ac.created_at DESC, ac.id DESC`, a.id);
   const interviews = q.all('SELECT * FROM interviews WHERE application_id = ? ORDER BY starts_at DESC', a.id).map((i) => ({
     ...i,
     panel: q.all(`SELECT u.id, u.name, u.title, u.role FROM interview_panel p JOIN users u ON u.id = p.user_id WHERE p.interview_id = ?`, i.id),
@@ -1271,29 +1280,34 @@ api.get('/applications/:id/resume', (req, res) => {
 api.delete('/applications/:id', agencyOnly, (req, res) => {
   const a = loadApp(req.params.id, req.user);
   const photo = q.get('SELECT photo_file FROM candidates WHERE id = ?', a.candidate_id)?.photo_file;
+  const calls = callFilesOf([a.candidate_id]);
   const gone = tx(() => {
+    // Calls recorded with this person stay on their record while they are in another job; they go when the person does.
+    detachCallsFrom(a.id);
     q.run('DELETE FROM applications WHERE id = ?', a.id);
     if (q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ?', a.candidate_id)) return false;
     q.run('DELETE FROM candidates WHERE id = ?', a.candidate_id);
     return true;
   });
   removeUpload(a.resume_file);
-  if (gone) removeUpload(photo);
+  if (gone) { removeUpload(photo); removeCallFiles(calls); }
   res.json({ ok: true });
 });
 
 // Erase a person completely: every application they made at this client, with its notes, scorecards, interviews,
-// emails and résumé files, and their contact record.
+// emails and résumé files, their recorded calls (audio, transcripts and notes), and their contact record.
 api.delete('/candidates/:id', agencyOnly, (req, res) => {
   const cand = q.get('SELECT * FROM candidates WHERE id = ?', int(req.params.id));
   if (!cand || !canSee(req.user, cand.client_id)) bad('Not found', 404);
   const files = q.all('SELECT resume_file FROM applications WHERE candidate_id = ?', cand.id).map((r) => r.resume_file);
+  const calls = callFilesOf([cand.id]);
   tx(() => {
     q.run('DELETE FROM applications WHERE candidate_id = ?', cand.id);
-    q.run('DELETE FROM candidates WHERE id = ?', cand.id);
+    q.run('DELETE FROM candidates WHERE id = ?', cand.id); // their calls are removed with them
   });
   files.forEach(removeUpload);
   removeUpload(cand.photo_file);
+  removeCallFiles(calls);
   res.json({ ok: true });
 });
 
@@ -1328,8 +1342,8 @@ api.delete('/candidates/:id/photo', agencyOnly, (req, res) => {
 });
 
 // Join two records that turned out to be one person (sourced without an email, then applied on the careers page,
-// say). Everything on :id moves to `into`: its applications with their notes, interviews and emails. `into` keeps
-// its own details and takes only the contact details it was missing.
+// say). Everything on :id moves to `into`: its applications with their notes, interviews and emails, and its
+// recorded calls. `into` keeps its own details and takes only the contact details it was missing.
 api.post('/candidates/:id/merge', agencyOnly, (req, res) => {
   const from = q.get('SELECT * FROM candidates WHERE id = ?', int(req.params.id));
   const into = q.get('SELECT * FROM candidates WHERE id = ?', int(req.body?.into));
@@ -1343,6 +1357,7 @@ api.post('/candidates/:id/merge', agencyOnly, (req, res) => {
     if (clash) bad(`Both records are in ${clash.title}. Remove one of them from that job first.`, 409);
     const moved = q.all('SELECT id FROM applications WHERE candidate_id = ?', from.id);
     q.run('UPDATE applications SET candidate_id = ?, updated_at = ? WHERE candidate_id = ?', into.id, now(), from.id);
+    moveCalls(from.id, into.id); // before the record goes, or its recorded calls would go with it
     q.run('DELETE FROM candidates WHERE id = ?', from.id); // gone before its email is copied, so the address is never held twice
     const email = into.email || !from.email || q.get('SELECT 1 AS x FROM candidates WHERE client_id = ? AND email = ?', into.client_id, from.email) ? into.email : from.email;
     q.run('UPDATE candidates SET email = ?, phone = ?, linkedin = ?, location = ?, current_title = ?, current_company = ?, photo_file = ? WHERE id = ?',
@@ -1516,7 +1531,7 @@ api.get('/dashboard', (req, res) => {
        END AS milestone
      FROM activities ac JOIN applications a ON a.id = ac.application_id JOIN candidates c ON c.id = a.candidate_id
      JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = ac.user_id
-     WHERE 1 = 1 ${w} ORDER BY ac.created_at DESC, ac.id DESC LIMIT 15`, ...p);
+     WHERE ${isAgency(req.user) ? '1 = 1' : `ac.type != 'call'`} ${w} ORDER BY ac.created_at DESC, ac.id DESC LIMIT 15`, ...p);
   const stale = q.all(
     `${appSelect} WHERE a.status = 'active' AND s.kind IN ('interview', 'offer') AND a.stage_entered_at < ? ${w}
      AND NOT EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = a.id AND i.status = 'scheduled' AND i.starts_at >= ?)

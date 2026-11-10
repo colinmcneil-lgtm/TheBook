@@ -19,11 +19,12 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   }
   console.log(`Wiping ${DATA_DIR} ...`);
   tx(() => {
-    for (const t of ['emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
+    for (const t of ['calls', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
       db.exec(`DELETE FROM ${t}`);
     db.exec('DELETE FROM sqlite_sequence'); // a wiped database starts numbering from 1 again
   });
-  for (const file of fs.readdirSync(UPLOAD_DIR)) fs.rmSync(path.join(UPLOAD_DIR, file), { recursive: true, force: true }); // résumés of the rows just deleted
+  for (const file of fs.readdirSync(UPLOAD_DIR)) fs.rmSync(path.join(UPLOAD_DIR, file), { recursive: true, force: true }); // résumés, photos and call audio of the rows just deleted
+  fs.rmSync(path.join(DATA_DIR, 'recordings'), { recursive: true, force: true }); // pieces of recordings that were never finished
 }
 
 // Deterministic pseudo-random numbers so the demo looks the same on every run.
@@ -316,6 +317,134 @@ tx(() => {
       }
     }
   }
+
+  // The Oracle: three calls Priya recorded, so the page has something on it. The demo holds their transcripts and
+  // notes but no audio. Two are on a candidate; the third has not been added to anyone yet.
+  const CONSENT = 'I have told everyone on this call that it is being recorded and transcribed, and they have agreed.';
+  /** Give each turn a start and end, at an ordinary speaking pace with a short pause between speakers. */
+  const timed = (lines) => {
+    let at = 1.2;
+    return lines.map(([speaker, text]) => {
+      const start = Math.round(at * 10) / 10;
+      at += text.split(' ').length / 2.6;
+      const end = Math.round(at * 10) / 10;
+      at += 0.9;
+      return { speaker, start, end, text };
+    });
+  };
+  const demoCall = ({ title, days, app, turns, source = 'deepgram', speakers, notes, submission = null }) => {
+    const at = ago(days, 11);
+    const length = Math.round((turns.at(-1).end + 2) * 1000);
+    q.run(
+      `INSERT INTO calls (recording_id, title, status, source, duration_ms, transcript, transcript_source, speakers, notes, notes_at, submission, submission_at,
+         application_id, candidate_id, consent_by, consent_at, consent_wording, created_by, created_at, updated_at)
+       VALUES (?, ?, 'ready', 'recorded', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      crypto.randomBytes(16).toString('hex'), title, length, JSON.stringify(turns), source, JSON.stringify(speakers), notes, at, submission, submission ? at : null,
+      app?.id ?? null, app?.candidate_id ?? null, priya, at, CONSENT, priya, at, at);
+    if (app) act(app.id, priya, 'call', `Call recorded, ${Math.max(1, Math.round(length / 60000))} min`, at);
+  };
+  /** Someone at interview stage in a job who has not been put to the hiring team yet, to hang a call on. */
+  const interviewing = (jobId) => q.get(
+    `SELECT a.id, a.candidate_id, c.name, c.current_company FROM applications a JOIN candidates c ON c.id = a.candidate_id JOIN stages s ON s.id = a.stage_id
+     WHERE a.job_id = ? ORDER BY a.status = 'active' DESC, s.kind = 'interview' DESC, a.review_status IS NULL DESC, a.id LIMIT 1`, jobId);
+
+  const seller = interviewing(jobs[3].id);
+  if (seller) {
+    const first = seller.name.split(' ')[0];
+    demoCall({
+      title: `Call with ${seller.name}`, days: 2, app: seller, speakers: { 0: 'Priya Nair', 1: seller.name },
+      turns: timed([
+        [0, `Thanks for making the time, ${first}. Before I tell you more about Kestrel, could you walk me through what you are doing at ${seller.current_company} at the moment?`],
+        [1, 'Of course. I run the regional sales team here, eight account executives across the North West. We sell same-day and next-day freight to retailers and manufacturers. Last year the team closed 3.1 million in new business against a target of 2.8, and I personally brought in about 600,000 of that.'],
+        [0, 'So you still carry a number yourself?'],
+        [1, 'I do, and I would not want to give that up. I like being in front of customers.'],
+        [0, 'What is making you open to a move?'],
+        [1, 'Honestly, there is no bigger job for me here. The sales director is not going anywhere, and the company is not opening new regions. I want to build something.'],
+        [0, 'That fits. Kestrel is expanding into the Midlands and wants someone to grow the team from eight to fifteen. Have you opened a region before?'],
+        [1, 'Not from nothing. I took over Leeds when it was two people and grew it to five, so I have hired and trained, but I have not started with a blank map.'],
+        [0, 'Understood. What are you on now, and what would you need to move?'],
+        [1, 'I am on 78,000 base with a 20 percent bonus. I would be looking for around 90,000 base, and I care more about the bonus being realistic than about the headline.'],
+        [0, 'And notice?'],
+        [1, 'Three months, although I think they would let me go after two.'],
+        [0, 'Are you talking to anyone else?'],
+        [1, 'I have had a first conversation with one other logistics firm, nothing further yet.'],
+        [0, 'Good to know. I will send you the job description today and put you forward to Ruth at Kestrel this week. If she wants to meet, the next step is a video call with her.'],
+        [1, 'That sounds good. Thank you.'],
+      ]),
+      notes: [
+        `${first} runs an eight-person regional sales team at ${seller.current_company} and still carries a personal number. They are open to a move because there is no bigger role where they are. To be put forward to Ruth this week.`,
+        `Background and current role\n- Runs the regional sales team at ${seller.current_company}: eight account executives across the North West.\n- Sells same-day and next-day freight to retailers and manufacturers.`,
+        'Why they are looking\n- No bigger job where they are: the sales director is staying and the company is not opening new regions.\n- Wants to build something.',
+        'Relevant experience for this role\n- The team closed 3.1 million in new business last year against a target of 2.8.\n- Personally brought in about 600,000 of that, and wants to keep carrying a number.\n- Took over Leeds when it was two people and grew it to five; has hired and trained.',
+        'Pay (current and expected)\n- On 78,000 base with a 20 percent bonus.\n- Looking for around 90,000 base; cares more about a realistic bonus than the headline.',
+        'Notice period and availability\n- Three months, but thinks they would be let go after two.',
+        'Other processes and offers\n- A first conversation with one other logistics firm; nothing further yet.',
+        'Concerns to probe\n- Has not opened a region from nothing: Leeds already had two people.',
+        'Next steps\n- Send the job description today.\n- Put forward to Ruth this week; the next step would be a video call with her.',
+      ].join('\n\n'),
+      submission: [
+        `I spoke to ${seller.name} this week and would recommend meeting them for the Head of Sales role.`,
+        `${first} runs the regional sales team at ${seller.current_company}: eight account executives selling same-day and next-day freight to retailers and manufacturers across the North West. Last year the team closed 3.1 million in new business against a target of 2.8, and ${first} personally brought in about 600,000 of it. They still carry their own number and told me they would not want to give that up.`,
+        'They are open to a move because they want to build something bigger than their current role allows, which is what the Midlands expansion offers. They have grown a team before, taking Leeds from two people to five, and have hired and trained account executives.',
+        'The honest gap: they have not opened a region from a standing start.',
+        'They are looking for around 90,000 base and care most about the bonus being realistic. Notice is three months, though they expect to be released after two.',
+      ].join('\n\n'),
+    });
+  }
+
+  const engineer = interviewing(jobs[0].id);
+  if (engineer) {
+    const first = engineer.name.split(' ')[0];
+    demoCall({
+      title: `Call with ${engineer.name}`, days: 5, app: engineer, speakers: { 0: 'Priya Nair', 1: engineer.name },
+      turns: timed([
+        [0, `Hi ${first}, thanks for calling back. I wanted to hear a bit more about the systems you look after at ${engineer.current_company}.`],
+        [1, 'Sure. I am on the platform team. We run the booking and payments services, mostly TypeScript on Node with Postgres underneath. I have been there four years and I lead the on-call rota for our services.'],
+        [0, 'What is the biggest table you have had to deal with?'],
+        [1, 'Our events table is a little over two billion rows. Queries got slow about a year ago, so I led the work to partition it by month and move the old data out. Median query time went from about 900 milliseconds to under 100.'],
+        [0, 'That is exactly the kind of thing Lumen needs. They are pulling their scheduling engine out of a monolith. How do you feel about two days a week in the London office?'],
+        [1, 'That is fine. I am in Croydon, so it is about forty minutes.'],
+        [0, 'And on salary?'],
+        [1, 'I am on 88,000. I would want at least 95,000 to move, and I would like to understand the share options.'],
+        [0, 'Notice period?'],
+        [1, 'One month.'],
+        [0, 'Great. The next stage is a paired technical exercise with Maya\'s team, not a take-home. I will send over some times.'],
+        [1, 'Perfect, thanks.'],
+      ]),
+      notes: [
+        `${first} is a platform engineer at ${engineer.current_company} with four years on booking and payments services. Comfortable with two days a week in London and on one month's notice. Next is the paired technical exercise.`,
+        `Background and current role\n- On the platform team at ${engineer.current_company} for four years.\n- Runs the booking and payments services: mostly TypeScript on Node, with Postgres underneath.\n- Leads the on-call rota for those services.`,
+        'Relevant experience for this role\n- Events table of a little over two billion rows.\n- Led the work to partition it by month and move old data out; median query time went from about 900 milliseconds to under 100.',
+        'Pay (current and expected)\n- On 88,000.\n- Would want at least 95,000 to move, and wants to understand the share options.',
+        'Notice period and availability\n- One month.',
+        'Location and working pattern\n- Lives in Croydon, about forty minutes from the office.\n- Fine with two days a week in London.',
+        'Next steps\n- Paired technical exercise with Maya\'s team (not a take-home).\n- Send over some times.',
+      ].join('\n\n'),
+    });
+  }
+
+  demoCall({
+    title: 'Intro call: product designer referred by Tom', days: 1, app: null, source: 'pasted', speakers: { 0: 'Priya Nair', 1: 'Rowan' },
+    turns: timed([
+      [0, 'Thanks for getting in touch, Rowan. Tom at Lumen mentioned you might be open to hearing about a design role.'],
+      [1, 'Yes. I have been at the same agency for five years, mostly on booking and workflow tools for healthcare clients, and I would like to work on one product properly.'],
+      [0, 'What does your research experience look like?'],
+      [1, 'I run my own interviews and usability sessions. On the last project I spent two weeks shadowing receptionists before drawing anything.'],
+      [0, 'That is what Tom wants to see. What would you need on pay and notice?'],
+      [1, 'I am looking for something between 65,000 and 70,000. My notice is six weeks.'],
+      [0, 'Good. Send me your portfolio and I will add you to the role properly.'],
+      [1, 'Will do, thank you.'],
+    ]),
+    notes: [
+      'Rowan is a designer with five years at an agency, mostly on booking and workflow tools for healthcare clients, and wants to work on a single product. Referred by Tom. Portfolio to follow.',
+      'Background and current role\n- Five years at the same agency.\n- Mostly booking and workflow tools for healthcare clients.',
+      'Why they are looking\n- Wants to work on one product properly.',
+      'Relevant experience for this role\n- Runs their own interviews and usability sessions.\n- Spent two weeks shadowing receptionists on the last project before drawing anything.',
+      'Pay (current and expected)\n- Looking for between 65,000 and 70,000.',
+      'Notice period and availability\n- Six weeks.',
+      'Next steps\n- Rowan to send a portfolio.\n- Add them to the Product Designer role.',
+    ].join('\n\n'),
+  });
 });
 
 console.log(`Demo data loaded.
