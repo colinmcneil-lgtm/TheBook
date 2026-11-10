@@ -21,6 +21,8 @@ export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-c
 // Ports: every test file's ports are counted from ORACLE_TEST_PORT (3610 unless set), thirty in a row in all.
 //   +0 to +4    the Oracle tests: three for servers, then one for each stand-in
 //   +12, +13    the workspace tests: a server and a stand-in
+//   +16, +17    the reporting tests: two servers
+//   +18, +19    the to-do tests: two servers
 //   +20 to +29  the Metaview tests (see metaview-helpers.mjs)
 // Node refuses to fetch from a few ports whatever is listening there, and the tests then fail with nothing but
 // "Connection error" in the server's log. Keep all thirty clear of 3659, 4045, 5060, 5061, 6000 and 6665 to 6669.

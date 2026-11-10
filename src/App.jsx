@@ -7,6 +7,7 @@ import { ToastProvider, Loading, Empty, Button } from './ui.jsx';
 import Layout from './components/Layout.jsx';
 import Login, { Join } from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import Todo from './pages/Todo.jsx';
 import Inbox from './pages/Inbox.jsx';
 import Jobs from './pages/Jobs.jsx';
 import JobDetail from './pages/JobDetail.jsx';
@@ -91,6 +92,7 @@ function Workspace() {
         <Pages>
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          {ctx.isAgency && <Route path="/todo" element={<Todo />} />}
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/jobs/:id" element={<JobDetail />} />

@@ -16,6 +16,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **The Oracle** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [The Oracle](#the-oracle) and [Metaview in The Oracle](#metaview-in-the-oracle). |
+| **To do** | Each person on your team has their own list: the jobs they have picked to work on, the people to prep before an interview and the people to debrief after one. Jobs and people are dragged across from a picker, or added with a button; The Book adds people by itself from the interviews scheduled in it. Agency only. See [To do](#to-do). |
 | **Inbox** | Every new application across all clients lands in one review queue, oldest first. |
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
 | **Shortlist hand-off** | Submit a candidate to the hiring team with your write-up. They approve (the candidate moves to the next interview stage) or decline with a reason, so you can calibrate. |
@@ -58,6 +59,70 @@ GitHub page, a personal site, a company's team page, a LinkedIn Recruiter or Sal
   link there. If the link matches someone already on file, both records are kept, each profile shows
   "Possible duplicate", and an agency user can merge them. Merging moves every application, note, interview and
   email onto the record you keep.
+
+## To do
+
+Everyone on the agency team has a **To do** page, straight after Dashboard in the menu, with a count beside it of
+what is still to do. The list is the person's own: nobody else sees it or can change it, not even an admin, and
+client users have no such page.
+
+There are three lists on it. Each is in the order its owner puts it in, and every item has a tick box.
+
+- **Jobs to work on.** The jobs you have picked. Beside the list, **Open jobs** shows every open job with its client,
+  how long it has been open and how many people are in its pipeline, with a search box and a client filter. Slide a
+  job across by its grip, or press its **+**. A job can carry a short note ("find 5 more by Friday"), and its title
+  opens the job. A job that is closed afterwards stays on your list and says so, until you tick it or take it off.
+- **People to prep.** Candidates you need to prepare before an interview.
+- **People to debrief.** Candidates you need to speak to after one.
+
+Beside the two people lists, **People at interview** shows the candidates who are in an interview stage of an open
+job: yours to begin with, everyone's if you switch, and the search box finds anybody by name whatever stage they are
+at. Slide someone across, or press **To prep** or **To debrief**. A person can be on both lists. Each item shows the
+candidate, the job and client, their stage, and the day and time of the interview when The Book knows one; their
+name opens their profile and **Brief** opens the job's recruiter brief.
+
+### What The Book adds by itself
+
+Interviews scheduled in The Book fill the two people lists without anybody doing anything.
+
+- From **seven days before** an interview starts, the candidate is on the To prep list of the recruiter who owns
+  them in that job. If nobody on the team owns them, it is the person who scheduled the interview; if that was the
+  client's hiring team, nobody's, until somebody takes the candidate on.
+- When the interview's **end has passed** (or a scorecard has marked it completed), the candidate goes on that
+  person's To debrief list, and their prep comes off as done.
+- A **moved** interview keeps its items, which show the new time. Moved to more than a week away, the prep waits
+  until it is a week away again. A **cancelled** interview takes its items with it, and so does rejecting or
+  withdrawing the candidate. A person you added by hand stays on your list; only the time goes.
+- One at a time: with two interviews in a week, the candidate is to prep for the next one, and to debrief once,
+  about the latest.
+- **What you took off, or ticked, is not put back** for the same interview. A later interview for the same
+  candidate is a new one.
+- If the candidate changes hands, the item The Book added moves to the new owner's list (a note the first owner
+  wrote on it is theirs and does not go with it).
+- Nobody is put on a debrief list for an interview that ended more than seven days ago, or before the day To do
+  first ran on your workspace: the lists start with what is coming up, not with last month.
+
+The lists are brought up to date whenever somebody opens the page or the menu is drawn, and at once when an
+interview is scheduled, changed or cancelled.
+
+### Ticking things off
+
+A job or a prep is simply done. Ticking a debrief offers one box, **What did they say?** Whatever is typed there is
+saved on the candidate's profile as an agency-only note, so the debrief is not lost in a to-do list; the client's
+hiring team never sees it. The box can be left empty.
+
+Done items move to **Done** at the bottom of their list, can be un-ticked, and leave the page after seven days (they
+stay in the database).
+
+### Mouse, finger or keyboard
+
+Rows are dragged by the grip on their left, with a mouse or with a finger, and a gap opens where the row will land.
+Drag within a list to put it in a new order, from a picker into a list to add, and from a list back onto its picker
+to take it off. Everything can also be done without dragging: **+**, **To prep** and **To debrief** add; the up and
+down arrow keys move a row while its grip has the focus, and so does the row's menu; **×** takes it off; the tick
+box takes Space. On a phone the lists come first and each picker opens behind **Add jobs** or **Add people**.
+
+Deleting a job or a candidate removes their items from every list. Merging two records of one person keeps them.
 
 ## Reporting
 
@@ -607,6 +672,7 @@ server/
   index.js   Express server; serves the API and the built front end
   api.js     All API routes: auth, careers pages, jobs, pipeline, interviews, reports
   reporting.js  The Individual and Clients reports: the record of submissions, first interviews, placements and searches, and the day counting starts
+  todos.js   To do: each person's own lists of jobs to work on and people to prep and debrief, and what interviews add to them
   autofill.js  Drafting a job and its brief from a job description and intake notes
   oracle.js  The Oracle: recording and uploading calls, transcription, notes and submission drafts
   metaview.js         Metaview in The Oracle: the key, reading the list in the background, bringing calls in
@@ -664,4 +730,9 @@ they made at that client, their résumé files, and their recorded calls with th
   reports) is tested through a story acted out either side of the start date and over more than a year, with the
   reports' clock set by the test; the two reports, the start date, the placement fee on a hired candidate and the tick
   on the job form were driven in Chrome at 1280 and 390 wide on the demo data, and printed to PDF.
+  To do is tested through a story acted out against the real server with the to-do clock set by the test (adding,
+  ordering, ticking, the pickers, an interview scheduled, moved, cancelled and passed, the debrief note, one person
+  against another's list, a client user, deletion and merging, and starting on a database from before it); the page
+  was driven in Chrome on the demo data at 1280 wide with a mouse and at 390 wide with touch input, and with the
+  keyboard alone at both widths. It has not been tried on a real phone, or in Safari or Firefox.
   The other screens were verified by hand.

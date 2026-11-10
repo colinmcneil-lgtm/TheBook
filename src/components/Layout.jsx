@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
-import { LayoutDashboard, Inbox, Briefcase, Users, CalendarDays, AudioLines, ChartColumn, Building2, Settings, ChevronsUpDown, Check, LogOut, Menu as MenuIcon, X } from 'lucide-react';
+import { LayoutDashboard, ListTodo, Inbox, Briefcase, Users, CalendarDays, AudioLines, ChartColumn, Building2, Settings, ChevronsUpDown, Check, LogOut, Menu as MenuIcon, X } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate } from '../state.jsx';
 import { url } from '../lib.js';
 import { Avatar, ClientDot, Menu, cx } from '../ui.jsx';
@@ -78,6 +78,7 @@ export default function Layout({ children }) {
   const inboxCount = counts ? (isAgency ? counts.new_applicants : counts.pending_review) : 0;
   const nav = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+    isAgency && { to: '/todo', label: 'To do', icon: ListTodo, count: counts?.todo },
     { to: '/inbox', label: isAgency ? 'Inbox' : 'To review', icon: Inbox, count: inboxCount },
     { to: '/jobs', label: 'Jobs', icon: Briefcase },
     { to: '/candidates', label: 'Candidates', icon: Users },
