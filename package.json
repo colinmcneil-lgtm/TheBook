@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/index.js",
-    "predev": "node scripts/pack-extension.js",
-    "build": "node scripts/pack-extension.js && vite build",
+    "predev": "node scripts/pack-extension.js && node scripts/copy-pdf-assets.js",
+    "build": "node scripts/pack-extension.js && node scripts/copy-pdf-assets.js && vite build",
     "start": "NODE_ENV=production node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/index.js",
     "seed": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/seed.js"
   },

@@ -6,6 +6,7 @@ import {
 import { api, url, ago, since, extUrl, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
+import ResumeViewer from './ResumeViewer.jsx';
 import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal } from './CandidateModals.jsx';
 
 const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
@@ -130,10 +131,11 @@ function CandidateView({ data, onClose }) {
           onChange={setTab}
           tabs={[
             { id: 'overview', label: 'Overview' },
+            app.resume_file && { id: 'resume', label: 'Résumé' },
             { id: 'interviews', label: 'Interviews', count: data.interviews.length || undefined },
             { id: 'activity', label: 'Activity' },
             { id: 'emails', label: 'Emails', count: data.emails.length || undefined },
-          ]}
+          ].filter(Boolean)}
         />
       </div>
 
@@ -151,7 +153,8 @@ function CandidateView({ data, onClose }) {
         ))}
         <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
 
-        {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} />}
+        {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onResume={() => setTab('resume')} />}
+        {tab === 'resume' && app.resume_file && <ResumeViewer app={app} />}
         {tab === 'interviews' && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onScorecard={(i) => setModal({ scorecard: i })} />}
         {tab === 'activity' && <ActivityTab data={data} />}
         {tab === 'emails' && <EmailsTab data={data} onCompose={() => setModal('email')} />}
@@ -207,7 +210,7 @@ function ReviewBanner({ data, onDecide }) {
   );
 }
 
-function Overview({ data, onOffer }) {
+function Overview({ data, onOffer, onResume }) {
   const { isAgency, bump, user } = useApp();
   const { application: app, client } = data;
   const [note, setNote] = useState('');
@@ -299,14 +302,16 @@ function Overview({ data, onOffer }) {
           </dl>
         </Card>
         {app.resume_file ? (
-          <a href={`/api/applications/${app.id}/resume`} download className="flex items-center gap-3 rounded-xl border border-line bg-white px-4 py-3 text-sm hover:border-brand-300">
-            <span className="flex size-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700"><FileText className="size-4" /></span>
-            <span className="min-w-0 flex-1">
-              <span className="block font-medium text-stone-900">Résumé</span>
-              <span className="block truncate text-xs text-stone-500">{app.resume_name}</span>
-            </span>
-            <Download className="size-4 text-stone-400" />
-          </a>
+          <div className="flex items-center gap-1 rounded-xl border border-line bg-white pr-2 text-sm hover:border-brand-300">
+            <button type="button" onClick={onResume} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl px-4 py-3 text-left">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700"><FileText className="size-4" /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium text-stone-900">View résumé</span>
+                <span className="block truncate text-xs text-stone-500">{app.resume_name}</span>
+              </span>
+            </button>
+            <a href={`/api/applications/${app.id}/resume`} download aria-label="Download résumé" title="Download" className="rounded-md p-2 text-stone-400 hover:bg-stone-100 hover:text-stone-700"><Download className="size-4" /></a>
+          </div>
         ) : (
           <div className="rounded-xl border border-dashed border-stone-300 px-4 py-3 text-sm text-stone-500">No résumé on file.</div>
         )}
