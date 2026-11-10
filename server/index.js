@@ -48,7 +48,15 @@ app.use('/api', api);
 
 if (isProd) {
   app.use(express.static(path.resolve('dist'), { index: false, maxAge: '1h' }));
-  app.get(/.*/, (req, res) => res.sendFile(path.resolve('dist/index.html')));
+  // Built files have their contents in their names, and each release has new ones. A name that is not there is an
+  // old tab asking for a file from before the last release: say so plainly, rather than sending the page in its place.
+  app.use('/assets', (req, res) => res.status(404).type('text/plain').send('Not found'));
+  // The page itself names those files, so it is checked with the server on every visit and a tab opened after a
+  // release always starts from the current ones.
+  app.get(/.*/, (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(path.resolve('dist/index.html'));
+  });
 } else {
   const { createServer } = await import('vite');
   const vite = await createServer({ server: { middlewareMode: true }, appType: 'spa' });
