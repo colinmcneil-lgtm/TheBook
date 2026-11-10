@@ -81,13 +81,17 @@ candidate in the app, and put on a job later when the right role comes up.
   entry they have and makes nothing new. An address or a link that is on an entry under a plainly different name
   is put to you instead, so one person's résumé, photo and note never land on another's entry.
 - **Résumés are never written over.** When somebody who already has a résumé is saved again with another, the new
-  one goes on their profile and the one they had is kept under "Earlier résumés" there, for the agency to download.
-  The same file sent twice is kept once. Earlier résumés are deleted only with the person.
+  one goes on their profile and the one they had is kept under "Earlier résumés" there, for the agency to download
+  under the name it was uploaded with, accents and other alphabets included. The same file sent twice is kept
+  once. Earlier résumés are deleted only with the person.
 - **Putting them on a job.** Their entry becomes that job's application at the stage chosen (the first stage if
   none is), and keeps its notes, résumé, calls and history. The date they entered the job is the day they were put
   on it, so time to hire is not counted from the day they were first saved. The client's hiring team sees the
   application from that moment on: nothing written or sent while the person was on no job is shown to them, nor
-  the date they were first saved.
+  the date they were first saved. Put straight into an interview stage, Offer or Hired, they are picked out in
+  Recent activity on the dashboard as anyone added straight into that stage is. If they go back to The Book and
+  are later put on another job, what happened on the first job stays in their history and is not picked out
+  again under the second.
 - **However you add them, it is the same entry.** "Add to a job" on their profile, choosing a job in the
   extension, and Add candidate in the app with a job chosen all do this: there is no way to end up with a second
   record of somebody who was in The Book. Add candidate and the extension recognise them by e-mail address or
@@ -112,10 +116,19 @@ candidate in the app, and put on a job later when the right role comes up.
 The first start after this was added changes the database in place: three columns stop being required, history
 lines and e-mails gain a marker that is off on every existing row, one empty table is added for earlier résumés,
 and nothing else about existing people or applications changes. `test/pool-upgrade.test.mjs` builds a database with
-the code from before, fills it, upgrades it and compares every row, id, counter, index and foreign key, including
-a start that is cut off half-way. It was run on made-up databases, not on a copy of a live one, so take a back-up
-of `DATA_DIR` before the first deploy. `test/pool.test.mjs` runs the rest against the real API on two ports from
-`POOL_TEST_PORT` (the two after the calendar tests' five unless set).
+the code from before, fills it, upgrades it and compares every row, id, counter, index and foreign key. "Before"
+is two releases, each kept word for word under `test/fixtures/`: the one this was first built on (`before-pool/`,
+commit 5f16829) and the one that was live when it was finished (`before-pool-3f7b1a4/`), which gives older history
+lines their newer types and adds the activity feed's index. A database the newer release never opened gets both
+changes in one start, and ends up the same as one it had opened. Every test is run on a database made by each
+release, and on one whose tables began at the first release; a database made by the first release's own code
+(`first-release/`) that nothing since has opened is upgraded too. The start is also cut off before each of its
+steps in turn: every time nothing is lost or renumbered, and the next start finishes the job. (That found one
+older step, the one that gives each candidate an owner, which a cut at the wrong moment left undone for good; it
+is now saved in one piece. The live database passed that step long ago.) All of this was run on made-up
+databases, not on a copy of a live one, so take a back-up of `DATA_DIR` before the first deploy.
+`test/pool.test.mjs` runs the rest against the real API on two ports from `POOL_TEST_PORT` (the two after the
+calendar tests' five unless set).
 
 ## The Oracle
 
@@ -632,7 +645,9 @@ Store instead, zip the folder and submit it from a Chrome developer account.
 **It does not update itself.** Loaded from a folder, an installed copy stays as it is until it is replaced. After
 a release that changes the extension (0.4.0 added "No job yet"), each person downloads it again from Settings,
 Browser extension, unzips it over the old folder, and presses the reload arrow on "The Book" at
-`chrome://extensions`; the workspace address is kept. From 0.5.0 the popup compares itself with the copy the
+`chrome://extensions`; the workspace address is kept. 0.5.0 also has the photo fixes that went out as 0.3.1 (the
+picture is taken only from the profile that was read, and permission is asked for only when the picture could not
+be read at all). From 0.5.0 the popup compares itself with the copy the
 workspace has ready and says so across the top when it is behind. A copy from before that cannot say anything, so
 tell the team when you deploy. An older copy keeps working in the meantime: it has no "No job yet" choice, but
 choosing a job for somebody who is in The Book still moves their entry, because the workspace does that itself.

@@ -10,11 +10,10 @@ import http from 'node:http';
 import path from 'node:path';
 import { startServer, session, tempDir, PORTS } from './oracle-helpers.mjs';
 import { putJson } from './phone-helpers.mjs';
-import { PORTS as CALENDAR_PORTS } from './calendar-helpers.mjs';
 
-// Two ports that the other test files leave free whatever they are moved to: the one after the phone tests' seven,
-// and the one after the calendar tests' five.
-const PORT = PORTS.main + 12, AI_PORT = CALENDAR_PORTS.internal + 1;
+// Two ports that the other test files leave free whatever they are moved to: the two after the phone tests' seven.
+// (The two after the calendar tests' five belong to test/pool.test.mjs, which runs at the same time as this file.)
+const PORT = PORTS.main + 12, AI_PORT = PORTS.main + 13;
 
 const DRAFT = {
   job: { title: 'Head of Sales', department: 'Commercial', location: 'Manchester', work_mode: 'onsite', employment_type: 'full_time', salary_min: 80000, salary_max: 95000, salary_currency: 'GBP', openings: 1,

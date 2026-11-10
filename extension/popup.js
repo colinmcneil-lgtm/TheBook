@@ -430,8 +430,9 @@ async function send() {
       $('done-title').textContent = result.known ? `Added to ${stored}'s existing record` : `${typed} added`;
       $('done-text').textContent = where;
     }
-    // A picture the workspace would not keep is said plainly, so nobody looks for it later.
-    if (result.photo_rejected) $('done-text').textContent += ' Their photo could not be kept, so none was saved.';
+    // A picture the workspace would not keep is said plainly, so nobody looks for it later. It follows whichever
+    // line is above it as a sentence of its own (the job line ends without a full stop, the others with one).
+    if (result.photo_rejected) $('done-text').textContent = `${$('done-text').textContent.replace(/\.$/, '')}. Their photo could not be kept, so none was saved.`;
     $('open-candidate').onclick = () => chrome.tabs.create({ url: profileUrl(jobId, result.id) });
     show('done');
   } catch (err) {

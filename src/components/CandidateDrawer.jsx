@@ -213,7 +213,8 @@ function CandidateView({ data, onClose }) {
         <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
 
         {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onResume={() => setTab('resume')} />}
-        {tab === 'resume' && app.resume_file && <ResumeViewer app={app} />}
+        {/* Drawn afresh when the file changes: a newer résumé can take the place of this one under the same address and name. */}
+        {tab === 'resume' && app.resume_file && <ResumeViewer key={app.resume_file} app={app} />}
         {tab === 'interviews' && !general && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onScorecard={(i) => setModal({ scorecard: i })} />}
         {tab === 'calls' && isAgency && <CallsTab data={data} calls={calls} error={callsError} onCall={candidate.phone ? callThroughTheBook : null} />}
         {tab === 'activity' && <ActivityTab data={data} />}

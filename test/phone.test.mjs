@@ -641,7 +641,8 @@ test('a recording that is not ready yet is fetched again, and a delete that fail
   assert.deepEqual(fetches.map((r) => r.status), [404, 404, 200]);
   const deletes = await until(async () => restCalls(twilio, mark, /^DELETE .*\/Recordings\//), (list) => list.some((r) => r.status === 204));
   assert.deepEqual(deletes.map((r) => r.status), [500, 204], 'the recording was kept at Twilio until it was safely here, and removed once it could be');
-  const [row] = db('SELECT recording_state, recording_deleted_at FROM phone_calls WHERE id = ?', placed.id);
+  // Twilio has answered the delete; The Book writes that down a moment after the answer reaches it.
+  const row = await until(async () => db('SELECT recording_state, recording_deleted_at FROM phone_calls WHERE id = ?', placed.id)[0], (r) => Boolean(r.recording_deleted_at));
   assert.equal(row.recording_state, 'stored');
   assert.ok(row.recording_deleted_at);
 });
@@ -947,8 +948,13 @@ test('two records merged into one person keep their phone calls, and somebody de
 });
 
 test('what Twilio told us is kept with numbers and keys masked', async () => {
-  const kept = db('SELECT kind, params FROM phone_webhooks').map((row) => `${row.kind} ${row.params}`).join('\n');
-  assert.ok(kept.length > 1000);
+  const all = db('SELECT kind, params FROM phone_webhooks').map((row) => `${row.kind} ${row.params}`).join('\n');
+  assert.ok(all.length > 1000);
+  // Twilio's own names for calls and recordings are 32 random hex characters each. Among a hundred of them, four in
+  // a row are now and then the digits of the PIN used here (about one run in twenty), which says nothing about what
+  // was keyed in. Each is cut down to its first two letters before looking for what must not be kept.
+  const kept = all.replace(/\b(AC|CA|RE|PN)[0-9a-f]{32}\b/g, '$1');
+  assert.notEqual(kept, all);
   assert.match(kept, /"DialCallStatus":"completed"/);
   for (const secret of [PIN, ...Object.values(N), BOOK_NUMBER]) assert.ok(!kept.includes(secret), `${secret} is not kept`);
   assert.match(kept, /"Digits":"\(4 keys\)"/);

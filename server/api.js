@@ -1066,6 +1066,16 @@ const mailVars = (a, user) => ({
 /** The activity type for arriving in a stage. The kind of stage is part of it, so the dashboard can pick out interview and offer moves. */
 const arrivalType = (stage) => (stage.kind === 'hired' ? 'hired' : stage.kind === 'interview' ? 'stage_interview' : stage.kind === 'offer' ? 'stage_offer' : 'stage');
 
+/**
+ * Somebody starts in a job at this stage: added straight into it, or put on the job from The Book. In an interview
+ * stage, Offer or Hired that is the same news as being moved there, so it gets a line of its own for the dashboard
+ * to pick out. `at` gives the line the moment of the lines written with it.
+ */
+function logArrival(applicationId, userId, stage, at) {
+  if (stage.kind === 'applied') return;
+  logActivity(applicationId, userId, arrivalType(stage), stage.kind === 'hired' ? 'Marked as hired' : `Started at ${stage.name}`, at ? { at } : undefined);
+}
+
 /** `quiet` leaves the activity line to the caller, who is writing one of its own about the same event. */
 function moveToStage(app, stageId, user, { quiet = false } = {}) {
   const stage = q.get('SELECT * FROM stages WHERE id = ? AND job_id = ?', int(stageId), app.job_id);
@@ -1247,7 +1257,8 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
             `INSERT INTO applications (candidate_id, job_id, stage_id, status, source, cover_note, resume_file, resume_name, applied_at, stage_entered_at, updated_at, owner_id)
              VALUES (?, NULL, NULL, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
             cand.id, source, text(b.cover_note, 6000), ...resume, t, t, t, req.user.id);
-          logActivity(appId, req.user.id, 'added', `Added to The Book (${SOURCE_LABELS[source].toLowerCase()})`);
+          // The same moment as the entry itself: "added" on an entry is read back from this line when they return from a job.
+          logActivity(appId, req.user.id, 'added', `Added to The Book (${SOURCE_LABELS[source].toLowerCase()})`, { at: t });
         } else {
           const stage = q.get('SELECT * FROM stages WHERE id = ? AND job_id = ?', int(b.stage_id), job.id)
             ?? q.get(`SELECT * FROM stages WHERE job_id = ? AND kind = 'applied'`, job.id);
@@ -1258,8 +1269,7 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
             cand.id, job.id, stage.id, hired ? 'hired' : 'active', source, text(b.cover_note, 6000), ...resume, t, t, t, hired ? t : null, req.user.id);
           q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
           logActivity(appId, req.user.id, 'added', `Added to the pipeline (${SOURCE_LABELS[source].toLowerCase()})`);
-          // Added straight into an interview stage, Offer or Hired: that is the same news as being moved there.
-          if (stage.kind !== 'applied') logActivity(appId, req.user.id, arrivalType(stage), hired ? 'Marked as hired' : `Started at ${stage.name}`);
+          logArrival(appId, req.user.id, stage);
         }
       }
       // How somebody who came from The Book was matched is the agency's business, so the hiring team is not shown those lines.
@@ -1565,14 +1575,21 @@ api.put('/applications/:id/offer', agencyOnly, (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * The header that makes a résumé a download under the name it was uploaded with. Always a download, never rendered
+ * inside this site: the file came from an anonymous upload. The name is given twice: plain letters for old
+ * software, and in full (accents, other alphabets) for every current browser.
+ */
+function downloadAs(name) {
+  const safeName = (name || 'resume').replace(/[^\w.\- ]+/g, '_');
+  const fullName = encodeURIComponent((name || 'resume').replace(/[\u0000-\u001f\u007f\\/]+/g, '_')).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `attachment; filename="${safeName}"; filename*=UTF-8''${fullName}`;
+}
+
 api.get('/applications/:id/resume', (req, res) => {
   const a = loadApp(req.params.id, req.user);
   if (!a.resume_file) bad('No résumé on file.', 404);
-  const safeName = (a.resume_name || 'resume').replace(/[^\w.\- ]+/g, '_');
-  // Always a download, never rendered inside this site: the file came from an anonymous upload. The name is given
-  // twice: plain letters for old software, and in full (accents, other alphabets) for every current browser.
-  const fullName = encodeURIComponent((a.resume_name || 'resume').replace(/[\u0000-\u001f\u007f\\/]+/g, '_')).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-  res.setHeader('Content-Disposition', `attachment; filename="${safeName}"; filename*=UTF-8''${fullName}`);
+  res.setHeader('Content-Disposition', downloadAs(a.resume_name));
   // Sent by name from the uploads folder, so a data folder under a hidden folder (~/.thebook, say) is served like any other.
   res.sendFile(path.basename(a.resume_file), { root: UPLOAD_DIR, dotfiles: 'allow' }, (err) => {
     if (err && !res.headersSent) res.status(404).json({ error: 'The résumé file is missing.' });
@@ -1584,8 +1601,7 @@ api.get('/applications/:id/resumes/:earlier', agencyOnly, (req, res) => {
   const a = loadApp(req.params.id, req.user);
   const kept = q.get('SELECT * FROM earlier_resumes WHERE id = ? AND application_id = ?', int(req.params.earlier), a.id);
   if (!kept) bad('That résumé is no longer on file.', 404);
-  const safeName = (kept.resume_name || 'resume').replace(/[^\w.\- ]+/g, '_');
-  res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`); // always a download, as for the résumé on file
+  res.setHeader('Content-Disposition', downloadAs(kept.resume_name)); // always a download, under its whole name, as for the résumé on file
   res.sendFile(path.basename(kept.resume_file), { root: UPLOAD_DIR, dotfiles: 'allow' }, (err) => {
     if (err && !res.headersSent) res.status(404).json({ error: 'The résumé file is missing.' });
   });
@@ -1806,6 +1822,7 @@ function entryToJob({ entry, person, job, stage, into, user }) {
   // Notes on someone without a job are always the agency's own; this makes sure of it before a client can open the entry.
   q.run('UPDATE notes SET private = 1 WHERE application_id = ?', entry.id);
   logActivity(entry.id, user.id, 'added', `Added to ${job.title} at ${stage.name}`, { at });
+  logArrival(entry.id, user.id, stage, at);
   return { at, sparePhoto: into?.photo_file && person.photo_file ? person.photo_file : null };
 }
 
@@ -1935,7 +1952,8 @@ api.post('/applications/:id/add-to-job', agencyOnly, (req, res) => {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           a.candidate_id, job.id, stage.id, hired ? 'hired' : 'active', source, resume, resume ? a.resume_name : null, t, t, t, hired ? t : null, req.user.id);
         q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
-        logActivity(appId, req.user.id, 'added', `Added to ${job.title} at ${stage.name}`);
+        logActivity(appId, req.user.id, 'added', `Added to ${job.title} at ${stage.name}`, { at: t });
+        logArrival(appId, req.user.id, stage, t);
         return appId;
       });
       return res.json({ id, merged: false });
@@ -2133,7 +2151,10 @@ api.get('/dashboard', (req, res) => {
     `SELECT ac.id, ac.type, ac.detail, ac.created_at, ac.application_id, u.name AS user_name, c.name AS candidate_name, j.title AS job_title, cl.name AS client_name,
        -- The moments worth shouting about: into an interview stage, an interview booked, approved by the hiring team,
        -- an offer made or accepted, a hire. Each is told by its type (older rows are given theirs when the database opens).
+       -- A line from before somebody was put on this job is not this job's news: they were in The Book then, or on
+       -- an earlier job they came back from, and its interviews and offers were that job's.
        CASE
+         WHEN ac.agency_only = 1 OR (a.general_until IS NOT NULL AND ac.created_at < a.general_until) THEN NULL
          WHEN ac.type = 'hired' THEN 'hired'
          WHEN ac.type = 'stage_interview' THEN 'interview'
          WHEN ac.type = 'stage_offer' THEN 'offer'

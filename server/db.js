@@ -304,11 +304,20 @@ addColumn('calls', 'notes_auto', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('calls', 'notes_blind', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('calls', 'notes_error', 'TEXT');
 if (!db.prepare('PRAGMA table_info(applications)').all().some((c) => c.name === 'owner_id')) {
-  db.exec('ALTER TABLE applications ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL');
-  // Existing candidates belong to whoever added them, where that is known.
-  db.exec(`UPDATE applications SET owner_id = (
-    SELECT ac.user_id FROM activities ac JOIN users u ON u.id = ac.user_id AND u.role != 'client'
-    WHERE ac.application_id = applications.id AND ac.type = 'added' ORDER BY ac.id LIMIT 1)`);
+  // The column and the owners that go in it are saved together. Were a start cut off between the two, the next one
+  // would find the column there and never fill it in.
+  db.exec('BEGIN');
+  try {
+    db.exec('ALTER TABLE applications ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL');
+    // Existing candidates belong to whoever added them, where that is known.
+    db.exec(`UPDATE applications SET owner_id = (
+      SELECT ac.user_id FROM activities ac JOIN users u ON u.id = ac.user_id AND u.role != 'client'
+      WHERE ac.application_id = applications.id AND ac.type = 'added' ORDER BY ac.id LIMIT 1)`);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
 // Notes are in this list because a recorded call remembers the note its summary was saved as: a number handed out
 // twice would let it write over somebody else's note.
