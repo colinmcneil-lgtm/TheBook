@@ -10,7 +10,7 @@ import ResumeViewer from './ResumeViewer.jsx';
 import { CallStatus, PhoneMark, callName, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
 import { personOf, usePhone } from '../oracle/phone.jsx';
 import { telHref } from '../oracle/calls.js';
-import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal } from './CandidateModals.jsx';
+import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, PlacementFeeModal, EditCandidateModal } from './CandidateModals.jsx';
 
 const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
 const DELIVERY = { sent: { label: 'Sent', tone: 'green' }, failed: { label: 'Delivery failed', tone: 'red' }, not_configured: { label: 'Saved, not sent', tone: 'amber' } };
@@ -34,7 +34,7 @@ function CandidateView({ data, onClose }) {
   // and the call is written up). Otherwise the number is an ordinary link that dials from their own device.
   const callThroughTheBook = isAgency && phone.status?.configured ? () => phone.openDialer({ person: personOf(data), application_id: data.application.id }) : null;
   const [tab, setTab] = useState('overview');
-  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'edit' | { review } | { scorecard }
+  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'fee' | 'edit' | { review } | { scorecard }
   const { application: app, candidate, job, client, stages } = data;
   const stage = stages.find((s) => s.id === app.stage_id);
   const next = stages.find((s) => s.position === stage.position + 1);
@@ -196,7 +196,7 @@ function CandidateView({ data, onClose }) {
         ))}
         <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
 
-        {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onResume={() => setTab('resume')} />}
+        {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} />}
         {tab === 'resume' && app.resume_file && <ResumeViewer app={app} />}
         {tab === 'interviews' && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onScorecard={(i) => setModal({ scorecard: i })} />}
         {tab === 'calls' && isAgency && <CallsTab data={data} calls={calls} error={callsError} onCall={candidate.phone ? callThroughTheBook : null} />}
@@ -209,6 +209,7 @@ function CandidateView({ data, onClose }) {
       {modal === 'email' && <EmailModal data={data} onClose={() => setModal(null)} />}
       {modal === 'submit' && <SubmitModal data={data} onClose={() => setModal(null)} />}
       {modal === 'offer' && <OfferModal data={data} onClose={() => setModal(null)} />}
+      {modal === 'fee' && <PlacementFeeModal data={data} onClose={() => setModal(null)} />}
       {modal === 'edit' && <EditCandidateModal data={data} onClose={() => setModal(null)} />}
       {modal?.review && <ReviewModal data={data} decision={modal.review} onClose={() => setModal(null)} />}
       {modal?.scorecard && <ScorecardModal interview={modal.scorecard} criteria={job.criteria} candidateName={candidate.name} onClose={() => setModal(null)} />}
@@ -254,7 +255,7 @@ function ReviewBanner({ data, onDecide }) {
   );
 }
 
-function Overview({ data, onOffer, onResume }) {
+function Overview({ data, onOffer, onFee, onResume }) {
   const { isAgency, bump, user } = useApp();
   const { application: app, client } = data;
   const [note, setNote] = useState('');
@@ -370,11 +371,30 @@ function Overview({ data, onOffer, onResume }) {
               <dl className="mt-2 text-sm">
                 {data.offer.salary != null && row('Base salary', money(data.offer.salary, client.currency))}
                 {data.offer.start_date && row('Start date', fmtDate(data.offer.start_date, true))}
-                {isAgency && client.fee_percent > 0 && data.offer.salary != null && row(`Your fee (${client.fee_percent}%)`, money((data.offer.salary * client.fee_percent) / 100, client.currency))}
+                {/* Once they are hired the fee is the one recorded under Placement below, so this estimate from today's terms steps aside. */}
+                {isAgency && !data.placement && client.fee_percent > 0 && data.offer.salary != null && row(`Your fee (${client.fee_percent}%)`, money((data.offer.salary * client.fee_percent) / 100, client.currency))}
               </dl>
             ) : <p className="mt-1 text-sm text-stone-500">No offer recorded yet.</p>}
             {data.offer?.notes && <p className="mt-2 text-[13px] text-stone-600">{data.offer.notes}</p>}
             {isAgency && <Button size="sm" className="mt-3 w-full" onClick={onOffer}>{data.offer ? 'Update offer' : 'Record offer'}</Button>}
+          </Card>
+        )}
+        {/* The placement recorded for Reports when they were marked hired. Sent to agency users only. */}
+        {data.placement && (
+          <Card className="p-4">
+            <h3 className="text-sm font-semibold text-stone-900">Placement</h3>
+            <dl className="mt-2 text-sm">
+              {row('Placement fee', data.placement.fee != null ? money(data.placement.fee, data.placement.currency) : <span className="font-normal text-stone-500">Not set</span>)}
+              {row('Credited to', data.placement.credited_to || 'No recruiter')}
+              {row('Recorded', fmtDate(data.placement.at, true))}
+            </dl>
+            <p className="mt-2 text-xs leading-relaxed text-stone-500">
+              {data.placement.fee_edited ? 'The fee was entered by hand.'
+                : data.placement.fee != null ? `The fee was worked out when they were hired: ${data.placement.fee_percent}% of the ${money(data.placement.salary, data.placement.currency)} offer.`
+                  : 'No fee could be worked out when they were hired: the offer had no salary, or the client has no fee per hire.'}
+              {' '}This is the figure Reports counts. Your agency only.
+            </p>
+            <Button size="sm" className="mt-3 w-full" onClick={onFee}>{data.placement.fee != null ? 'Correct the fee' : 'Add the fee'}</Button>
           </Card>
         )}
         {data.others.length > 0 && (

@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, q, tx, setSetting, createStages, DATA_DIR, UPLOAD_DIR } from './db.js';
+import { reportStart } from './reporting.js';
 
 const reset = process.argv.includes('--reset');
 if (process.env.NODE_ENV === 'production' && !process.argv.includes('--force')) {
@@ -19,7 +20,7 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   }
   console.log(`Wiping ${DATA_DIR} ...`);
   tx(() => {
-    for (const t of ['phone_webhooks', 'phone_calls', 'calls', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
+    for (const t of ['report_events', 'phone_webhooks', 'phone_calls', 'calls', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
       db.exec(`DELETE FROM ${t}`);
     db.exec('DELETE FROM sqlite_sequence'); // a wiped database starts numbering from 1 again
   });
@@ -308,8 +309,8 @@ tx(() => {
         q.run(`UPDATE applications SET review_status = ?, submission_note = ?, submitted_by = ?, review_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?`,
           pending ? 'pending' : 'approved',
           `${name.split(' ')[0]} is currently ${title} at ${pick(COMPANIES)}. Strong on the core of this brief, well regarded by former colleagues, and realistic on salary. Notice period is one month. Worth meeting.`,
-          priya, pending ? null : 'Agreed, keen to meet.', pending ? null : j.panel[0], pending ? null : enteredAt(1.5), appId);
-        act(appId, priya, 'submitted', 'Submitted to the hiring team for review', enteredAt(1.2));
+          owner ?? priya, pending ? null : 'Agreed, keen to meet.', pending ? null : j.panel[0], pending ? null : enteredAt(1.5), appId);
+        act(appId, owner ?? priya, 'submitted', 'Submitted to the hiring team for review', enteredAt(1.2));
         if (!pending) act(appId, j.panel[0], 'review', 'Approved for interview', enteredAt(1.5));
       }
 
@@ -326,6 +327,48 @@ tx(() => {
           appId, salary, ahead(status === 'hired' ? 12 : 30, 9).slice(0, 10), st, 'Includes standard benefits package.', enteredAt(hiredStage - 1), enteredAt(hiredStage - 1));
         act(appId, alex, 'offer', `Offer ${st}`, enteredAt(hiredStage - 1));
       }
+    }
+  }
+
+  // Reporting. A real workspace counts from 16 November 2026 and records nothing earlier. So that the demo's
+  // Individual and Clients reports have something in them, the demo alone counts from a Monday about five months
+  // back, and the moments those reports count are written down here for the history made above, as the server
+  // would have recorded them had it been running then: each search's kickoff, each first submission, the first
+  // interview with the client that followed it, and each hire with its fee.
+  const monday = new Date(Date.now() - 150 * DAY);
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  setSetting('reports_start', monday.toISOString().slice(0, 10));
+  const counted = reportStart();
+  q.run(`UPDATE offers SET accepted_at = created_at WHERE status = 'accepted'`);
+  for (const j of q.all('SELECT id, client_id, opened_at FROM jobs WHERE opened_at >= ?', counted.at)) {
+    q.run(`INSERT INTO report_events (kind, job_id, client_id, at) VALUES ('search_opened', ?, ?, ?)`, j.id, j.client_id, j.opened_at);
+  }
+  const moment = (kind, a, userId, at) => q.run(
+    'INSERT INTO report_events (kind, application_id, candidate_name, job_id, client_id, user_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)', kind, a.id, a.name, a.job_id, a.client_id, userId, at);
+  const history = q.all(
+    `SELECT a.id, a.job_id, a.status, a.review_status, a.submitted_by, a.owner_id, a.hired_at, c.name, j.client_id, cl.fee_percent, cl.currency
+     FROM applications a JOIN candidates c ON c.id = a.candidate_id JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id ORDER BY a.id`);
+  for (const a of history) {
+    const sent = a.review_status ? q.get(`SELECT created_at AS at FROM activities WHERE application_id = ? AND type = 'submitted' ORDER BY id LIMIT 1`, a.id)?.at : null;
+    if (sent && sent >= counted.at) {
+      moment('submission', a, a.submitted_by, sent);
+      // Their first interview with the client: already in such a stage when they were submitted, or else whichever
+      // came first afterwards, a move into one or an interview booked for them.
+      const withClient = (when, after) => q.get(
+        `SELECT h.entered_at AS at FROM stage_history h JOIN stages s ON s.id = h.stage_id
+         WHERE h.application_id = ? AND s.kind = 'interview' AND s.with_client = 1 AND h.entered_at ${after ? '>' : '<='} ? ORDER BY h.entered_at LIMIT 1`, a.id, when)?.at;
+      const booked = q.get('SELECT MIN(created_at) AS at FROM interviews WHERE application_id = ? AND created_at > ?', a.id, sent).at;
+      const met = withClient(sent, false) ? sent : [withClient(sent, true), booked].filter(Boolean).sort()[0];
+      if (met) moment('first_interview', a, a.submitted_by, met);
+    }
+    if (a.status === 'hired' && a.hired_at >= counted.at) {
+      const offer = q.get('SELECT salary, accepted_at FROM offers WHERE application_id = ?', a.id);
+      const fee = offer?.salary != null && a.fee_percent > 0 ? Math.round((offer.salary * a.fee_percent) / 100) : null;
+      q.run(
+        `INSERT INTO report_events (kind, application_id, candidate_name, job_id, client_id, user_id, at, filled_at, salary, fee_percent, fee, currency)
+         VALUES ('placement', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        a.id, a.name, a.job_id, a.client_id, a.owner_id ?? a.submitted_by, a.hired_at, offer?.accepted_at && offer.accepted_at <= a.hired_at ? offer.accepted_at : a.hired_at,
+        offer?.salary ?? null, a.fee_percent, fee, a.currency);
     }
   }
 

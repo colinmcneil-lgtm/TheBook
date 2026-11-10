@@ -23,7 +23,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Interviews** | Schedule with a panel, download a calendar file, and collect a structured scorecard from each interviewer against the criteria set on the job. Outstanding scorecards are chased in the sidebar and dashboard. |
 | **Your calendar** | Each recruiter can connect their own calendar to The Oracle with a private link. Their day is shown with The Book's interviews in it, each event says which candidate it is probably with, and "+ Add" marks the ones to record. Agency only. See [Your calendar in The Oracle](#your-calendar-in-the-oracle). |
 | **Email** | Templates with merge fields; every message is recorded on the candidate. Application confirmations, interview invitations and rejections can be sent automatically. |
-| **Reports** | Funnel conversion, source effectiveness, weekly application volume, time to hire, open-role ageing and hires. Printable for client reviews. Your retainer and placement-fee revenue is shown to your agency only. |
+| **Reports** | Funnel conversion, source effectiveness, weekly application volume, time to hire, open-role ageing and hires. Printable for client reviews. Your retainer and placement-fee revenue is shown to your agency only. Two more reports for your agency alone: each recruiter's submissions, interviews and placements, and each client's searches, fill rate, time to fill and billings. See [Reporting](#reporting). |
 | **Access** | Agency admins and recruiters see every client. Client users see only their own company, and never see your fees, internal brief or agency-only notes. |
 | **Accounts** | Send a one-time invitation link (from a client's page or Settings, Team) and the person sets their own password. Or people can use "Create an account" on the sign-in page to ask for access: nothing is granted until you approve the request and choose which client's hiring team it joins, and the person then sets their password from a one-time link sent to the address they gave. |
 
@@ -60,6 +60,89 @@ GitHub page, a personal site, a company's team page, a LinkedIn Recruiter or Sal
   link there. If the link matches someone already on file, both records are kept, each profile shows
   "Possible duplicate", and an agency user can merge them. Merging moves every application, note, interview and
   email onto the record you keep.
+
+## Reporting
+
+The Reports page has three views for the agency: **Overview** (the funnel, sources and hires, as before),
+**Individual** (one row per recruiter) and **Clients** (one row per client). The view is in the address
+(`/reports?view=individual`, `/reports?view=clients`), so a report can be linked to, and each one prints. Client
+users see the Overview only; the other two, and everything behind them, are refused to them.
+
+### When counting starts
+
+Individual and Clients count from **Monday 16 November 2026**, from the start of that day in Toronto. Nothing that
+happened before that moment is counted, and "lifetime" means since then. Before that day the two views say when
+counting begins and show no numbers. An admin can see and change the date at the top of either view. The numbers are
+written down as things happen, so moving the date later hides what was recorded before it, and moving it earlier
+cannot bring back anything from before counting first began. The day is read in Toronto time; set
+`REPORTS_TIMEZONE` (for example `America/Vancouver`) to read it elsewhere.
+
+Something first done before the start is not made up for by doing it again afterwards: a candidate first submitted
+the week before is not counted when they are sent again, and neither is the interview that follows.
+
+### What is recorded, and when
+
+Each moment is recorded once for a candidate in a job, at the moment it happens, with the recruiter credited as
+things stood then. Reassigning a candidate or editing a client's terms later changes nothing that was recorded.
+
+- **Submission.** The first time a candidate is submitted to the client's hiring team, credited to the person who
+  submitted them.
+- **First interview.** The first interview with the client that a submitted candidate gets: whichever comes first
+  after their submission, being moved into an interview stage ticked "Interview with the client" or having an
+  interview scheduled in The Book. A candidate already sitting in such a stage when they are submitted counts at
+  the submission. It is credited to whoever submitted them. A candidate interviewed without ever being submitted is
+  not counted.
+- **Placement.** A candidate is marked hired, credited to the recruiter who owns them in that job at that moment
+  (whoever submitted them, if nobody owns them). The fee recorded is the salary on their offer times the client's fee
+  percentage at that moment; if the offer has no salary yet, the fee is worked out when the salary is added. An
+  agency user can correct it on the hired candidate's profile, under Placement. If a hire is undone the placement is
+  removed; a hired candidate who is rejected or withdraws stops counting, and counts again as before if they are
+  returned to the pipeline.
+- **Search opened.** A job becomes open for the first time (kickoff).
+
+Deleting a candidate or a job removes what was recorded for them. Merging two records of one person keeps it.
+
+Each interview stage on the job form has a tick, **Interview with the client**. It starts ticked, except on a stage
+whose name contains "recruiter", "screen" or "agency", and the stages of jobs that already existed were given the
+same starting values. Changing a tick affects candidates who reach the stage afterwards, not those already in it.
+
+### Individual: one row per recruiter
+
+For a period you choose: since counting started, this month, the last 30 days, the last 90 days or the last 12
+months. Admins see everyone on the agency team who has anything recorded, and a totals row; a recruiter sees only
+their own row. Click a column heading to sort by it.
+
+| Number | How it is counted |
+| --- | --- |
+| Submissions | The recruiter's submissions recorded in the period. |
+| Interviews | First interviews in the period for candidates the recruiter submitted. |
+| Interview/Submission ratio | Interviews divided by submissions, both in the period, as a percentage; a dash when there are no submissions. |
+| Placements | Placements credited to the recruiter in the period. |
+
+### Clients: one row per client
+
+Above the table are two drop-downs: the metric to sort by, and **High to low** or **Low to high**. Clicking a column
+heading does the same. A client with nothing to show for the chosen metric (a dash) is listed last either way.
+
+| Number | How it is counted |
+| --- | --- |
+| Total reqs, lifetime | Searches opened at the client since counting started. |
+| Total reqs, last 12 months | Searches opened at the client in the last 12 months (never reaching back before counting started). |
+| Interview % | First interviews divided by submissions, across all of that client's searches. |
+| Placement % | Searches filled divided by searches opened: the client's fill rate. A search is filled when every opening on it has been hired into. |
+| Time to fill | The average number of days from a search opening to the day the offer was accepted (the day of the hire, when no accepted offer was on record), over the placements on searches that count. |
+| Total billings, lifetime | The fees recorded for the client's placements since counting started, in the client's currency. |
+| Total billings, last 12 months | The same, for placements in the last 12 months. |
+| Average fee per placement | Total billings divided by the number of placements that have a fee recorded. |
+
+Billings are placement fees only; monthly retainers are not included. When clients are billed in different
+currencies, each amount is shown in the client's own currency, and sorting by billings or fees compares the figures
+as written, without converting them; the page says so. A placement with no fee (the offer had no salary) is listed
+under the table with a link to the candidate, until the fee is entered.
+
+The demo data (`npm run seed`) is the one exception to the start date: so that the two views have something in
+them, the demo counts from a Monday about five months back and is loaded with the moments its made-up history
+would have recorded.
 
 ## The Oracle
 
@@ -681,6 +764,7 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
 server/
   index.js   Express server; serves the API and the built front end
   api.js     All API routes: auth, careers pages, jobs, pipeline, interviews, reports
+  reporting.js  The Individual and Clients reports: the record of submissions, first interviews, placements and searches, and the day counting starts
   autofill.js  Drafting a job and its brief from a job description and intake notes
   oracle.js  The Oracle: recording and uploading calls, transcription, notes and submission drafts
   phone.js   Phone calls through Twilio: click to call, the switchboard, calls coming in, fetching the recording
@@ -731,12 +815,15 @@ they made at that client, their résumé files, and their recorded calls with th
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
 - Automated tests that drive the screens in a browser as part of `npm test`. `npm test` covers the résumé reader,
   job autofill (the plain reader, and the route against a stand-in for the AI service), the recruiter brief, the activity
-  feed's milestones, résumé and photo files, the Oracle's server side, the Oracle's uploader, phone calls against a stand-in for Twilio, and the
-  calendar against calendar files. The Oracle's screens were driven end to end in Chrome with a simulated microphone
+  feed's milestones, résumé and photo files, the Oracle's server side, the Oracle's uploader, phone calls against a stand-in for Twilio, the
+  calendar against calendar files, and reporting (every number on the Individual and Clients reports, through a
+  story acted out either side of the start date and over more than a year, with the reports' clock set by the test). The Oracle's screens were driven end to end in Chrome with a simulated microphone
   while it was built (record, reload and server restart mid-call, a lost connection, two people on one computer,
   transcript, notes, add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude. The
   phone and calendar screens were driven the same way at 1280 and 390 wide (save a mobile and PIN, call and watch
   each state, calls that do not connect, an unrecorded call, the switchboard, a call coming in, connect a calendar,
   add an event, the prompt, record and call from an event, a client user seeing none of it), against the same
   stand-ins, the stand-in for Twilio and a calendar file: no real phone rang and no real calendar link was read.
+  The Individual and Clients reports, the start date, the placement fee on a hired candidate and the tick on the
+  job form were driven in Chrome at 1280 and 390 wide on the demo data, and printed to PDF.
   The other screens were verified by hand.

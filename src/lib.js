@@ -125,6 +125,11 @@ export const REJECT_REASONS = [
   'Not enough relevant experience', 'Skills not a match for this role', 'Salary expectations too far apart',
   'Location or right-to-work mismatch', 'Stronger candidates in process', 'Role closed or on hold', 'Other',
 ];
+/**
+ * Is this the name of an interview stage the agency holds itself ("Recruiter screen", "Agency interview")? Such a
+ * stage starts with "Interview with the client" unticked on the job form. The server uses the same rule (db.js).
+ */
+export const agencyStageName = (name) => /recruiter|screen|agency/i.test(String(name || ''));
 export const ENGAGEMENTS = { retainer: 'Monthly retainer', per_hire: 'Fee per hire', hybrid: 'Retainer + fee per hire' };
 
 /** Where a candidate's photo is served from, or null when they have none. `tag` changes whenever the photo does. */

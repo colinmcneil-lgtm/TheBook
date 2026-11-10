@@ -267,6 +267,29 @@ export function OfferModal({ data, onClose }) {
   );
 }
 
+/** Correct the fee recorded for a placement: the figure Reports counts. It starts from what is recorded, or from what the offer and the client's fee work out to now. */
+export function PlacementFeeModal({ data, onClose }) {
+  const { bump } = useApp();
+  const toast = useToast();
+  const { placement, offer, client } = data;
+  const workedOut = offer?.salary != null && client.fee_percent > 0 ? Math.round((offer.salary * client.fee_percent) / 100) : '';
+  const [fee, setFee] = useState(placement.fee ?? workedOut);
+  const [save, busy] = useAction(async () => {
+    await api.put(`/applications/${data.application.id}/placement-fee`, { fee });
+    toast('Placement fee saved');
+    bump();
+    onClose();
+  });
+  return (
+    <Modal title="Placement fee" subtitle={`${data.candidate.name} · ${data.job.title}`} size="sm" onClose={onClose} onSubmit={save}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Save fee</Button></>}>
+      <Field label={`Placement fee (${placement.currency})`} hint="What you billed for this placement. Reports counts this figure, whatever the offer or the client’s terms say later. Leave it empty if there is no fee.">
+        <Input type="number" min="0" step="1" value={fee} onChange={(e) => setFee(e.target.value)} autoFocus />
+      </Field>
+    </Modal>
+  );
+}
+
 const CANDIDATE_FIELDS = [['name', 'Full name', 'text', true], ['email', 'Email', 'email'], ['phone', 'Phone'], ['linkedin', 'LinkedIn URL'], ['current_title', 'Current title'], ['current_company', 'Current company'], ['location', 'Location']];
 
 export function EditCandidateModal({ data, onClose }) {

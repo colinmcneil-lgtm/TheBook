@@ -3,13 +3,14 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
-import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
+import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, agencyStageName, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
 import { registerAutofill } from './autofill.js';
 import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCalls, forgetSavedNote } from './oracle.js';
 import { registerPhone, registerPhoneWebhooks } from './phone.js';
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
 import { registerCalendar } from './calendar.js';
+import * as reporting from './reporting.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -507,6 +508,9 @@ registerOracle(api, { agencyOnly, bad, clean, int, takeHit, logActivity, loadApp
 registerPhone(api, { agencyOnly, bad, clean, int, logActivity, loadApp: (id, user) => loadApp(id, user) });
 // Your calendar in The Oracle (a saved calendar link, the day's events and who they are with) is a module of its own as well.
 registerCalendar(api, { agencyOnly, bad, takeHit, loadApp: (id, user) => loadApp(id, user) });
+// Reporting (the Individual and Clients reports, and the record of the moments they count) is a module of its own too.
+// The routes below tell it when one of those moments happens: each call to `reporting.` is one of them.
+reporting.registerReporting(api, { agencyOnly, adminOnly, bad, int, loadApp: (id, user) => loadApp(id, user) });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);
@@ -805,6 +809,14 @@ function checkHiringManager(userId, clientId) {
   if (!u || (u.role === 'client' && u.client_id !== clientId)) bad('Choose a hiring manager from this client or your own team.');
 }
 
+/** A stage as this person is sent it. Whether it is an interview with the client only matters to the agency's reports, so the client's hiring team is not sent that. */
+const stageFor = ({ with_client, ...stage }, user) => (isAgency(user) ? { ...stage, with_client } : stage);
+/** A job's stages in order. */
+const stagesOf = (jobId, user) => q.all('SELECT * FROM stages WHERE job_id = ? ORDER BY position', jobId).map((s) => stageFor(s, user));
+/** The interview stages a job form sent: a name each, and the "Interview with the client" tick when the form had one. */
+const stagesFrom = (list) => (Array.isArray(list) ? list : [])
+  .map((s) => ({ id: int(s?.id), name: clean(s?.name, 80), with_client: typeof s?.with_client === 'boolean' ? s.with_client : undefined })).filter((s) => s.name).slice(0, 12);
+
 function loadJob(id, user) {
   const job = q.get(`${jobSelect} WHERE j.id = ?`, int(id));
   if (!job || !canSee(user, job.client_id)) bad('Not found', 404);
@@ -846,7 +858,7 @@ api.post('/jobs', agencyOnly, (req, res) => {
   if (!q.get('SELECT 1 AS x FROM clients WHERE id = ?', clientId)) bad('Choose a client for this role.');
   if (!f.title) bad('Job title is required.');
   checkHiringManager(f.hiring_manager_id, clientId);
-  const stageNames = (Array.isArray(b.interview_stages) ? b.interview_stages : []).map((s) => clean(s?.name, 80)).filter(Boolean).slice(0, 12);
+  const interviewStages = stagesFrom(b.interview_stages);
   const id = tx(() => {
     const t = now();
     const jobId = q.insert(
@@ -855,7 +867,8 @@ api.post('/jobs', agencyOnly, (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       clientId, f.title, f.department, f.location, f.work_mode, f.employment_type, f.salary_min, f.salary_max, f.salary_public, f.description, f.ideal_profile,
       f.status, f.hiring_manager_id, f.openings, f.questions, f.criteria, req.user.id, t, f.status === 'open' ? t : null);
-    createStages(jobId, stageNames.length ? stageNames : DEFAULT_INTERVIEW_STAGES);
+    createStages(jobId, interviewStages.length ? interviewStages : DEFAULT_INTERVIEW_STAGES);
+    reporting.searchOpened(jobId, f.status);
     // A brief drafted while filling in the form (from an intake call or job description) is saved with the new job.
     if (b.brief && typeof b.brief === 'object') q.run('UPDATE jobs SET brief = ? WHERE id = ?', JSON.stringify(briefFields(b.brief)), jobId);
     return jobId;
@@ -865,8 +878,7 @@ api.post('/jobs', agencyOnly, (req, res) => {
 
 api.get('/jobs/:id', (req, res) => {
   const job = hydrateJob(loadJob(req.params.id, req.user), req.user);
-  const stages = q.all('SELECT * FROM stages WHERE job_id = ? ORDER BY position', job.id);
-  res.json({ job, stages });
+  res.json({ job, stages: stagesOf(job.id, req.user) });
 });
 
 api.put('/jobs/:id', agencyOnly, (req, res) => {
@@ -887,9 +899,10 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
       b.ideal_profile !== undefined && (req.user.role === 'admin' || job.created_by === req.user.id) ? f.ideal_profile : job.ideal_profile,
       f.status, f.hiring_manager_id, f.openings, f.questions, f.criteria,
       job.opened_at ?? (f.status === 'open' ? t : null), f.status === 'closed' ? job.closed_at ?? t : null, job.id);
+    reporting.searchOpened(job.id, f.status, job);
 
     if (Array.isArray(b.interview_stages)) {
-      const wanted = b.interview_stages.map((s) => ({ id: int(s?.id), name: clean(s?.name, 80) })).filter((s) => s.name).slice(0, 12);
+      const wanted = stagesFrom(b.interview_stages);
       if (!wanted.length) bad('Keep at least one interview stage.');
       const existing = q.all(`SELECT * FROM stages WHERE job_id = ? AND kind = 'interview' ORDER BY position`, job.id);
       const applied = q.get(`SELECT * FROM stages WHERE job_id = ? AND kind = 'applied'`, job.id);
@@ -905,8 +918,9 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
       }
       wanted.forEach((s, i) => {
         const own = existing.find((e) => e.id === s.id);
-        if (own) q.run('UPDATE stages SET name = ?, position = ? WHERE id = ?', s.name, i + 1, own.id);
-        else q.run(`INSERT INTO stages (job_id, name, kind, position) VALUES (?, ?, 'interview', ?)`, job.id, s.name, i + 1);
+        // A stage keeps its tick unless the form sends one; a new stage with no tick goes by what its name says.
+        if (own) q.run('UPDATE stages SET name = ?, position = ?, with_client = ? WHERE id = ?', s.name, i + 1, (s.with_client ?? Boolean(own.with_client)) ? 1 : 0, own.id);
+        else q.run(`INSERT INTO stages (job_id, name, kind, position, with_client) VALUES (?, ?, 'interview', ?, ?)`, job.id, s.name, i + 1, (s.with_client ?? !agencyStageName(s.name)) ? 1 : 0);
       });
       q.run(`UPDATE stages SET position = ? WHERE job_id = ? AND kind = 'offer'`, wanted.length + 1, job.id);
       q.run(`UPDATE stages SET position = ? WHERE job_id = ? AND kind = 'hired'`, wanted.length + 2, job.id);
@@ -943,6 +957,7 @@ api.patch('/jobs/:id/status', agencyOnly, (req, res) => {
   const t = now();
   q.run('UPDATE jobs SET status = ?, opened_at = ?, closed_at = ? WHERE id = ?',
     status, job.opened_at ?? (status === 'open' ? t : null), status === 'closed' ? t : null, job.id);
+  reporting.searchOpened(job.id, status, job);
   res.json({ ok: true });
 });
 
@@ -1035,6 +1050,7 @@ function moveToStage(app, stageId, user, { quiet = false } = {}) {
   if (!quiet) logActivity(app.id, user.id, back ? 'stage_back' : arrivalType(stage), back ? `Moved back to ${stage.name}` : hired ? 'Marked as hired' : `Moved to ${stage.name}`);
   // An applicant nobody owns yet becomes the responsibility of the recruiter who first takes them forward.
   if (!app.owner_id && isAgency(user) && stage.kind !== 'applied') q.run('UPDATE applications SET owner_id = ? WHERE id = ? AND owner_id IS NULL', user.id, app.id);
+  reporting.arrivedIn(app.id, stage); // after the owner is settled: a placement is credited to whoever owns the candidate now
   return stage;
 }
 
@@ -1106,6 +1122,7 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
       logActivity(appId, req.user.id, 'added', `Added to the pipeline (${SOURCE_LABELS[source].toLowerCase()})`);
       // Added straight into an interview stage, Offer or Hired: that is the same news as being moved there.
       if (stage.kind !== 'applied') logActivity(appId, req.user.id, arrivalType(stage), hired ? 'Marked as hired' : `Started at ${stage.name}`);
+      reporting.arrivedIn(appId, stage);
       for (const remark of remarks) logActivity(appId, req.user.id, 'added', remark);
       const note = text(b.note, 10000);
       if (note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, ?, ?)', appId, req.user.id, note, b.note_private === 'true' || b.note_private === true ? 1 : 0, t);
@@ -1161,7 +1178,7 @@ api.get('/applications/:id', (req, res) => {
   job.criteria = json(job.criteria, []);
   const client = q.get('SELECT id, name, brand_color, currency, fee_percent FROM clients WHERE id = ?', a.client_id);
   if (!agency) delete client.fee_percent;
-  const stages = q.all('SELECT * FROM stages WHERE job_id = ? ORDER BY position', a.job_id);
+  const stages = stagesOf(a.job_id, req.user);
   const notes = q.all(
     `SELECT n.*, u.name AS user_name, u.role AS user_role FROM notes n LEFT JOIN users u ON u.id = n.user_id
      WHERE n.application_id = ? ${agency ? '' : 'AND n.private = 0'} ORDER BY n.created_at DESC`, a.id);
@@ -1175,7 +1192,8 @@ api.get('/applications/:id', (req, res) => {
     scorecards: q.all(`SELECT sc.*, u.name AS user_name FROM scorecards sc JOIN users u ON u.id = sc.user_id WHERE sc.interview_id = ?`, i.id)
       .map((sc) => ({ ...sc, ratings: json(sc.ratings, {}) })),
   }));
-  const offer = q.get('SELECT * FROM offers WHERE application_id = ?', a.id) || null;
+  // The columns the profile has always shown. When the offer was accepted is kept for the reports alone (see reporting.js).
+  const offer = q.get('SELECT id, application_id, salary, start_date, status, notes, created_at, updated_at FROM offers WHERE application_id = ?', a.id) || null;
   const emails = q.all(`SELECT e.*, u.name AS sent_by_name FROM emails e LEFT JOIN users u ON u.id = e.sent_by WHERE e.application_id = ? ORDER BY e.created_at DESC`, a.id);
   const others = q.all(
     `SELECT a.id, a.status, j.title AS job_title, s.name AS stage_name FROM applications a JOIN jobs j ON j.id = a.job_id JOIN stages s ON s.id = a.stage_id
@@ -1193,6 +1211,7 @@ api.get('/applications/:id', (req, res) => {
   res.json({
     application: { ...application, answers: json(a.answers, []), submitted_by_name: names(a.submitted_by), reviewed_by_name: names(a.reviewed_by), owner_name: names(a.owner_id) },
     candidate, job, client, stages, notes, activities, interviews, offer, emails, others, duplicates,
+    ...(agency ? { placement: reporting.placementOf(a.id) } : {}), // the fee recorded when they were hired: the agency's business only
   });
 });
 
@@ -1230,7 +1249,7 @@ api.patch('/applications/:id', (req, res) => {
 api.post('/applications/:id/move', (req, res) => {
   const a = loadApp(req.params.id, req.user);
   const stage = tx(() => moveToStage(a, req.body?.stage_id, req.user));
-  res.json({ ok: true, stage });
+  res.json({ ok: true, stage: stageFor(stage, req.user) });
 });
 
 /** A candidate who has left the pipeline should not keep interviews in people's diaries. */
@@ -1246,6 +1265,7 @@ api.post('/applications/:id/reject', async (req, res) => {
     q.run(`UPDATE applications SET status = 'rejected', reject_reason = ?, updated_at = ? WHERE id = ?`, reason, now(), a.id);
     logActivity(a.id, req.user.id, 'rejected', `Rejected: ${reason}`);
     cancelUpcomingInterviews(a.id, req.user.id);
+    reporting.leftPipeline(a.id);
   });
   if (req.body?.send_email === true && a.candidate_email) await sendTemplate('rejection', { applicationId: a.id, to: a.candidate_email, vars: mailVars(a, req.user), userId: req.user.id });
   res.json({ ok: true });
@@ -1259,6 +1279,7 @@ api.post('/applications/:id/restore', (req, res) => {
   q.run(`UPDATE applications SET status = ?, hired_at = ?, reject_reason = NULL, updated_at = ? WHERE id = ?`,
     hired ? 'hired' : 'active', hired ? a.hired_at ?? a.stage_entered_at : null, now(), a.id);
   logActivity(a.id, req.user.id, 'restored', 'Returned to the pipeline');
+  reporting.returned(a.id);
   res.json({ ok: true });
 });
 
@@ -1269,6 +1290,7 @@ api.post('/applications/:id/withdraw', (req, res) => {
     q.run(`UPDATE applications SET status = 'withdrawn', reject_reason = ?, updated_at = ? WHERE id = ?`, reason, now(), a.id);
     logActivity(a.id, req.user.id, 'withdrawn', `Candidate withdrew${reason ? `: ${reason}` : ''}`);
     cancelUpcomingInterviews(a.id, req.user.id);
+    reporting.leftPipeline(a.id);
   });
   res.json({ ok: true });
 });
@@ -1279,6 +1301,7 @@ api.post('/applications/:id/submit', agencyOnly, (req, res) => {
   if (a.status !== 'active') bad('Return this candidate to the pipeline before submitting them to the hiring team.');
   const note = text(req.body?.note, 6000);
   if (!note) bad('Add a short write-up so the hiring team knows why this candidate is worth meeting.');
+  reporting.submitted(a, req.user.id); // before the update below: only a first submission counts
   q.run(`UPDATE applications SET review_status = 'pending', submission_note = ?, submitted_by = ?, review_note = NULL, reviewed_by = NULL, reviewed_at = NULL, updated_at = ? WHERE id = ?`,
     note, req.user.id, now(), a.id);
   logActivity(a.id, req.user.id, 'submitted', 'Submitted to the hiring team for review');
@@ -1357,6 +1380,7 @@ api.put('/applications/:id/offer', agencyOnly, (req, res) => {
   if (existing) q.run('UPDATE offers SET salary = ?, start_date = ?, status = ?, notes = ?, updated_at = ? WHERE id = ?', int(b.salary), startDate, status, text(b.notes, 4000), t, existing.id);
   else q.run('INSERT INTO offers (application_id, salary, start_date, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', a.id, int(b.salary), startDate, status, text(b.notes, 4000), t, t);
   if (!existing || existing.status !== status) logActivity(a.id, req.user.id, 'offer', `Offer ${status === 'draft' ? 'drafted' : status}`);
+  reporting.offerSaved(a.id);
   res.json({ ok: true });
 });
 
@@ -1530,6 +1554,7 @@ api.post('/interviews', async (req, res) => {
       a.id, title, kind, starts.toISOString(), Math.min(480, Math.max(10, int(b.duration_min) ?? 45)), clean(b.location, 300), text(b.notes, 4000), req.user.id, now());
     setPanel(iid, a.client_id, Array.isArray(b.panel) ? b.panel.slice(0, 20) : []);
     logActivity(a.id, req.user.id, 'interview_booked', `Scheduled ${title}`); // its own type: a title can start with "Scheduled" too
+    reporting.interviewScheduled(a.id);
     return iid;
   });
   if (b.notify && a.candidate_email) await sendTemplate('interview_invite', {

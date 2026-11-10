@@ -246,9 +246,11 @@ CREATE TABLE IF NOT EXISTS calls (
 `);
 
 // ---------- migrations for databases created by an earlier version ----------
+/** Add a column a table does not have yet. Says whether it was added just now, for a step that must only follow the first time. */
 function addColumn(table, column, type) {
   const has = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
   if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  return !has;
 }
 /**
  * Rebuild a table with a changed definition (SQLite cannot alter a column in place). `change` receives the table's
@@ -547,6 +549,48 @@ CREATE INDEX IF NOT EXISTS idx_candidates_phone_tail ON candidates(${PHONE_TAIL}
 CREATE INDEX IF NOT EXISTS idx_interviews_starts ON interviews(starts_at);`);
 addColumn('calendar_events', 'series', 'TEXT'); // finds a marked date of a repeating event again when the whole series is moved (a keyed fingerprint, not the calendar's own identifier)
 // ---------- end of the calendar's part ----------
+// ---------- reporting ----------
+// The numbers on the Individual and Clients reports are written down as things happen (see reporting.js), not worked
+// out afterwards from how the records look today. Everything here is new: no existing row is rewritten.
+/**
+ * Is this the name of an interview stage the agency holds itself ("Recruiter screen", "Agency interview")? Such a
+ * stage does not count as an interview with the client unless somebody ticks it on the job form.
+ */
+export const agencyStageName = (name) => /recruiter|screen|agency/i.test(String(name || ''));
+// Each interview stage says whether the client meets the candidate in it. On by default; off for the stages whose
+// names say they are the agency's own. Stages that already exist get the same defaults, once, when the column arrives.
+if (addColumn('stages', 'with_client', 'INTEGER NOT NULL DEFAULT 1')) {
+  db.exec(`UPDATE stages SET with_client = 0 WHERE kind = 'interview' AND (name LIKE '%recruiter%' OR name LIKE '%screen%' OR name LIKE '%agency%')`);
+}
+addColumn('offers', 'accepted_at', 'TEXT'); // when the offer was marked accepted: the end of "time to fill"
+db.exec(`
+-- One row for each moment the reports count. A search is opened once; a candidate in a job is submitted once, has a
+-- first interview with the client once and is placed once. Who gets the credit, the client, and for a placement the
+-- fee and its currency are written here at that moment, so reassigning a candidate or editing a client's terms
+-- afterwards changes none of it. Deleting the candidate, the job or the client removes their rows; merging two
+-- candidate records keeps them, because the application they hang from is kept.
+CREATE TABLE IF NOT EXISTS report_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,                                -- search_opened | submission | first_interview | placement
+  application_id INTEGER REFERENCES applications(id) ON DELETE CASCADE, -- empty for search_opened
+  candidate_name TEXT,                               -- as it was at that moment
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, -- the recruiter credited
+  at TEXT NOT NULL,                                  -- when it happened
+  -- For a placement only:
+  filled_at TEXT,                                    -- when the offer was accepted, or the hire itself when no accepted offer was on record
+  salary INTEGER, fee_percent REAL,                  -- what the fee was worked out from
+  fee INTEGER, currency TEXT,                        -- the fee, in the client's currency at that moment; empty when it could not be worked out
+  fee_edited INTEGER NOT NULL DEFAULT 0,             -- 1 = somebody corrected the fee by hand
+  set_aside_at TEXT                                  -- the hired candidate was rejected or withdrew; not counted until they are returned
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_report_events_once ON report_events(application_id, kind) WHERE application_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_report_events_search ON report_events(job_id) WHERE kind = 'search_opened';
+CREATE INDEX IF NOT EXISTS idx_report_events_at ON report_events(at);
+CREATE INDEX IF NOT EXISTS idx_report_events_job ON report_events(job_id);
+CREATE INDEX IF NOT EXISTS idx_report_events_client ON report_events(client_id);`);
+// ---------- end of reporting ----------
 
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
@@ -577,10 +621,16 @@ export const setSetting = (key, value) =>
 export const DEFAULT_INTERVIEW_STAGES = ['Recruiter screen', 'Hiring manager interview', 'Final interview'];
 export const DEFAULT_CRITERIA = ['Role-specific skills', 'Problem solving', 'Communication', 'Values and motivation'];
 
-/** Create the pipeline for a new job: Applied, the interview stages, Offer, Hired. */
+/**
+ * Create the pipeline for a new job: Applied, the interview stages, Offer, Hired. An interview stage is a name, or
+ * { name, with_client } when the job form said whether the client meets the candidate in it; a bare name goes by
+ * what it says (see agencyStageName).
+ */
 export function createStages(jobId, interviewStages = DEFAULT_INTERVIEW_STAGES) {
-  const rows = [['Applied', 'applied'], ...interviewStages.map((n) => [n, 'interview']), ['Offer', 'offer'], ['Hired', 'hired']];
-  rows.forEach(([name, kind], i) => q.run('INSERT INTO stages (job_id, name, kind, position) VALUES (?, ?, ?, ?)', jobId, name, kind, i));
+  const interviews = interviewStages.map((s) => (typeof s === 'string' ? { name: s } : s))
+    .map((s) => [s.name, 'interview', (typeof s.with_client === 'boolean' ? s.with_client : !agencyStageName(s.name)) ? 1 : 0]);
+  const rows = [['Applied', 'applied', 1], ...interviews, ['Offer', 'offer', 1], ['Hired', 'hired', 1]];
+  rows.forEach(([name, kind, withClient], i) => q.run('INSERT INTO stages (job_id, name, kind, position, with_client) VALUES (?, ?, ?, ?, ?)', jobId, name, kind, i, withClient));
 }
 
 const DEFAULT_TEMPLATES = [

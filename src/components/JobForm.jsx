@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { GripVertical, Plus, Trash2 } from 'lucide-react';
-import { api, url, WORK_MODES, EMPLOYMENT } from '../lib.js';
+import { api, url, agencyStageName, WORK_MODES, EMPLOYMENT } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Button, Checkbox, Field, Input, Modal, Select, Textarea, useAction, useToast } from '../ui.jsx';
 import JobAutofill from './JobAutofill.jsx';
@@ -14,6 +14,8 @@ const DEFAULT_STAGES = ['Recruiter screen', 'Hiring manager interview', 'Final i
 const DRAFTED = { title: ['', 'job title'], department: ['', 'department'], location: ['', 'location'], work_mode: ['hybrid', 'working pattern'], employment_type: ['full_time', 'contract'],
   salary_min: ['', 'salary from'], salary_max: ['', 'salary to'], openings: [1, 'openings'], description: ['', 'job advert'] };
 const stageNames = (list) => list.map((s) => s.name.trim()).join('\n');
+/** Is this stage an interview with the client? What was ticked, or, when nobody has touched the tick, what the name says. */
+const withClient = (stage) => stage.with_client ?? !agencyStageName(stage.name);
 const DEFAULT_CRITERIA = ['Role-specific skills', 'Problem solving', 'Communication', 'Values and motivation'];
 
 function Section({ title, hint, children }) {
@@ -87,7 +89,9 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
     salary_min: job?.salary_min ?? '', salary_max: job?.salary_max ?? '', salary_public: job ? job.salary_public === 1 : true,
     openings: job?.openings ?? 1, hiring_manager_id: job?.hiring_manager_id ?? '', status: job?.status ?? 'draft',
     description: job?.description ?? '',
-    interview_stages: stages ? stages.filter((s) => s.kind === 'interview').map((s) => ({ id: s.id, name: s.name })) : DEFAULT_STAGES.map((name) => ({ name })),
+    // `with_client` is the "Interview with the client" tick. A stage that has never had one set (a new stage, or one
+    // autofill drafted) leaves it out, and the tick then follows what the stage is called until somebody clicks it.
+    interview_stages: stages ? stages.filter((s) => s.kind === 'interview').map((s) => ({ id: s.id, name: s.name, with_client: Boolean(s.with_client) })) : DEFAULT_STAGES.map((name) => ({ name })),
     questions: job?.questions ?? [],
     criteria: job?.criteria ?? DEFAULT_CRITERIA,
   }));
@@ -129,7 +133,7 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
   const client = clients.find((c) => c.id === Number(form.client_id));
 
   const [save, busy] = useAction(async () => {
-    const body = { ...form };
+    const body = { ...form, interview_stages: form.interview_stages.map((s) => ({ ...s, with_client: withClient(s) })) };
     // The plain reader's one "job title to search" is the title it read. If the title was corrected here, the brief follows it.
     const title = form.title.trim().replace(/\s*\(.*\)$/, '');
     if (draft?.source === 'basic' && form.brief?.search_titles?.length === 1 && title) body.brief = { ...form.brief, search_titles: [title] };
@@ -200,10 +204,10 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
         <Textarea rows={9} {...bind('description')} placeholder={'A short introduction to the role and team.\n\nWhat you will do\n• …\n\nWhat we are looking for\n• …'} />
       </Section>
 
-      <Section title="Interview stages" hint="Every pipeline starts with Applied and ends with Offer and Hired. These are the steps in between, in order. Drag a stage by its grip to move it.">
+      <Section title="Interview stages" hint="Every pipeline starts with Applied and ends with Offer and Hired. These are the steps in between, in order. Drag a stage by its grip to move it. Tick “Interview with the client” where the client meets the candidate, and leave it off for your own screening calls: Reports counts a submitted candidate’s first interview from the first ticked stage they reach.">
         <div className="space-y-2" ref={stageOrder.box}>
           {form.interview_stages.map((s, i) => (
-            <div key={i} data-reorder-row="" className={`flex items-center gap-2 rounded-lg ${stageOrder.dragging === i ? 'bg-brand-50 ring-2 ring-brand-300' : ''}`}>
+            <div key={i} data-reorder-row="" className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg ${stageOrder.dragging === i ? 'bg-brand-50 ring-2 ring-brand-300' : ''}`}>
               {form.interview_stages.length > 1 && (
                 <button type="button" {...stageOrder.grip(i)} aria-label={`Move stage ${i + 1}${s.name ? `, ${s.name}` : ''}. Drag, or use the up and down arrow keys.`} title="Drag to move"
                   className={`flex h-9 w-6 shrink-0 touch-none select-none items-center justify-center rounded text-stone-400 hover:bg-stone-100 hover:text-stone-700 focus-visible:outline-2 focus-visible:outline-brand-500 ${stageOrder.dragging === i ? 'cursor-grabbing text-stone-700' : 'cursor-grab'}`}>
@@ -211,7 +215,11 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
                 </button>
               )}
               <span className="tabular w-5 text-center text-xs text-stone-400">{i + 1}</span>
-              <Input value={s.name} onChange={(e) => editList('interview_stages', i, { name: e.target.value })} aria-label={`Stage ${i + 1}`} />
+              <Input value={s.name} onChange={(e) => editList('interview_stages', i, { name: e.target.value })} aria-label={`Stage ${i + 1}`} className="min-w-0 flex-1" />
+              {/* On a phone the tick sits on a line of its own under the name. */}
+              <div className={`order-last basis-full pb-1 whitespace-nowrap sm:order-none sm:basis-auto sm:pb-0 sm:pl-0 ${form.interview_stages.length > 1 ? 'pl-[60px]' : 'pl-7'}`}>
+                <Checkbox checked={withClient(s)} onChange={(e) => editList('interview_stages', i, { with_client: e.target.checked })} label="Interview with the client" />
+              </div>
               <Button variant="ghost" icon={Trash2} aria-label="Remove stage" className="!px-2" onClick={() => dropFrom('interview_stages', i)} disabled={form.interview_stages.length === 1} />
             </div>
           ))}
