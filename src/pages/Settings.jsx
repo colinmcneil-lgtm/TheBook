@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Check, Copy, Download, Plus, UserPlus, Trash2 } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, ago, fmtDate } from '../lib.js';
-import { Avatar, Badge, Button, Card, CardHeader, Field, Input, Modal, Page, Tabs, Textarea, useAction, useToast } from '../ui.jsx';
+import { Checkbox, Avatar, Badge, Button, Card, CardHeader, Field, Input, Modal, Page, Tabs, Textarea, useAction, useToast } from '../ui.jsx';
 import { ApproveForm, InviteForm } from '../components/Forms.jsx';
 
 function Account() {
@@ -51,16 +51,19 @@ function AiCard() {
 }
 
 function Agency() {
-  const { agencyName, isAdmin, reloadMe, mailConfigured } = useApp();
+  const { agencyName, isAdmin, reloadMe, mailConfigured, clientPhotos } = useApp();
   const toast = useToast();
   const [name, setName] = useState(agencyName);
-  const [save, busy] = useAction(async () => { await api.put('/settings', { agencyName: name }); await reloadMe(); toast('Saved'); });
+  const [photos, setPhotos] = useState(clientPhotos);
+  const [save, busy] = useAction(async () => { await api.put('/settings', { agencyName: name, clientPhotos: photos }); await reloadMe(); toast('Saved'); });
   return (
     <div className="max-w-lg space-y-6">
       <Card>
         <CardHeader title="Agency" />
         <form className="space-y-4 p-4" onSubmit={(e) => { e.preventDefault(); save(); }}>
           <Field label="Agency name" hint="Shown in the workspace and on reports you prepare for clients."><Input value={name} onChange={(e) => setName(e.target.value)} required disabled={!isAdmin} /></Field>
+          <Checkbox checked={photos} disabled={!isAdmin} onChange={(e) => setPhotos(e.target.checked)} label="Show candidate photos to client hiring teams"
+            hint="Your own team always sees them. Switch this off if a client prefers to review candidates without photos." />
           {isAdmin && <Button type="submit" variant="primary" busy={busy}>Save</Button>}
         </form>
       </Card>
@@ -192,7 +195,7 @@ function Extension() {
         <CardHeader title="Add candidates from LinkedIn" />
         <div className="space-y-4 p-4 text-sm leading-relaxed text-stone-600">
           <p>
-            With the Chrome extension, open someone’s LinkedIn profile, click the extension’s icon, and their name, title, company, location and profile link are filled in for you.
+            With the Chrome extension, open someone’s LinkedIn profile, click the extension’s icon, and their name, title, company, location, profile link and photo are filled in for you.
             Choose the job and stage, and they are in that pipeline with you as the owner. It warns you if the person is already in your workspace.
           </p>
           <a href="/the-book-extension.zip" download><Button variant="primary" icon={Download}>Download the extension</Button></a>

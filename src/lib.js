@@ -126,3 +126,17 @@ export const REJECT_REASONS = [
   'Location or right-to-work mismatch', 'Stronger candidates in process', 'Role closed or on hold', 'Other',
 ];
 export const ENGAGEMENTS = { retainer: 'Monthly retainer', per_hire: 'Fee per hire', hybrid: 'Retainer + fee per hire' };
+
+/** Where a candidate's photo is served from, or null when they have none. `tag` changes whenever the photo does. */
+export const photoUrl = (candidateId, tag) => (tag ? `/api/candidates/${candidateId}/photo?v=${tag}` : null);
+
+/** Shrink a chosen image to a square JPEG (cropped from the centre) so photos stay small and uniform. */
+export async function squarePhoto(file, size = 400) {
+  const bitmap = await createImageBitmap(file);
+  const side = Math.min(bitmap.width, bitmap.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = Math.min(size, side);
+  canvas.getContext('2d').drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('That image could not be read.'))), 'image/jpeg', 0.88));
+}

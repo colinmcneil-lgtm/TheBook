@@ -13,6 +13,8 @@ let base = '';        // the workspace origin, e.g. https://hiring.youragency.co
 let jobs = [];
 let known = [];       // where this person already is in the workspace
 let lastStages = {};  // remembered stage per job
+let photo = null;     // the person's picture, ready to send: { blob, preview }
+let photoFrom = null; // where it can be fetched from: { url, tabId }
 
 async function api(path, options = {}) {
   let res;
@@ -115,9 +117,106 @@ async function readPage() {
   const filled = (r) => READ.filter((k) => r[k]).length;
   const best = read.map((f) => f.result).reduce((a, b) => (filled(b) > filled(a) ? b : a), top);
   const page = { ...top };
-  for (const k of READ) page[k] = [best, ...read.map((f) => f.result)].map((r) => r[k]).find((v) => typeof v === 'string' && v) || '';
+  for (const k of [...READ, 'photo']) page[k] = [best, ...read.map((f) => f.result)].map((r) => r[k]).find((v) => typeof v === 'string' && v) || '';
+  page.tabId = tabId;
   return page;
 }
+
+// ---------- their photo ----------
+// The page only gives the picture's address. The picture is fetched here, cropped to a small square and sent with the
+// candidate, so the workspace keeps its own copy and never loads anything from LinkedIn later.
+const PHOTO_SIZE = 320;
+const MAX_PICTURE = 6 * 1024 * 1024;
+
+async function fetchPicture({ url, tabId }) {
+  const usable = (blob) => blob && blob.type.startsWith('image/') && blob.size <= MAX_PICTURE;
+  // From here: works when the picture's site lets anyone read it, or once Chrome has been allowed to reach that site.
+  try {
+    const res = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer' });
+    const blob = res.ok ? await res.blob() : null;
+    if (usable(blob)) return blob;
+  } catch { /* try from the page instead */ }
+  // From the page the recruiter is on, which the picture's site may allow when it does not allow everyone.
+  try {
+    const [frame] = await chrome.scripting.executeScript({
+      target: { tabId },
+      args: [url, MAX_PICTURE],
+      func: async (address, max) => {
+        try {
+          const res = await fetch(address, { credentials: 'omit' });
+          const blob = res.ok ? await res.blob() : null;
+          if (!blob || !blob.type.startsWith('image/') || blob.size > max) return '';
+          return await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => resolve('');
+            reader.readAsDataURL(blob);
+          });
+        } catch { return ''; }
+      },
+    });
+    const data = frame && frame.result;
+    if (typeof data === 'string' && data.startsWith('data:image/')) {
+      const blob = await (await fetch(data)).blob();
+      if (usable(blob)) return blob;
+    }
+  } catch { /* the page could not be asked */ }
+  return null;
+}
+
+/** A square JPEG cut from the middle of the picture. */
+async function squarePicture(blob) {
+  const image = await createImageBitmap(blob);
+  const side = Math.min(image.width, image.height);
+  if (side < 40) throw new Error('too small to be a photo');
+  const size = Math.min(PHOTO_SIZE, side);
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.drawImage(image, (image.width - side) / 2, (image.height - side) / 2, side, side, 0, 0, size, size);
+  image.close?.();
+  return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.86 });
+}
+
+async function loadPhoto() {
+  if (photo) URL.revokeObjectURL(photo.preview);
+  photo = null;
+  const row = $('photo-row');
+  row.hidden = true;
+  $('allow-photo').hidden = true;
+  if (!photoFrom) return;
+  let blob = null;
+  try {
+    const fetched = await fetchPicture(photoFrom);
+    if (fetched) blob = await squarePicture(fetched);
+  } catch { blob = null; }
+  if (blob) {
+    photo = { blob, preview: URL.createObjectURL(blob) };
+    $('photo-preview').src = photo.preview;
+    $('photo-preview').hidden = false;
+    $('photo-choice').hidden = false;
+    $('photo-blocked').hidden = true;
+    row.hidden = false;
+    return;
+  }
+  // Chrome would not hand the picture over. It will once the recruiter allows the site the picture is kept on.
+  let origin = '';
+  try { origin = new URL(photoFrom.url).origin; } catch { return; }
+  if (await chrome.permissions.contains({ origins: [`${origin}/*`] }).catch(() => true)) return; // allowed already: the picture itself is the problem
+  $('photo-preview').hidden = true;
+  $('photo-choice').hidden = true;
+  $('photo-blocked').hidden = false;
+  $('allow-photo').hidden = false;
+  $('allow-photo').onclick = async () => {
+    // Chrome's prompt can close this popup; opening it again picks the photo up.
+    const granted = await chrome.permissions.request({ origins: [`${origin}/*`] }).catch(() => false);
+    if (granted) loadPhoto();
+  };
+  row.hidden = false;
+}
+
+$('f-photo').addEventListener('change', () => chrome.storage.local.set({ savePhoto: $('f-photo').checked }));
 
 // ---------- the form ----------
 function fillJobs(preferred) {
@@ -258,6 +357,7 @@ $('add-form').addEventListener('submit', async (e) => {
     note: $('f-note').value, note_private: 'true',
   };
   for (const [key, value] of Object.entries(fields)) if (String(value).trim()) body.append(key, String(value).trim());
+  if (photo && $('f-photo').checked) body.append('photo', photo.blob, 'photo.jpg');
   $('submit').disabled = true;
   try {
     const result = await api('/applications', { method: 'POST', body });
@@ -294,7 +394,7 @@ const LINK_HINTS = {
 async function start() {
   show('loading');
   $('connected').hidden = true;
-  const saved = await chrome.storage.local.get(['base', 'verified', 'lastJob', 'lastStages']);
+  const saved = await chrome.storage.local.get(['base', 'verified', 'lastJob', 'lastStages', 'savePhoto']);
   base = saved.base || '';
   lastStages = saved.lastStages || {};
   $('open-settings').hidden = !base;
@@ -350,9 +450,11 @@ async function start() {
   $('link-hint').hidden = !hint;
   fillJobs(saved.lastJob);
   clearConflict();
+  $('f-photo').checked = saved.savePhoto !== false;
+  photoFrom = page && page.photo && page.tabId ? { url: page.photo, tabId: page.tabId } : null;
   show('form');
   setError('form-error', page ? '' : 'This page could not be read, so fill in the details yourself.');
-  await Promise.all([loadStages(), lookUp()]);
+  await Promise.all([loadStages(), lookUp(), loadPhoto()]);
   if (!$('f-name').value) $('f-name').focus();
 }
 

@@ -141,6 +141,46 @@ const upload = multer({
 });
 const removeUpload = (name) => { if (name) fs.rm(path.join(UPLOAD_DIR, path.basename(name)), { force: true }, () => {}); };
 
+// Candidate photos. Only real JPEG, PNG or WebP files are kept: the type is checked from the file's first bytes,
+// not its name, because the file is later shown inside the workspace.
+const PHOTO_TYPES = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+const MAX_PHOTO = 3 * 1024 * 1024;
+const candidateUpload = multer({
+  storage: multer.diskStorage({
+    destination: UPLOAD_DIR,
+    filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString('hex') + path.extname(file.originalname).toLowerCase()),
+  }),
+  limits: { fileSize: 8 * 1024 * 1024, files: 2, fields: 30, parts: 34, fieldSize: 200 * 1024, fieldNameSize: 100 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (file.fieldname === 'photo') return Object.hasOwn(PHOTO_TYPES, ext) ? cb(null, true) : cb(new HttpError(400, 'Photos need to be JPEG, PNG or WebP images.'));
+    return ALLOWED_RESUME.includes(ext) ? cb(null, true) : cb(new HttpError(400, 'Résumé must be a PDF, Word, RTF or text file.'));
+  },
+}).fields([{ name: 'resume', maxCount: 1 }, { name: 'photo', maxCount: 1 }]);
+
+/** The uploaded photo's file name if it really is an image of the type its name says and not too large; otherwise it is deleted. */
+function acceptPhoto(file) {
+  if (!file) return null;
+  let ok = false;
+  try {
+    const head = Buffer.alloc(12);
+    const fd = fs.openSync(file.path, 'r');
+    fs.readSync(fd, head, 0, 12, 0);
+    fs.closeSync(fd);
+    const type = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff ? 'image/jpeg'
+      : head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? 'image/png'
+      : head.subarray(0, 4).toString('latin1') === 'RIFF' && head.subarray(8, 12).toString('latin1') === 'WEBP' ? 'image/webp' : null;
+    ok = type === PHOTO_TYPES[path.extname(file.filename)] && file.size <= MAX_PHOTO;
+  } catch { ok = false; }
+  if (!ok) removeUpload(file.filename);
+  return ok ? file.filename : null;
+}
+/** Whether this person may see candidate photos: the agency always; client users unless the agency has switched it off. */
+const seesPhotos = (user) => isAgency(user) || getSetting('client_photos', '1') === '1';
+/** Lists carry a short version tag for the photo instead of the file name; it changes when the photo does. */
+const photoTag = (file) => (file ? file.slice(0, 8) : null);
+const hidePhotos = (rows, user) => (seesPhotos(user) ? rows : rows.map((r) => ({ ...r, photo: null })));
+
 const logActivity = (applicationId, userId, type, detail) =>
   q.run('INSERT INTO activities (application_id, user_id, type, detail, created_at) VALUES (?, ?, ?, ?, ?)', applicationId, userId, type, detail, now());
 
@@ -436,7 +476,7 @@ api.get('/me', (req, res) => {
   const clients = isAgency(req.user)
     ? q.all(`SELECT id, name, slug, brand_color, currency, status FROM clients ORDER BY name`)
     : q.all(`SELECT id, name, slug, brand_color, currency, status FROM clients WHERE id = ?`, req.user.client_id);
-  res.json({ user: publicUser(req.user), agencyName: getSetting('agency_name', 'Agency'), clients, mailConfigured: mailConfigured() });
+  res.json({ user: publicUser(req.user), agencyName: getSetting('agency_name', 'Agency'), clients, mailConfigured: mailConfigured(), clientPhotos: getSetting('client_photos', '1') === '1' });
 });
 
 api.post('/me/password', (req, res) => {
@@ -470,6 +510,7 @@ api.get('/nav', (req, res) => {
 api.put('/settings', adminOnly, (req, res) => {
   if (!clean(req.body?.agencyName)) bad('Agency name is required.');
   setSetting('agency_name', clean(req.body.agencyName, 120));
+  if (typeof req.body.clientPhotos === 'boolean') setSetting('client_photos', req.body.clientPhotos ? '1' : '0');
   res.json({ ok: true });
 });
 
@@ -827,11 +868,15 @@ api.patch('/jobs/:id/status', agencyOnly, (req, res) => {
 api.delete('/jobs/:id', adminOnly, (req, res) => {
   const job = loadJob(req.params.id, req.user);
   for (const a of q.all('SELECT resume_file FROM applications WHERE job_id = ?', job.id)) removeUpload(a.resume_file);
-  tx(() => {
+  const photos = tx(() => {
     q.run('DELETE FROM applications WHERE job_id = ?', job.id);
     q.run('DELETE FROM jobs WHERE id = ?', job.id);
+    // People who were only in this job go with it, and so do their photos.
+    const orphans = q.all('SELECT photo_file FROM candidates WHERE id NOT IN (SELECT candidate_id FROM applications)').map((c) => c.photo_file);
     q.run('DELETE FROM candidates WHERE id NOT IN (SELECT candidate_id FROM applications)');
+    return orphans;
   });
+  photos.forEach(removeUpload);
   res.json({ ok: true });
 });
 
@@ -839,7 +884,7 @@ api.delete('/jobs/:id', adminOnly, (req, res) => {
 const appSelect = `
   SELECT a.id, a.status, a.source, a.rating, a.applied_at, a.stage_entered_at, a.updated_at, a.review_status, a.stage_id, a.reject_reason, a.hired_at,
     a.resume_file IS NOT NULL AS has_resume, a.owner_id, ou.name AS owner_name,
-    c.id AS candidate_id, c.name, c.email, c.current_title, c.current_company, c.location,
+    c.id AS candidate_id, c.name, c.email, c.current_title, c.current_company, c.location, substr(c.photo_file, 1, 8) AS photo,
     j.id AS job_id, j.title AS job_title, j.client_id, cl.name AS client_name, cl.brand_color,
     s.name AS stage_name, s.kind AS stage_kind, s.position AS stage_position,
     (SELECT MIN(i.starts_at) FROM interviews i WHERE i.application_id = a.id AND i.status = 'scheduled' AND i.starts_at >= ?) AS next_interview
@@ -869,7 +914,7 @@ api.get('/applications', (req, res) => {
   const order = req.query.sort === 'oldest' ? 'a.applied_at ASC' : 'a.applied_at DESC';
   // Cross-job lists stop at 500 rows (the screens say so); one job's pipeline is returned whole so the board never hides anyone.
   const limit = int(req.query.job_id) ? 20000 : 500;
-  res.json(q.all(`${appSelect} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${order} LIMIT ${limit}`, ...p));
+  res.json(hidePhotos(q.all(`${appSelect} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${order} LIMIT ${limit}`, ...p), req.user));
 });
 
 function loadApp(id, user) {
@@ -908,8 +953,10 @@ const candidateFields = (c) => ({
   current_title: clean(c.current_title, 160), current_company: clean(c.current_company, 160),
 });
 
-api.post('/applications', agencyOnly, upload.single('resume'), (req, res) => {
+api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
   let stored = false;
+  req.file = req.files?.resume?.[0];
+  let photo = acceptPhoto(req.files?.photo?.[0]);
   try {
     const b = req.body || {};
     const job = q.get('SELECT * FROM jobs WHERE id = ?', int(b.job_id));
@@ -968,13 +1015,23 @@ api.post('/applications', agencyOnly, upload.single('resume'), (req, res) => {
       for (const remark of remarks) logActivity(appId, req.user.id, 'added', remark);
       const note = text(b.note, 10000);
       if (note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, ?, ?)', appId, req.user.id, note, b.note_private === 'true' || b.note_private === true ? 1 : 0, t);
+      // A photo sent with them becomes the record's photo (replacing an older one).
+      let replaced = null;
+      if (photo) {
+        replaced = q.get('SELECT photo_file FROM candidates WHERE id = ?', cand.id)?.photo_file ?? null;
+        q.run('UPDATE candidates SET photo_file = ? WHERE id = ?', photo, cand.id);
+      }
       // `name` is the name on the record they ended up on, which is not always the one that was typed.
-      return { id: appId, known, merged: known, name: cand.name };
+      return { id: appId, known, merged: known, name: cand.name, replaced };
     });
     stored = true;
+    photo = null; // it belongs to the record now
+    removeUpload(result.replaced);
+    delete result.replaced;
     res.json(result);
   } finally {
     if (!stored) removeUpload(req.file?.filename);
+    removeUpload(photo); // only still set when it never reached a record
   }
 });
 
@@ -1004,7 +1061,8 @@ api.get('/owners', (req, res) => {
 api.get('/applications/:id', (req, res) => {
   const a = loadApp(req.params.id, req.user);
   const agency = isAgency(req.user);
-  const candidate = q.get('SELECT * FROM candidates WHERE id = ?', a.candidate_id);
+  const { photo_file, ...candidate } = q.get('SELECT * FROM candidates WHERE id = ?', a.candidate_id);
+  candidate.photo = seesPhotos(req.user) ? photoTag(photo_file) : null;
   const job = q.get('SELECT id, title, client_id, criteria, status, location FROM jobs WHERE id = ?', a.job_id);
   job.criteria = json(job.criteria, []);
   const client = q.get('SELECT id, name, brand_color, currency, fee_percent FROM clients WHERE id = ?', a.client_id);
@@ -1212,11 +1270,15 @@ api.get('/applications/:id/resume', (req, res) => {
 // Remove one application (and the candidate record if this was their only one).
 api.delete('/applications/:id', agencyOnly, (req, res) => {
   const a = loadApp(req.params.id, req.user);
-  tx(() => {
+  const photo = q.get('SELECT photo_file FROM candidates WHERE id = ?', a.candidate_id)?.photo_file;
+  const gone = tx(() => {
     q.run('DELETE FROM applications WHERE id = ?', a.id);
-    if (!q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ?', a.candidate_id)) q.run('DELETE FROM candidates WHERE id = ?', a.candidate_id);
+    if (q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ?', a.candidate_id)) return false;
+    q.run('DELETE FROM candidates WHERE id = ?', a.candidate_id);
+    return true;
   });
   removeUpload(a.resume_file);
+  if (gone) removeUpload(photo);
   res.json({ ok: true });
 });
 
@@ -1231,6 +1293,37 @@ api.delete('/candidates/:id', agencyOnly, (req, res) => {
     q.run('DELETE FROM candidates WHERE id = ?', cand.id);
   });
   files.forEach(removeUpload);
+  removeUpload(cand.photo_file);
+  res.json({ ok: true });
+});
+
+// A candidate's photo. Shown inside the workspace only, to people who can see that candidate.
+api.get('/candidates/:id/photo', (req, res) => {
+  const cand = q.get('SELECT client_id, photo_file FROM candidates WHERE id = ?', int(req.params.id));
+  if (!cand || !cand.photo_file || !canSee(req.user, cand.client_id) || !seesPhotos(req.user)) bad('Not found', 404);
+  res.setHeader('Content-Type', PHOTO_TYPES[path.extname(cand.photo_file)] || 'application/octet-stream');
+  res.setHeader('Cache-Control', 'private, max-age=604800'); // the address changes with the photo, so this copy never goes stale
+  res.sendFile(path.join(UPLOAD_DIR, path.basename(cand.photo_file)), (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'Not found' });
+  });
+});
+
+api.put('/candidates/:id/photo', agencyOnly, candidateUpload, (req, res) => {
+  const photo = acceptPhoto(req.files?.photo?.[0]);
+  removeUpload(req.files?.resume?.[0]?.filename); // nothing else is expected on this route
+  const cand = q.get('SELECT id, client_id, photo_file FROM candidates WHERE id = ?', int(req.params.id));
+  if (!cand || !canSee(req.user, cand.client_id)) { removeUpload(photo); bad('Not found', 404); }
+  if (!photo) bad('That file is not a JPEG, PNG or WebP image under 3 MB.');
+  q.run('UPDATE candidates SET photo_file = ? WHERE id = ?', photo, cand.id);
+  removeUpload(cand.photo_file);
+  res.json({ ok: true, photo: photoTag(photo) });
+});
+
+api.delete('/candidates/:id/photo', agencyOnly, (req, res) => {
+  const cand = q.get('SELECT id, client_id, photo_file FROM candidates WHERE id = ?', int(req.params.id));
+  if (!cand || !canSee(req.user, cand.client_id)) bad('Not found', 404);
+  q.run('UPDATE candidates SET photo_file = NULL WHERE id = ?', cand.id);
+  removeUpload(cand.photo_file);
   res.json({ ok: true });
 });
 
@@ -1252,11 +1345,12 @@ api.post('/candidates/:id/merge', agencyOnly, (req, res) => {
     q.run('UPDATE applications SET candidate_id = ?, updated_at = ? WHERE candidate_id = ?', into.id, now(), from.id);
     q.run('DELETE FROM candidates WHERE id = ?', from.id); // gone before its email is copied, so the address is never held twice
     const email = into.email || !from.email || q.get('SELECT 1 AS x FROM candidates WHERE client_id = ? AND email = ?', into.client_id, from.email) ? into.email : from.email;
-    q.run('UPDATE candidates SET email = ?, phone = ?, linkedin = ?, location = ?, current_title = ?, current_company = ? WHERE id = ?',
+    q.run('UPDATE candidates SET email = ?, phone = ?, linkedin = ?, location = ?, current_title = ?, current_company = ?, photo_file = ? WHERE id = ?',
       email, into.phone || from.phone, into.linkedin || from.linkedin, into.location || from.location,
-      into.current_title || from.current_title, into.current_company || from.current_company, into.id);
+      into.current_title || from.current_title, into.current_company || from.current_company, into.photo_file || from.photo_file, into.id);
     for (const app of moved) logActivity(app.id, req.user.id, 'merged', `Merged with ${into.name}'s record`);
   });
+  if (into.photo_file && from.photo_file) removeUpload(from.photo_file); // the kept record already had its own
   res.json({ ok: true, id: into.id });
 });
 
@@ -1427,7 +1521,7 @@ api.get('/dashboard', (req, res) => {
     `${appSelect} WHERE a.status = 'active' AND s.kind IN ('interview', 'offer') AND a.stage_entered_at < ? ${w}
      AND NOT EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = a.id AND i.status = 'scheduled' AND i.starts_at >= ?)
      ORDER BY a.stage_entered_at LIMIT 5`, now(), daysAgo(7), ...p, now());
-  res.json({ stats, upcoming, jobs, recent, stale });
+  res.json({ stats, upcoming, jobs, recent, stale: hidePhotos(stale, req.user) });
 });
 
 // ---------- reports ----------

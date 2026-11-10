@@ -39,7 +39,7 @@ function Workspace() {
     const isAgency = me.user.role !== 'client';
     const activeScope = isAgency ? (me.clients.some((c) => c.id === scope) ? scope : null) : me.user.client_id;
     return {
-      me, user: me.user, isAgency, isAdmin: me.user.role === 'admin', clients: me.clients, agencyName: me.agencyName, mailConfigured: me.mailConfigured,
+      me, user: me.user, isAgency, isAdmin: me.user.role === 'admin', clients: me.clients, agencyName: me.agencyName, mailConfigured: me.mailConfigured, clientPhotos: me.clientPhotos,
       scope: activeScope,
       scopeClient: me.clients.find((c) => c.id === activeScope) || null,
       setScope: (id) => { setScopeState(id); store('embed.scope', id); },

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FileUp, LoaderCircle } from 'lucide-react';
-import { api, url, firstName, watchForUpdate, renderTemplate, toLocalInput, fmtDateTime, INTERVIEW_KINDS, RECOMMENDATIONS, REJECT_REASONS, SOURCES } from '../lib.js';
+import { api, url, firstName, watchForUpdate, renderTemplate, toLocalInput, fmtDateTime, INTERVIEW_KINDS, RECOMMENDATIONS, REJECT_REASONS, SOURCES , photoUrl, squarePhoto } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Button, Checkbox, Field, Input, Modal, Select, Textarea, Avatar, UpdateNotice, useAction, useToast, cx } from '../ui.jsx';
 
@@ -269,15 +269,40 @@ const CANDIDATE_FIELDS = [['name', 'Full name', 'text', true], ['email', 'Email'
 
 export function EditCandidateModal({ data, onClose }) {
   const { bump } = useApp();
+  const toast = useToast();
   const [form, , bind] = useForm({ ...data.candidate });
   const [save, busy] = useAction(async () => {
     await api.patch(`/applications/${data.application.id}`, { candidate: form });
     bump();
     onClose();
   });
+  // The photo saves as soon as it is chosen or removed; it is separate from the fields below.
+  const [setPhoto, working] = useAction(async (file) => {
+    if (file) {
+      const fd = new FormData();
+      fd.append('photo', await squarePhoto(file), 'photo.jpg');
+      await api.put(`/candidates/${data.candidate.id}/photo`, fd);
+      toast('Photo saved');
+    } else {
+      await api.del(`/candidates/${data.candidate.id}/photo`);
+      toast('Photo removed');
+    }
+    bump();
+  });
   return (
     <Modal title="Edit candidate details" onClose={onClose} onSubmit={save}
       footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Save</Button></>}>
+      <div className="flex items-center gap-4">
+        <Avatar name={data.candidate.name} size={64} src={photoUrl(data.candidate.id, data.candidate.photo)} />
+        <div className="flex flex-wrap items-center gap-2">
+          <label className={cx('inline-flex h-8 cursor-pointer items-center rounded-lg border border-line bg-white px-2.5 text-[13px] font-medium text-stone-800 shadow-sm hover:bg-stone-50', working && 'pointer-events-none opacity-50')}>
+            {data.candidate.photo ? 'Change photo' : 'Add a photo'}
+            <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" aria-label="Photo" onChange={(e) => { setPhoto(e.target.files[0]); e.target.value = ''; }} />
+          </label>
+          {data.candidate.photo && <Button size="sm" variant="ghost" busy={working} onClick={() => setPhoto(null)}>Remove</Button>}
+          <span className="basis-full text-xs text-stone-500">JPEG, PNG or WebP. Photos added with the browser extension appear here too.</span>
+        </div>
+      </div>
       <div className="grid gap-4 sm:grid-cols-2">
         {CANDIDATE_FIELDS.map(([key, label, type = 'text', required]) => <Field key={key} label={label}><Input type={type} required={required} {...bind(key)} /></Field>)}
       </div>

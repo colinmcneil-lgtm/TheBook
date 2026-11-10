@@ -1,7 +1,7 @@
 import React from 'react';
 import { Check, Hourglass, FileText } from 'lucide-react';
 import { Avatar, Badge, ClientDot, cx } from '../ui.jsx';
-import { fmtTime, INTERVIEW_KINDS, JOB_STATUS } from '../lib.js';
+import { fmtTime, photoUrl, INTERVIEW_KINDS, JOB_STATUS } from '../lib.js';
 import { useApp, useOpenCandidate } from '../state.jsx';
 
 const STAGE_TONES = { applied: 'gray', interview: 'blue', offer: 'amber', hired: 'green' };
@@ -26,7 +26,7 @@ export function ClientName({ name, color, always, className }) {
 export function CandidateCell({ app }) {
   return (
     <span className="flex min-w-0 items-center gap-3">
-      <Avatar name={app.name} size={32} />
+      <Avatar name={app.name} size={32} src={photoUrl(app.candidate_id, app.photo)} />
       <span className="min-w-0">
         <span className="flex items-center gap-1.5 truncate text-sm font-medium text-stone-900">
           {app.name}

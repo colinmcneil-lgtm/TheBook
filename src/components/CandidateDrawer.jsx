@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge,
 } from 'lucide-react';
-import { api, url, ago, since, extUrl, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
+import { api, url, ago, since, extUrl, photoUrl, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import ResumeViewer from './ResumeViewer.jsx';
@@ -72,7 +72,7 @@ function CandidateView({ data, onClose }) {
     <>
       <div className="border-b border-line bg-white px-5 pt-4 sm:px-6">
         <div className="flex items-start gap-4">
-          <Avatar name={candidate.name} size={48} />
+          <Avatar name={candidate.name} size={candidate.photo ? 64 : 48} src={photoUrl(candidate.id, candidate.photo)} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lg font-semibold tracking-tight text-stone-900">{candidate.name}</h2>

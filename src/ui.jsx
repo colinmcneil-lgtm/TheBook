@@ -124,9 +124,17 @@ export function Badge({ tone = 'gray', icon: Icon, className, children }) {
 }
 
 const AVATAR_COLORS = ['#0c505d', '#0b6e99', '#b45309', '#7c3aed', '#be123c', '#4d7c0f', '#0f766e', '#6d28d9', '#a16207'];
-export function Avatar({ name = '?', color, size = 32, className }) {
+export function Avatar({ name = '?', color, size = 32, className, src }) {
   const initials = name.split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
   const hash = [...name].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 997, 7);
+  // A photo that fails to load (deleted, or hidden from this person) falls back to the initials.
+  const [failed, setFailed] = useState(null);
+  if (src && failed !== src) {
+    return (
+      <img src={src} alt="" width={size} height={size} loading="lazy" onError={() => setFailed(src)}
+        className={cx('inline-block shrink-0 rounded-full bg-stone-200 object-cover', className)} style={{ width: size, height: size }} />
+    );
+  }
   return (
     <span
       className={cx('inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white select-none', className)}

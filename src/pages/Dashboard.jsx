@@ -2,7 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { CalendarDays, Briefcase, Inbox, Hourglass, ClipboardCheck, ArrowRight, UserPlus, CalendarCheck, ArrowUpRight, ThumbsUp, Handshake, Trophy } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
-import { url, ago, daysSince, firstName, fmtDay, plural } from '../lib.js';
+import { url, ago, daysSince, firstName, fmtDay, photoUrl, plural } from '../lib.js';
 import { Card, CardHeader, Empty, Page, Stat, Avatar } from '../ui.jsx';
 import { ClientName, InterviewLine, StageBadge } from '../components/bits.jsx';
 
@@ -155,7 +155,7 @@ export default function Dashboard() {
                 {data.stale.map((a) => (
                   <li key={a.id}>
                     <button type="button" onClick={() => openCandidate(a.id)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-stone-50">
-                      <Avatar name={a.name} size={28} />
+                      <Avatar name={a.name} size={28} src={photoUrl(a.candidate_id, a.photo)} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium text-stone-900">{a.name}</span>
                         <span className="block truncate text-[13px] text-stone-500">{a.job_title}</span>

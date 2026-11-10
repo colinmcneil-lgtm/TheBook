@@ -29,4 +29,10 @@ form .notice { margin-bottom: 0; }
 .hint { color: var(--muted); font-weight: 400; font-size: 11.5px; }
 .connected { margin: 0; padding: 6px 14px; background: #d5eaed; color: var(--brand-dark); font-size: 12px; font-weight: 500; }
 .done-mark { width: 40px; height: 40px; margin-bottom: 10px; border-radius: 50%; background: #d5eaed; color: var(--brand); font-size: 22px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.photo-row { display: flex; align-items: center; gap: 10px; }
+.photo-row img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 1px solid var(--line); background: #fff; flex: none; }
+label.check { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+label.check input { width: auto; }
+#photo-blocked { display: grid; gap: 5px; }
+button.small { width: auto; height: 28px; margin: 0; padding: 0 10px; font-size: 12px; justify-self: start; }
 [hidden] { display: none !important; }

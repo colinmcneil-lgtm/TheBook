@@ -36,7 +36,7 @@
 
   // kind: 'profile' (one person's LinkedIn profile), 'seat' (LinkedIn Recruiter or Sales Navigator),
   // 'other' (any other LinkedIn page: the feed, a search, a company) or 'web' (everything else).
-  const out = { name: '', title: '', company: '', location: '', email: '', phone: '', url: '', site: page.hostname, kind: 'web' };
+  const out = { name: '', title: '', company: '', location: '', email: '', phone: '', url: '', photo: '', site: page.hostname, kind: 'web' };
   const slug = isLinkedIn ? slugOf(page) : '';
   const legacy = isLinkedIn && /^\/pub\/[^/]+/i.test(page.pathname);
   if (isLinkedIn) out.kind = slug.length >= 3 || legacy ? 'profile' : /^\/(talent|sales)(\/|$)/i.test(page.pathname) ? 'seat' : 'other';
@@ -77,6 +77,7 @@
           name: value(person.name), title: value([].concat(person.jobTitle || [])[0]), company: value(org && typeof org === 'object' ? org.name : org),
           location: value(addr && typeof addr === 'object' ? addr.addressLocality || addr.name : addr),
           email: value(person.email).replace(/^mailto:/i, ''), phone: value(person.telephone).replace(/^tel:/i, ''),
+          photo: value([].concat(person.image || []).map((i) => (i && typeof i === 'object' ? i.contentUrl || i.url : i))[0]),
         };
       } catch { /* not valid JSON */ }
     }
@@ -148,6 +149,17 @@
       if (agrees) out.company ||= h.company;
     }
 
+    // Their photo: the picture in the top card. LinkedIn's own picture addresses say what they are, which keeps out
+    // the cover image, company logos and the faces of mutual connections (those come after the name; the person's
+    // own picture comes before it or is labelled with their name). The grey placeholder is not a photo.
+    const mine = /profile-(displayphoto|framedphoto)/i;
+    const pictures = [...((h1 && h1.closest('section')) || main).querySelectorAll('img')]
+      .map((img) => ({ img, src: img.currentSrc || img.src || img.getAttribute('data-delayed-url') || '' }))
+      .filter((p) => mine.test(p.src));
+    const picture = pictures.find((p) => out.name && plain(p.img.alt).includes(plain(out.name)))
+      || pictures.find((p) => !h1 || (h1.compareDocumentPosition(p.img) & Node.DOCUMENT_POSITION_PRECEDING));
+    out.photo = (picture && picture.src) || (mine.test(data.photo || '') ? data.photo : '');
+
     // Contact details only from the person's own "Contact info" panel, when the recruiter has it open.
     const onContactPage = /\/(overlay|detail)\/contact-info/i.test(page.pathname);
     const panel = [...document.querySelectorAll('.pv-contact-info, [role="dialog"], dialog[open], .artdeco-modal')].find((el) =>
@@ -180,6 +192,10 @@
       const og = document.querySelector('meta[property="og:title"]')?.content || document.title;
       out.name = og.split(/\s+[|–—-]\s+/)[0].trim();
     }
+    // A photo only when the page marks one as the person's (GitHub and personal sites do).
+    const portrait = [...document.querySelectorAll('img[itemprop="image"], img.u-photo, .h-card img.avatar, .vcard img.avatar')]
+      .find((img) => !img.closest('nav, header, footer, aside'));
+    out.photo = data.photo || (portrait && (portrait.currentSrc || portrait.src)) || '';
     // A page may name its preferred address, but only on its own site: it cannot point at somebody else's profile.
     out.url = page.href;
     try {
@@ -215,5 +231,10 @@
   // and a link that is still too long is left out.
   if (out.url.length > 300) out.url = out.url.replace(/[?#].*$/, '');
   if (out.url.length > 300) out.url = '';
+  // The photo is only an address here; the popup fetches it. Anything that is not a plain https picture address is dropped.
+  try {
+    const photo = out.photo ? new URL(out.photo, page.href) : null;
+    out.photo = photo && photo.protocol === 'https:' && photo.href.length <= 2000 ? photo.href : '';
+  } catch { out.photo = ''; }
   return out;
 })();

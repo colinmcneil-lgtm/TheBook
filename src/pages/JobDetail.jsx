@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CalendarDays, ChevronDown, Copy, ExternalLink, Pencil, Trash2, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
-import { api, url, daysSince, fmtDate, salaryRange, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
+import { api, url, daysSince, fmtDate, photoUrl, salaryRange, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
 import { Avatar, Badge, Button, Card, Empty, Menu, Page, Stars, Tabs, useAction, useToast, cx } from '../ui.jsx';
 import { JobStatusBadge, ReviewBadge } from '../components/bits.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
@@ -70,7 +70,7 @@ function Board({ stages, apps }) {
                     className="block rounded-lg border border-line bg-white p-3 text-left shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing"
                   >
                     <span className="flex items-center gap-2">
-                      <Avatar name={a.name} size={24} />
+                      <Avatar name={a.name} size={24} src={photoUrl(a.candidate_id, a.photo)} />
                       <span className="truncate text-sm font-medium text-stone-900">{a.name}</span>
                     </span>
                     {(a.current_title || a.current_company) && <span className="mt-1 block truncate text-xs text-stone-500">{[a.current_title, a.current_company].filter(Boolean).join(' at ')}</span>}

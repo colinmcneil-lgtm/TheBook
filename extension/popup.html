@@ -35,6 +35,14 @@
     <main id="view-form" class="view" hidden>
       <div class="notice" id="known" hidden></div>
       <form id="add-form">
+        <div class="photo-row" id="photo-row" hidden>
+          <img id="photo-preview" alt="" width="44" height="44" hidden />
+          <label class="check" id="photo-choice"><input type="checkbox" id="f-photo" checked /> Save their profile photo</label>
+          <div id="photo-blocked" hidden>
+            <span class="hint">Chrome needs your permission to copy their profile photo.</span>
+            <button type="button" class="secondary small" id="allow-photo" hidden>Allow profile photos</button>
+          </div>
+        </div>
         <label>Full name<input id="f-name" required maxlength="120" /></label>
         <div class="row">
           <label>Current title<input id="f-title" maxlength="160" /></label>

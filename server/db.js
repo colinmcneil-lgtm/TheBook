@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS candidates (
   name TEXT NOT NULL,
   email TEXT,                                        -- required for applicants; may be unknown for people the agency sourced
   phone TEXT, linkedin TEXT, location TEXT, current_title TEXT, current_company TEXT,
+  photo_file TEXT,                                   -- profile photo saved with the candidate (a file in the uploads folder)
   created_at TEXT NOT NULL,
   UNIQUE (client_id, email)
 );
@@ -261,6 +262,7 @@ db.exec(`UPDATE clients SET monthly_retainer = 0 WHERE engagement_model = 'per_h
 db.exec(`UPDATE clients SET fee_percent = 0 WHERE engagement_model = 'retainer' AND fee_percent != 0`);
 addColumn('users', 'requested_company', 'TEXT');
 addColumn('applications', 'consent_at', 'TEXT');
+addColumn('candidates', 'photo_file', 'TEXT');
 if (!db.prepare('PRAGMA table_info(applications)').all().some((c) => c.name === 'owner_id')) {
   db.exec('ALTER TABLE applications ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL');
   // Existing candidates belong to whoever added them, where that is known.

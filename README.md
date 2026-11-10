@@ -70,6 +70,14 @@ Everyone on the team can download it from Settings, Browser extension, which als
 (Chrome, Load unpacked). `npm run build` packs the folder into that download. To offer it through the Chrome Web
 Store instead, zip the folder and submit it from a Chrome developer account.
 
+It also copies the person's profile photo (untick "Save their profile photo" to leave it out). The picture is
+cropped to a small square and stored in your workspace, so nothing is loaded from LinkedIn afterwards. Chrome
+sometimes will not let the extension read the picture; the popup then shows an "Allow profile photos" button,
+which asks Chrome once for access to LinkedIn's picture server. Photos show on pipeline cards, lists and the
+candidate's profile, and can be added, changed or removed under Edit details. Client hiring teams see them too
+unless you switch that off in Settings, Agency (some companies prefer to review candidates without photos, to
+keep appearance out of the decision). A photo is personal data: it is deleted with the candidate.
+
 On LinkedIn Recruiter, Sales Navigator, search and company pages there is no stable member link, so the link
 field is left empty there: paste the person's public profile link. The first time it connects, the extension
 confirms which workspace it is talking to.
