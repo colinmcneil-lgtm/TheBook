@@ -1,58 +1,86 @@
-// Words and small rules about phone calls, kept apart from the screens so they can be checked on their own.
-import { firstName } from '../lib.js';
+// Words and small rules about The Oracle's calls and its two tabs, kept apart from the screens so they can be
+// checked on their own.
 
-/** Has the phone service finished with this call? */
-export const isOver = (call) => call.status === 'ended' || call.status === 'failed';
+// ---- the two tabs ---------------------------------------------------------------------------------------------------------
+/** The Oracle's tabs, as they are named in the address: Metaview's calls, and the calls recorded or uploaded in The Book. */
+export const ORACLE_TABS = ['metaview', 'record'];
+/** The tab to show: the one the address asks for, else the one this person used last, else the first. */
+export const oracleTab = (asked, last) => (ORACLE_TABS.includes(asked) ? asked : ORACLE_TABS.includes(last) ? last : ORACLE_TABS[0]);
+/** The address of one tab, so each can be linked to. */
+export const oraclePath = (tab) => `/oracle?tab=${tab}`;
+/** The tab a call is listed on, which is where its page goes back to. */
+export const tabOfCall = (call) => (call?.source === 'metaview' ? 'metaview' : 'record');
 
-/** A stored number ("+14165550142") the way people write it. Anything that is not a North American number is left as it is. */
-export function showNumber(number) {
-  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(String(number || ''));
-  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : String(number || '');
-}
-/** A tap-to-call address for a number however it was typed. */
-export const telHref = (number) => `tel:${String(number || '').replace(/[^\d+]/g, '')}`;
-
-/** What was typed, when it reads as a phone number rather than a name: digits and the usual punctuation, seven digits or more. */
-export function typedNumber(text) {
-  const t = String(text || '').trim();
-  return /^[\d\s().+-]+$/.test(t) && t.replace(/\D/g, '').length >= 7 ? t : null;
-}
-
+// ---- words for a call -----------------------------------------------------------------------------------------------------
 /**
- * The person looked up for an application, once the look-up for that same application has come back; null until
- * then. An event with nobody matched has no application at all, and nothing has been looked up for it: that is
- * "nobody", never a look-up to read from.
+ * How a call came to be in The Oracle and who made it: "Recorded by Alex", "Uploaded by Alex", "Brought in from
+ * Metaview by Alex". A Metaview call that The Book brought in by itself has nobody to name. A call from an earlier
+ * version that came in some other way is simply a recorded call.
  */
-export const personFor = (found, applicationId) => (found && applicationId && found.applicationId === applicationId ? found.person : null);
-
-const whoOf = (call) => (call.candidate_name ? firstName(call.candidate_name) : call.to_display || 'them');
-/**
- * The few words that head each stage of a call. The sentence underneath comes from the server. `direction` is only
- * known for a call this page did not place itself (one that came in, or was rung in from the recruiter's own phone).
- */
-export function headline(call) {
-  switch (call.status) {
-    case 'ringing_you': return call.direction === 'inbound' ? 'A call is coming in' : 'Ringing your phone…';
-    case 'waiting_for_you': return call.direction === 'switchboard' ? 'Calling from your phone' : 'Answer and press 1';
-    case 'calling_them': return `Calling ${whoOf(call)}…`;
-    case 'in_call': return 'On the call';
-    default: return { completed: 'Call ended', busy: 'Busy', no_answer: 'No answer', you_did_not_answer: 'Nobody was called', cancelled: 'Call cancelled' }[call.outcome] || 'The call was not made';
-  }
-}
-/** Said until the server's own sentence for the stage arrives (the first second or so after Call is pressed). */
-export const WAITING_WORDS = { ringing_you: 'Pick up, then press 1.', waiting_for_you: 'Press 1 on your phone to be connected.', calling_them: 'Their phone is ringing.', in_call: 'You are connected.' };
-
-/**
- * The call being followed, after the server's latest word on it. The clock on screen counts from the moment this
- * page saw the two connected, so a call first seen when it was already under way has no clock rather than a wrong one.
- */
-export function followed(was, fresh, now = Date.now()) {
-  return { ...was, ...fresh, lost: false, talkingSince: was.talkingSince ?? (fresh.status === 'in_call' && was.status !== 'in_call' ? now : null) };
-}
-
-/** How a call came to be in The Oracle and who made it: "Recorded by Alex", "Uploaded by Alex", "Phone call placed by Alex". */
 export function madeBy(call) {
-  const who = call.created_by_name || 'someone who has left';
-  if (call.source === 'phone') return `Phone call ${call.direction === 'inbound' ? 'taken' : call.direction === 'outbound' ? 'placed' : 'made'} by ${who}`;
-  return `${call.source === 'uploaded' ? 'Uploaded' : 'Recorded'} by ${who}`;
+  if (call.source === 'metaview') return call.created_by_name ? `Brought in from Metaview by ${call.created_by_name}` : 'Brought in from Metaview';
+  return `${call.source === 'uploaded' ? 'Uploaded' : 'Recorded'} by ${call.created_by_name || 'someone who has left'}`;
+}
+
+/** When the conversation happened. A Metaview call took place before it was brought in; any other call when it was recorded. */
+export const callWhen = (call) => call.took_place_at || call.created_at;
+
+/** "45 sec", "12 min", "1 h 05 min". Empty while the length is not known yet. */
+export function fmtLength(ms) {
+  if (!ms || ms < 0) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} sec`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+}
+
+// ---- a call in Metaview's list ----------------------------------------------------------------------------------------------
+const MINUTE = 60_000;
+const namesOf = (call, ...roles) => (call.people || []).filter((p) => roles.includes(p.role) && p.name?.trim()).map((p) => p.name.trim());
+/** "Dana", "Dana and Alex", "Dana, Alex and Sam". */
+export const nameList = (names) => (names.length <= 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);
+
+/**
+ * Who was on a Metaview call, in a few words: "Dana Whitlock with Alex Morgan". A call named after the candidate
+ * ("Call with Dana Whitlock") does not repeat their name: "With Alex Morgan".
+ */
+export function peopleLine(call) {
+  const title = String(call.title || '').toLowerCase();
+  const them = namesOf(call, 'candidate', 'other').filter((name) => !title.includes(name.toLowerCase()));
+  const us = namesOf(call, 'interviewer');
+  if (them.length && us.length) return `${nameList(them)} with ${nameList(us)}`;
+  return us.length ? `With ${nameList(us)}` : nameList(them);
+}
+
+/** What kind of conversation it was, how it was held and how long it lasted: "Job Interview · Phone · 25 min". */
+export const kindLine = (call) => [call.kind, call.channel, call.minutes > 0 ? fmtLength(call.minutes * MINUTE) : ''].filter(Boolean).join(' · ');
+
+/**
+ * Whose call it is in The Book: 'matched' (it belongs to one candidate), 'choose' (it could be one of a few, so
+ * somebody has to say which) or 'nobody' (nobody in The Book looks like the person on the call).
+ */
+export const whoseCall = (call) => (call.match ? 'matched' : call.suggestions?.length ? 'choose' : 'nobody');
+
+/** Why The Book thinks a Metaview call belongs to a candidate. */
+export const MATCHED_BY = { email: 'Same email address', phone: 'Same phone number', name: 'Same name', chosen: 'Chosen by your team' };
+
+const count = (n) => Number(n || 0).toLocaleString('en-CA');
+/**
+ * Said quietly while The Book is still reading back through the calls in Metaview. How many there are in all is
+ * said when the server gives it (`total`) and left out when it does not.
+ */
+export function readingLine(status) {
+  if (!status?.catching_up) return '';
+  return status.total > status.known
+    ? `Reading your Metaview history: ${count(status.known)} of about ${count(status.total)} so far`
+    : `Reading your Metaview history: ${count(status.known)} ${status.known === 1 ? 'call' : 'calls'} so far`;
+}
+
+/** How much of what is in Metaview The Book holds: "The Book knows about 2,100 Metaview calls. 38 of them are in The Book." */
+export function knownLine(status) {
+  const known = Number(status?.known || 0), here = Number(status?.in_the_book || 0);
+  if (!known) return 'The Book has not found any calls in Metaview yet.';
+  const inTheBook = known === 1 ? (here ? 'It is in The Book.' : 'It is not in The Book yet.')
+    : here === 0 ? 'None of them are in The Book yet.' : here >= known ? 'All of them are in The Book.' : `${count(here)} of them ${here === 1 ? 'is' : 'are'} in The Book.`;
+  return `The Book knows about ${count(known)} Metaview ${known === 1 ? 'call' : 'calls'}. ${inTheBook}`;
 }

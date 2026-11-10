@@ -60,6 +60,23 @@ function server(routes) {
   return seen;
 }
 
+test('a new recording tells the server who it is with, and nothing about a calendar event', async () => {
+  fresh();
+  const seen = server({ 'POST /api/oracle/recordings': () => [201, { id: ID, call_id: 7 }] });
+  const withCandidate = new ChunkUploader();
+  // The server no longer takes an event key, so one handed in by old code is not passed on.
+  await withCandidate.create({ mimeType: 'audio/webm', consent: { confirmed: true, wording: 'Agreed.' }, title: 'First call', application_id: 3, event_key: 'ev-abc', userId: 1 });
+  withCandidate.letGo();
+  assert.equal(seen[0].body.application_id, 3);
+  assert.equal(seen[0].body.title, 'First call');
+  assert.equal('event_key' in seen[0].body, false);
+  const plain = new ChunkUploader();
+  await plain.create({ mimeType: 'audio/webm', consent: { confirmed: true, wording: 'Agreed.' }, userId: 1 });
+  plain.letGo();
+  assert.equal('application_id' in seen[1].body, false);
+  assert.equal('event_key' in seen[1].body, false);
+});
+
 test('nothing to recover when no recording was in progress', async () => {
   fresh();
   const seen = server({});

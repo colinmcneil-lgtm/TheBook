@@ -7,13 +7,10 @@ import { Avatar, ClientDot, Menu, cx } from '../ui.jsx';
 import { Logo } from '../pages/Login.jsx';
 import CandidateDrawer from './CandidateDrawer.jsx';
 import { RecorderStrip, useRecorder } from '../oracle/RecorderProvider.jsx';
-import { PhoneStrip } from '../oracle/phone.jsx';
-import { EventPrompt } from '../oracle/calendar.jsx';
 
 /**
- * Whatever sits across the top of the workspace: the recording strip, a phone call under way, the reminder that an
- * event is starting. Drawers and dialogs cover the whole window; they start below all of this, however tall it is,
- * so none of it is ever hidden.
+ * Whatever sits across the top of the workspace: the strip that follows a recording round the app. Drawers and
+ * dialogs cover the whole window; they start below it, however tall it is, so it is never hidden.
  */
 function TopBars({ children }) {
   const box = useRef(null);
@@ -33,8 +30,8 @@ function TopBars({ children }) {
 }
 
 /**
- * One bar across the top. A bar that fails to draw is left out and the fault is logged: these sit above every page,
- * so without this one broken reminder would empty the whole window, and a recording under way would go with it.
+ * One bar across the top. A bar that fails to draw is left out and the fault is logged: it sits above every page,
+ * so without this a fault in it would empty the whole window, and a recording under way would go with it.
  * It is tried again when the recruiter moves to another page.
  */
 class Bar extends React.Component {
@@ -137,8 +134,6 @@ export default function Layout({ children }) {
     {isAgency && (
       <TopBars>
         <Bar at={location.pathname}><RecorderStrip /></Bar>
-        <Bar at={location.pathname}><PhoneStrip /></Bar>
-        <Bar at={location.pathname}><EventPrompt /></Bar>
       </TopBars>
     )}
     <div className="flex min-h-0 flex-1">
