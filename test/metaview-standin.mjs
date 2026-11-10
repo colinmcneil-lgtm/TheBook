@@ -20,6 +20,9 @@
 // whose caller Metaview has no name for, so that their phone number stands where the name would be (the real
 // service was seen to do this for about one call in twenty-five).
 //
+// A second workspace can be added with a key of its own (`addWorkspace`), for what happens when the key is changed
+// to one that belongs to somebody else's Metaview.
+//
 // Every request is kept in `requests`, so a test can prove that nothing but the read-only tools was ever called.
 // Faults can be switched on for the next request (`faults.push('429')`) or for all of them (`fault = '500'`):
 //   slow       takes the request and never answers           429, 500    that status
@@ -139,7 +142,9 @@ const FIELDS = {
   'default:language': ['Language', 'string'], 'default:transcript': ['Transcript', 'text'], 'default:summary': ['Summary', 'ai_text'],
 };
 const one = (value, label = String(value)) => [{ value, label }];
-const participant = (kind, p) => ({ value: uuid(kind, p.n ?? plain(p.name).length), label: p.shown ?? p.name,
+/** A number that stands for somebody who is not one of PEOPLE, the same every time for the same person and different for different people. */
+const numberFor = (p) => [...`${p.name}|${p.email ?? ''}|${p.phone ?? ''}`].reduce((sum, ch) => (sum * 31 + ch.codePointAt(0)) % 999999937, 7);
+const participant = (kind, p) => ({ value: uuid(kind, p.n ?? numberFor(p)), label: p.shown ?? p.name,
   details: { name: p.shown ?? p.name, emails: p.emails ?? (p.email ? [p.email] : []), phone_numbers: p.phones ?? (p.phone ? [p.phone] : []) } });
 /** One field of one conversation, in the shape the real server gives: always a list, which may be empty. */
 function fieldOf(c, field, state) {
@@ -148,9 +153,9 @@ function fieldOf(c, field, state) {
   switch (field) {
     case 'default:start_time': return one(time, c.started.toUTCString());
     case 'default:calendar_event_title': return one(c.title, c.title);
-    case 'default:candidate': return c.candidate ? [participant('cand', c.other)] : [];
+    case 'default:candidate': return c.candidate ? [c.other, ...(c.also ?? [])].map((p) => participant('cand', p)) : [];
     case 'default:interviewer': return c.interviewers.map((p) => participant('intv', { ...p, n: INTERVIEWERS.indexOf(p) }));
-    case 'default:contact': return [participant(c.candidate ? 'cand' : 'cont', c.other), ...c.interviewers.map((p) => participant('intv', { ...p, n: INTERVIEWERS.indexOf(p) }))];
+    case 'default:contact': return [participant(c.candidate ? 'cand' : 'cont', c.other), ...(c.also ?? []).map((p) => participant('cand', p)), ...c.interviewers.map((p) => participant('intv', { ...p, n: INTERVIEWERS.indexOf(p) }))];
     case 'default:conversation_type': return one(uuid('type', c.kind.length), c.kind);
     case 'default:call_duration': return one(c.minutes);
     case 'default:video_conferencing_platform': return one(c.channel);
@@ -214,6 +219,7 @@ const listen = (server, port) => new Promise((resolve, reject) => { server.once(
 export async function metaviewStandIn(port, { count = 130, now = Date.now(), keys = [GOOD_KEY] } = {}) {
   const state = {
     conversations: makeConversations(count, now), keys: new Set(keys), workspace: WORKSPACE, organizationId: 4242,
+    others: new Map(),            // key -> { workspace, organizationId, conversations }: other workspaces, each reached with its own key
     notesAfter: 1, fault: null, faults: [], plainJson: false, delay: 0, requests: [], hanging: [], answered: 0,
     inFlight: 0, mostAtOnce: 0,   // how many requests were being dealt with at the same moment, at most
   };
@@ -227,7 +233,7 @@ export async function metaviewStandIn(port, { count = 130, now = Date.now(), key
       try { rpc = JSON.parse(raw); } catch { /* answered below */ }
       const key = /^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1] ?? null;
       const entry = {
-        at: Date.now(), method: req.method, path: req.url, key, keyOk: state.keys.has(key), rpc: rpc?.method ?? null,
+        at: Date.now(), method: req.method, path: req.url, key, keyOk: state.keys.has(key) || state.others.has(key), rpc: rpc?.method ?? null,
         tool: rpc?.method === 'tools/call' ? rpc.params?.name ?? null : null, args: rpc?.params?.arguments ?? null,
         accept: req.headers.accept, contentType: req.headers['content-type'], protocol: req.headers['mcp-protocol-version'], fault: null,
       };
@@ -257,7 +263,9 @@ export async function metaviewStandIn(port, { count = 130, now = Date.now(), key
         let text, isError = false;
         try {
           if (fault === 'tool-error') throw new Error('Something went wrong running this tool.');
-          text = JSON.stringify(runTool(state, rpc.params?.name, rpc.params?.arguments));
+          // A key for another workspace sees that workspace: its name and its conversations, nothing of this one's.
+          const seen = state.others.has(key) ? { ...state, ...state.others.get(key) } : state;
+          text = JSON.stringify(runTool(seen, rpc.params?.name, rpc.params?.arguments));
           if (fault === 'malformed') text = `Here is what I found: ${text.slice(0, 40)}`;
         } catch (err) { text = err.message; isError = true; }
         message = { result: { content: [{ type: 'text', text }], isError } };
@@ -287,15 +295,22 @@ export async function metaviewStandIn(port, { count = 130, now = Date.now(), key
     /** The conversation at a place in the list as it was made (0 was the newest). */
     at: (index) => state.conversations.find((c) => c.index === index),
     /** A new conversation, a minute old unless `minutesAgo` says otherwise. `person` is one of PEOPLE, or anything shaped like one. */
-    add({ person, minutesAgo = 1, minutes = 12, channel = 'Phone', title = '', interviewers = [INTERVIEWERS[0]], emails, phones, shown, has_transcript = true, kind = 'Job Interview' } = {}) {
+    add({ person, also = [], minutesAgo = 1, minutes = 12, channel = 'Phone', title = '', interviewers = [INTERVIEWERS[0]], emails, phones, shown, has_transcript = true, kind = 'Job Interview' } = {}) {
       const c = {
         index: -(++added), id: 990000000 + added, started: new Date(Date.now() - minutesAgo * 60000), has_transcript, kind, channel, minutes, language: 'English (US)', title,
         person, candidate: true, interviewers, notesAsked: 0,
+        also: also.map((p) => ({ ...p, shown: p.name, emails: p.email ? [p.email] : [], phones: p.phone ? [p.phone] : [] })),   // more candidates on the same call
         other: { ...person, shown: shown ?? person.name, emails: emails ?? (person.email ? [person.email] : []), phones: phones ?? (person.phone ? [person.phone] : []) },
       };
       c.url = `https://app.metaview.ai/notes/${c.id}`;
       state.conversations.push(c);
       return c;
+    },
+    /** Another workspace, reached with `key`: its conversations have numbers of their own, so they can be told from this one's. */
+    addWorkspace(key, { workspace = 'Another Agency', organizationId = 5151, count = 60 } = {}) {
+      const conversations = makeConversations(count).map((c) => ({ ...c, id: c.id + 50000000, url: `https://app.metaview.ai/notes/${c.id + 50000000}` }));
+      state.others.set(key, { workspace, organizationId, conversations });
+      return conversations;
     },
     /** Only the requests that asked a tool to do something. */
     toolCalls: () => state.requests.filter((r) => r.tool),

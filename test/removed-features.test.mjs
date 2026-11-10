@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { spawnSync } from 'node:child_process';
 import { startServer, session, tempDir, FIXTURES } from './oracle-helpers.mjs';
 import { PORTS, look } from './metaview-helpers.mjs';
 
@@ -100,6 +101,9 @@ test('the app starts on a database that still has the old tables, and nothing in
       [{ direction: 'outbound', phone_number: '+14165550101', audio_channels: 2, event_key: 'event-key-1', transcribe_tries: 0 }]);
     assert.deepEqual(all('SELECT phone, phone_pin_hash, phone_lock_level FROM users WHERE id = 2'), [{ phone: '+16475550142', phone_pin_hash: 'pin-hash', phone_lock_level: 1 }]);
     assert.deepEqual(all('SELECT link_sealed, tz FROM calendar_links'), [{ link_sealed: 'v1.sealed.link.value', tz: 'America/Toronto' }]);
+    // Candidates who were on file before are noted to have their numbers filed for looking up, the way names already were.
+    assert.deepEqual(all('SELECT candidate_id FROM candidate_name_dirty ORDER BY candidate_id').map((r) => r.candidate_id), [1, 2]);
+    assert.deepEqual(all('SELECT * FROM candidate_phone_keys'), []);
   });
 });
 
@@ -172,19 +176,69 @@ test('everyday work goes on in the old database: people are added, deactivated a
   assert.equal(status.known, 0);
 });
 
+/** Run the script that clears what the removed features left, on a data folder. Resolves to what it printed. */
+function forgetRemoved(dataDir, ...args) {
+  const ran = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/forget-removed.js', ...args],
+    { cwd: path.resolve(import.meta.dirname, '..'), env: { PATH: process.env.PATH, DATA_DIR: dataDir }, encoding: 'utf8' });
+  assert.equal(ran.status, 0, ran.stderr);
+  return ran.stdout;
+}
+
+test('what people saved for the removed features is only ever cleared by hand, with the one script for it', async () => {
+  const before = look(oldDir, (all) => ({ schema: objects(all), counts: counts(all), calls: all('SELECT id, source, phone_number, event_key FROM calls ORDER BY id') }));
+  // Asked without "--yes" it says what is there and changes nothing. The app is running all the while.
+  const dry = forgetRemoved(oldDir);
+  assert.match(dry, /1 saved calendar links/);
+  assert.match(dry, /2 remembered calendar events/);
+  assert.match(dry, /1 saved mobile numbers/);
+  assert.match(dry, /1 phone PINs/);
+  assert.match(dry, /Nothing was changed/);
+  look(oldDir, (all) => {
+    assert.deepEqual(counts(all), before.counts);
+    assert.deepEqual(all('SELECT phone, phone_pin_hash, phone_lock_level FROM users WHERE id = 2'), [{ phone: '+16475550142', phone_pin_hash: 'pin-hash', phone_lock_level: 1 }]);
+  });
+  // With "--yes" the calendar links, the remembered events, the mobile numbers and the PINs go. Nothing else does.
+  assert.match(forgetRemoved(oldDir, '--yes'), /Cleared from this database/);
+  look(oldDir, (all) => {
+    assert.deepEqual(counts(all), { ...before.counts, calendar_links: 0, calendar_events: 0 });
+    assert.deepEqual(all('SELECT phone, phone_pin_hash, phone_pin_fails, phone_locked_until, phone_lock_level FROM users ORDER BY id'),
+      [1, 2, 3].map(() => ({ phone: null, phone_pin_hash: null, phone_pin_fails: 0, phone_locked_until: null, phone_lock_level: 0 })));
+    assert.deepEqual(objects(all), before.schema, 'no table, column, index or trigger was dropped');
+    assert.deepEqual(all('SELECT id, source, phone_number, event_key FROM calls ORDER BY id'), before.calls, 'calls in The Oracle are not its business');
+  });
+  // The sealed link is not left readable in the files either.
+  for (const name of fs.readdirSync(oldDir)) {
+    const at = path.join(oldDir, name);
+    if (fs.statSync(at).isFile()) assert.equal(fs.readFileSync(at).includes('v1.sealed.link.value'), false, name);
+  }
+  // The app did not notice, and a second run finds nothing.
+  assert.equal((await alex.get('/oracle/calls/1')).status, 200);
+  assert.match(forgetRemoved(oldDir, '--yes'), /Nothing is left/);
+  // Pointed at a folder with no database, it says so and makes nothing.
+  const empty = tempDir('no-database');
+  const missed = spawnSync(process.execPath, ['server/forget-removed.js', '--yes'], { cwd: path.resolve(import.meta.dirname, '..'), env: { PATH: process.env.PATH, DATA_DIR: empty }, encoding: 'utf8' });
+  assert.equal(missed.status, 1);
+  assert.match(missed.stderr, /There is no database/);
+  assert.deepEqual(fs.readdirSync(empty), []);
+  fs.rmSync(empty, { recursive: true, force: true });
+});
+
 test('a database made today has nothing of the removed features in it', async () => {
   await server.stop();
   server = null;
   newDir = tempDir('new-database');
   server = await startServer({ port: PORTS.legacy, dataDir: newDir });
+  assert.match(forgetRemoved(newDir, '--yes'), /Nothing is left/);
   look(newDir, (all) => {
     const tables = all(`SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger', 'index')`).map((t) => t.name);
-    for (const name of tables) assert.equal(/phone_|calendar/.test(name) && name !== 'idx_candidates_phone_tail', false, `${name} is still made`);
+    // (A candidate's own phone number is still looked up, which is what the names with "candidate_phone" in them are for.)
+    for (const name of tables) assert.equal(/phone_|calendar/.test(name.replace('candidate_phone_', '')), false, `${name} is still made`);
     const users = all('PRAGMA table_info(users)').map((c) => c.name), calls = all('PRAGMA table_info(calls)').map((c) => c.name);
     for (const column of OLD_USER_COLUMNS) assert.equal(users.includes(column), false, `users.${column}`);
     for (const column of OLD_CALL_COLUMNS) assert.equal(calls.includes(column), false, `calls.${column}`);
     // What matching a conversation to a candidate needs is made, and so is what Metaview needs.
-    for (const name of ['candidate_name_keys', 'candidate_name_dirty', 'candidate_name_added', 'idx_candidates_email_lower', 'idx_candidates_phone_tail', 'metaview_calls', 'metaview_people']) assert.ok(tables.includes(name), name);
+    for (const name of ['candidate_name_keys', 'candidate_phone_keys', 'candidate_name_dirty', 'candidate_name_added', 'candidate_phone_changed', 'idx_candidates_email_lower', 'idx_candidate_phone_keys_tail',
+      'metaview_calls', 'metaview_people', 'metaview_forgotten']) assert.ok(tables.includes(name), name);
   });
   // And the app works on it from the first request.
   const owner = session(server.base);

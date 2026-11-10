@@ -53,7 +53,10 @@ function next() {
   const job = lines.first.shift() ?? lines.then.shift();
   if (!job) return;
   busy = true;
-  job.work().then(job.resolve, job.reject).finally(() => { busy = false; next(); });
+  // The next request leaves a moment after this one's answer has been handed over, not in the same breath: whoever
+  // was waiting for the answer acts on it first. Entering another key ends the old connection that way before a
+  // request queued for the old key can go out.
+  job.work().then(job.resolve, job.reject).finally(() => setImmediate(() => { busy = false; next(); }));
 }
 /** Run `work` when no other request is under way. `urgent` is for something a person is waiting for: it goes before background work. */
 const inTurn = (work, urgent) => new Promise((resolve, reject) => { (urgent ? lines.first : lines.then).push({ work, resolve, reject }); next(); });
@@ -107,7 +110,10 @@ async function askOnce(key, name, args) {
   } catch (err) {
     if (err instanceof MetaviewError) throw err;
     const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
-    throw new MetaviewError('silent', { timedOut, detail: timedOut ? 'no answer in time' : String(err?.cause?.code ?? err?.cause?.message ?? err?.message ?? err).slice(0, 120) });
+    // Only the short code of what went wrong (ECONNREFUSED...) is kept, never the error's own words: this ends up in
+    // the log, and a request that could not even be put together can quote its headers, the key among them.
+    const code = String(err?.cause?.code ?? '');
+    throw new MetaviewError('silent', { timedOut, detail: timedOut ? 'no answer in time' : /^[A-Z][A-Z0-9_]{2,40}$/.test(code) ? code : 'the request could not be made' });
   }
   if (res.status === 401 || res.status === 403) throw new MetaviewError('key', { status: res.status });
   if (res.status === 429) {
@@ -137,12 +143,14 @@ async function askOnce(key, name, args) {
 /**
  * Ask Metaview's tool `name` and resolve to the document it answers with. Waits its turn, and tries again (twice at
  * most, after a pause) when Metaview is busy or failing; a request that got no answer in time is not tried again
- * here, because it has already held the line for half a minute.
+ * here, because it has already held the line for half a minute. `stillWanted` is asked when the request's turn
+ * comes: when it says no (Metaview was disconnected while the request waited), nothing is sent.
  */
-export function askMetaview(key, name, args, { urgent = false } = {}) {
+export function askMetaview(key, name, args, { urgent = false, stillWanted = () => true } = {}) {
   if (!READ_ONLY.has(name)) return Promise.reject(new Error(`The Book only reads from Metaview: ${name} is not something it asks for.`));
   return inTurn(async () => {
     for (let attempt = 1; ; attempt++) {
+      if (!stillWanted()) throw new Error('This request to Metaview is no longer wanted.');
       try {
         return await askOnce(key, name, args);
       } catch (err) {
@@ -189,14 +197,20 @@ export const onlyANumber = (name) => /^\+?[\d\s().-]{7,}$/.test(String(name ?? '
 const person = (entry, role) => ({
   name: line(entry.details?.name || entry.label, 120), role,
   emails: (Array.isArray(entry.details?.emails) ? entry.details.emails : []).map((e) => line(e, 200).toLowerCase()).filter((e) => /^[^\s@]+@[^\s@]+$/.test(e)).slice(0, 5),
-  phones: (Array.isArray(entry.details?.phone_numbers) ? entry.details.phone_numbers : []).map((n) => line(n, 40)).filter((n) => /\d/.test(n)).slice(0, 5),
+  // An interviewer's own number is never needed (they are known by their address), so it is not taken.
+  phones: role === 'interviewer' ? []
+    : (Array.isArray(entry.details?.phone_numbers) ? entry.details.phone_numbers : []).map((n) => line(n, 40)).filter((n) => /\d/.test(n)).slice(0, 5),
 });
 
 /**
  * One conversation from a list, as The Book remembers it, or null when it has no number or no start time to file
- * it under: { id, url, startedAt, title, kind, channel, minutes, language, hasTranscript, people }. Each of
- * `people` is { name, role, emails, phones } with role candidate, interviewer or other. The number Metaview gives
- * as the conversation's own phone number is the candidate's, and is put with them.
+ * it under: { id, url, startedAt, title, kind, channel, minutes, hasTranscript, people }. Each of `people` is
+ * { name, role, emails, phones } with role candidate, interviewer or other. The number Metaview gives as the
+ * conversation's own phone number is the candidate's, and is put with them.
+ *
+ * Only what The Book uses is taken. Addresses and numbers are kept for the people a conversation is matched by:
+ * the candidates Metaview names, or, when it names none, everybody who is not an interviewer. An interviewer keeps
+ * their address (for "my calls") and no number; anybody else on a call that has a candidate keeps their name only.
  */
 export function readConversation(raw) {
   const id = Number(raw?.id);
@@ -210,7 +224,7 @@ export function readConversation(raw) {
     const who = person(entry, role);
     if (!who.name && !who.emails.length && !who.phones.length) return;
     // A "name" that is really their number is kept as what to call them, and counts as their number too.
-    if (onlyANumber(who.name) && !who.phones.includes(who.name)) who.phones = [...who.phones, who.name].slice(0, 5);
+    if (role !== 'interviewer' && onlyANumber(who.name) && !who.phones.includes(who.name)) who.phones = [...who.phones, who.name].slice(0, 5);
     // "Everybody on the call" repeats the candidates and the interviewers. Should it ever name one of them under
     // another identity, they are still the same person: an interviewer must never turn up a second time as somebody else.
     if (role === 'other' && people.some((p) => (who.name && p.name === who.name) || p.emails.some((e) => who.emails.includes(e)))) return;
@@ -223,6 +237,8 @@ export function readConversation(raw) {
   const theirs = people.find((p) => p.role === 'candidate') ?? people.find((p) => p.role === 'other');
   if (numbers.length && theirs) theirs.phones = [...new Set([...theirs.phones, ...numbers])].slice(0, 5);
   else if (numbers.length) people.push({ name: '', role: 'candidate', emails: [], phones: numbers });
+  // With a candidate on the call, nobody else's contact details are needed to place it.
+  if (people.some((p) => p.role === 'candidate')) for (const p of people) if (p.role === 'other') { p.emails = []; p.phones = []; }
   // The person the call was with first, then anybody else, then the agency's own side.
   const order = { candidate: 0, other: 1, interviewer: 2 };
   people.sort((a, b) => order[a.role] - order[b.role]);
@@ -232,7 +248,6 @@ export function readConversation(raw) {
     title: line(valuesOf(raw, 'default:calendar_event_title')[0]?.value, 160),
     kind: line(valuesOf(raw, 'default:conversation_type')[0]?.label, 60), channel: line(valuesOf(raw, 'default:video_conferencing_platform')[0]?.label, 40),
     minutes: Number.isFinite(minutes) && minutes >= 0 && minutes < 100000 ? Math.round(minutes) : null,
-    language: line(valuesOf(raw, 'default:language')[0]?.label, 40),
     hasTranscript: raw.has_transcript === true, people,
   };
 }
@@ -273,7 +288,7 @@ export function transcriptTurns(transcript) {
 
 // ---------- the three things The Book asks ----------
 const LIST_FIELDS = ['default:start_time', 'default:calendar_event_title', 'default:candidate', 'default:interviewer', 'default:contact', 'default:conversation_type',
-  'default:call_duration', 'default:video_conferencing_platform', 'default:phone_number', 'default:language'];
+  'default:call_duration', 'default:video_conferencing_platform', 'default:phone_number'];
 
 /** Whose key this is: { workspace, organization }. Also the way a key is tried before it is kept. */
 export async function whoAmI(key, options) {

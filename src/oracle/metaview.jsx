@@ -189,7 +189,7 @@ function NotConnected({ status }) {
           : <p className="text-sm font-medium text-stone-700">Ask an admin to connect Metaview.</p>}>
         Once it is connected, your Metaview calls appear here with their transcripts and notes, and on the right candidates in The Book. Nothing in Metaview is changed.
       </Empty>
-      {status?.error && <div className="border-t border-line p-4"><Notice tone="warn"><span className="font-medium">The last time The Book tried Metaview, it did not work.</span> {status.error}</Notice></div>}
+      {status?.error && <div className="border-t border-line p-4"><Notice tone="warn">{status.error}</Notice></div>}
     </Card>
   );
 }

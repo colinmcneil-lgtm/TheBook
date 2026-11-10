@@ -8,7 +8,9 @@ export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 export const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
-db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+// secure_delete: what is deleted is written over, not just marked as free space. People ask to be erased and keys
+// get replaced, and neither should be readable afterwards in a copy of the file.
+db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
@@ -378,39 +380,52 @@ CREATE INDEX IF NOT EXISTS idx_calls_created_by ON calls(created_by);`);
 // event_key and the retry columns), and their triggers and indexes. They are left exactly as they are: nothing here
 // drops, empties or rewrites them, because removing a feature is no reason to touch people's data on a live system.
 // Nothing reads or writes them any more, so the app runs the same on a database that has them and on one that never did.
+// The one way they are ever cleared is by hand: `node server/forget-removed.js` removes the saved calendar links and
+// the phone numbers and PINs, for an owner who wants them gone.
 
 // ---------- finding the candidate a conversation was with ----------
 // Kept together and after everything above: the indexes and triggers on candidates have to be made again whenever
 // that table has been rebuilt by a migration. They are what lets match.js look people up by e-mail address, by phone
 // number and by name without reading every candidate.
-/**
- * A candidate's phone number with the usual punctuation taken out, cut to its last ten characters. A number that
- * came from somewhere else is looked up by this, using the index on the same expression, so the look-up does not
- * read every candidate. Numbers are stored as they were typed, which is why the tidying happens here.
- */
-export const PHONE_TAIL = `substr(replace(replace(replace(replace(replace(replace(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), '+', ''), -10)`;
 db.exec(`
 -- The first and last word of each candidate's name with accents and capitals removed ("kevin" and "tremblay" for
 -- "Kévin Tremblay"), so the candidates a name might belong to are found through an index however many candidates
 -- are on file. SQLite cannot remove accents by itself, so the words are worked out by the server (match.js): the
--- two triggers note which candidates are new or renamed, and the server catches up on those before it matches anything.
+-- triggers note which candidates are new or changed, and the server catches up on those before it matches anything.
 CREATE TABLE IF NOT EXISTS candidate_name_keys (
   candidate_id INTEGER PRIMARY KEY REFERENCES candidates(id) ON DELETE CASCADE,
   first TEXT NOT NULL,
   last TEXT NOT NULL                                 -- empty for a name of one word
 );
 CREATE INDEX IF NOT EXISTS idx_candidate_name_keys_words ON candidate_name_keys(first, last);
+-- Each candidate's phone number as it is compared: its last ten digits, and whatever digits come before them (the
+-- country code, when one was written). Numbers are stored as they were typed ("416-555-0183 ext 4", "416/555/0184"),
+-- so the server works these out as well (match.js), by the one rule it also reads Metaview's numbers with. A box
+-- holding two numbers gives two rows. A candidate whose number is too short to compare has one row with an empty
+-- tail, so that they are not looked at again every time the server starts.
+CREATE TABLE IF NOT EXISTS candidate_phone_keys (
+  candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+  tail TEXT NOT NULL,
+  lead TEXT NOT NULL                                 -- the country code: 1 unless another was written; empty when the country is not known
+);
+CREATE INDEX IF NOT EXISTS idx_candidate_phone_keys_tail ON candidate_phone_keys(tail);
+CREATE INDEX IF NOT EXISTS idx_candidate_phone_keys_candidate ON candidate_phone_keys(candidate_id);
+-- The candidates whose name or number has to be worked out again.
 CREATE TABLE IF NOT EXISTS candidate_name_dirty (candidate_id INTEGER PRIMARY KEY);
 CREATE TRIGGER IF NOT EXISTS candidate_name_added AFTER INSERT ON candidates
   BEGIN INSERT OR IGNORE INTO candidate_name_dirty (candidate_id) VALUES (NEW.id); END;
 CREATE TRIGGER IF NOT EXISTS candidate_name_changed AFTER UPDATE OF name ON candidates
   BEGIN INSERT OR IGNORE INTO candidate_name_dirty (candidate_id) VALUES (NEW.id); END;
+CREATE TRIGGER IF NOT EXISTS candidate_phone_changed AFTER UPDATE OF phone ON candidates
+  BEGIN INSERT OR IGNORE INTO candidate_name_dirty (candidate_id) VALUES (NEW.id); END;
 INSERT OR IGNORE INTO candidate_name_dirty (candidate_id)
-  SELECT id FROM candidates WHERE id NOT IN (SELECT candidate_id FROM candidate_name_keys);
+  SELECT id FROM candidates WHERE id NOT IN (SELECT candidate_id FROM candidate_name_keys)
+    OR (phone IS NOT NULL AND phone != '' AND id NOT IN (SELECT candidate_id FROM candidate_phone_keys));
 
--- E-mail addresses and phone numbers are looked up through these.
-CREATE INDEX IF NOT EXISTS idx_candidates_email_lower ON candidates(lower(email));
-CREATE INDEX IF NOT EXISTS idx_candidates_phone_tail ON candidates(${PHONE_TAIL}) WHERE phone IS NOT NULL;`);
+-- E-mail addresses are looked up through this. (A database from an earlier version also has an index on the last
+-- ten characters of the phone number, idx_candidates_phone_tail. Numbers are looked up through candidate_phone_keys
+-- now; the old index is left where it is, like everything else an earlier version made.)
+CREATE INDEX IF NOT EXISTS idx_candidates_email_lower ON candidates(lower(email));`);
 
 // ---------- Metaview in The Oracle ----------
 // What The Book remembers about the conversations recorded in Metaview (see metaview.js). Agency only.
@@ -424,9 +439,12 @@ CREATE TABLE IF NOT EXISTS metaview_calls (
   started_at TEXT NOT NULL,                          -- when the conversation took place
   title TEXT,                                        -- the calendar event's name; most phone calls have none
   kind TEXT, channel TEXT,                           -- "Job Interview"...; "Phone", "Zoom"...
-  minutes INTEGER, language TEXT,
+  minutes INTEGER,
   has_transcript INTEGER NOT NULL DEFAULT 0,
-  people TEXT NOT NULL DEFAULT '[]',                 -- JSON: [{ name, role, emails, phones }], role candidate | interviewer | other
+  -- JSON: [{ name, role, emails, phones }], role candidate | interviewer | other. Addresses and numbers are kept only
+  -- for the people a conversation is matched by (see readConversation in metaview-client.js); an interviewer keeps
+  -- their address, which is how "my calls" and whose call it is are worked out.
+  people TEXT NOT NULL DEFAULT '[]',
   search TEXT NOT NULL DEFAULT '',                   -- names, addresses, phone digits and the title in lower case: what the search box looks through
   call_id INTEGER REFERENCES calls(id) ON DELETE SET NULL, -- the call in The Oracle, once it has been brought in
   -- When it was first brought in. It stays when the call in The Oracle is deleted, so a call somebody removed is
@@ -444,7 +462,7 @@ CREATE INDEX IF NOT EXISTS idx_metaview_calls_owed ON metaview_calls(fetch_next_
 
 -- What each conversation can be matched or found by, one row per fact, so that the look-ups run through indexes:
 --   email        an address of somebody on the call who is not an interviewer
---   phone        the last ten digits of such a person's number
+--   phone        the last ten digits of such a person's number; the digits before them (the country code) are in the column "first"
 --   name         such a person's name as plain words ("dana whitlock"), with its first and last word
 --   interviewer  an interviewer's address (for "calls I took part in")
 CREATE TABLE IF NOT EXISTS metaview_people (
@@ -454,7 +472,12 @@ CREATE TABLE IF NOT EXISTS metaview_people (
   first TEXT, last TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_metaview_people_call ON metaview_people(call_id);
-CREATE INDEX IF NOT EXISTS idx_metaview_people_value ON metaview_people(kind, value);`);
+CREATE INDEX IF NOT EXISTS idx_metaview_people_value ON metaview_people(kind, value);
+
+-- Conversations The Book has been told to forget: the ones that were with a candidate who has since been erased.
+-- Only Metaview's numbers for them are kept, so that the next reading of Metaview's list does not bring the person's
+-- name and contact details straight back. The list is kept for good, through disconnecting and connecting again.
+CREATE TABLE IF NOT EXISTS metaview_forgotten (id INTEGER PRIMARY KEY);`);
 // What a call in the Oracle carries when it came from Metaview (calls.source = 'metaview').
 addColumn('calls', 'external_url', 'TEXT');    // the conversation's page in Metaview
 addColumn('calls', 'took_place_at', 'TEXT');   // when the conversation happened (created_at is when it was brought in)
@@ -468,6 +491,15 @@ export const q = {
 
 export const now = () => new Date().toISOString();
 q.run('DELETE FROM sessions WHERE expires_at < ?', now()); // tidy expired sign-ins on startup
+
+/**
+ * Empty the file SQLite keeps recent changes in (app.db-wal) into the database. What was deleted is written over in
+ * the database itself (secure_delete, above), but the earlier contents stay readable in that file until this is
+ * done. Called after something that has to be gone has been deleted. It never fails the work it follows.
+ */
+export function scrub() {
+  try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* somebody is reading; the next time will do */ }
+}
 
 export function tx(fn) {
   db.exec('BEGIN');

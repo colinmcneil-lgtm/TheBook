@@ -604,19 +604,47 @@ test('every way Metaview can fail is survived, said plainly, and recovered from 
   assert.equal(standIn.mostAtOnce, 1);
 });
 
-test('deleting a candidate deletes the calls brought in for them', async () => {
+test('erasing a candidate deletes the calls brought in for them, and what The Book remembered about their other conversations', async () => {
   const theirs = (await w.owner.get(`/oracle/calls?candidate_id=${c.byPhone.candidate_id}`)).body;
   assert.ok(theirs.length >= 2);
   assert.ok(theirs.every((call) => call.source === 'metaview'));
+  // Everything on the list that is theirs: the calls brought in for them and the ones only matched to them.
+  // One more conversation of theirs that nobody brings in.
+  const unopened = standIn.add({ person: PEOPLE[1], emails: [], minutesAgo: 2 });
+  await w.owner.post('/metaview/refresh');
+  await until(() => row(unopened.id), Boolean);
+  const his = (await listed()).calls.filter((call) => call.match?.candidate_id === c.byPhone.candidate_id).map((call) => call.id);
+  assert.ok(his.includes(unopened.id) && his.length > theirs.length, 'some of their conversations were never brought in');
+  assert.ok((await listed('q=6475550101')).total >= 3, 'found by their number, until they are erased');
   const before = await status();
   assert.equal((await w.owner.del(`/candidates/${c.byPhone.candidate_id}`)).status, 200);
   for (const call of theirs) assert.equal((await w.owner.get(`/oracle/calls/${call.id}`)).status, 404);
   const after = await status();
   assert.equal(after.in_the_book, before.in_the_book - theirs.length);
-  assert.equal(after.known, before.known, 'that the conversations exist in Metaview is still listed');
-  const jonas = await row(standIn.at(1).id);
-  assert.deepEqual([jonas.call_id, jonas.match, jonas.suggestions], [null, null, []]);
-  look(dataDir, (all) => assert.equal(all('SELECT COUNT(*) AS n FROM calls WHERE candidate_id = ?', c.byPhone.candidate_id)[0].n, 0));
+  assert.equal(after.known, before.known - his.length);
+  // Their name, address and number are no longer anywhere in what The Book remembers about Metaview...
+  assert.equal((await listed()).calls.some((call) => his.includes(call.id)), false);
+  assert.equal((await listed('q=6475550101')).total, 0);
+  assert.equal((await open(w.sam, his[0])).status, 404);
+  // ...and the next reading of Metaview's list does not put them back: only the conversations' numbers are kept, to know which to skip.
+  assert.equal((await w.owner.post('/metaview/refresh')).status, 202);
+  await sleep(700);
+  assert.equal((await status()).known, before.known - his.length);
+  look(dataDir, (all) => {
+    assert.equal(all('SELECT COUNT(*) AS n FROM calls WHERE candidate_id = ?', c.byPhone.candidate_id)[0].n, 0);
+    assert.deepEqual(all('SELECT id FROM metaview_forgotten ORDER BY id').map((r) => r.id), [...his].sort((a, b) => a - b));
+    assert.equal(all(`SELECT COUNT(*) AS n FROM metaview_calls WHERE id IN (${his.join(',')})`)[0].n, 0);
+    assert.equal(all(`SELECT COUNT(*) AS n FROM metaview_people WHERE call_id IN (${his.join(',')})`)[0].n, 0);
+    assert.equal(all(`SELECT COUNT(*) AS n FROM metaview_calls WHERE search LIKE '%6475550101%'`)[0].n, 0);
+  });
+  // Nor is their number still readable in the database's files: what was deleted is written over.
+  for (const name of fs.readdirSync(dataDir)) {
+    const file = path.join(dataDir, name);
+    if (fs.statSync(file).isFile()) assert.equal(fs.readFileSync(file).includes('6475550101'), false, name);
+  }
+  c.forgotten = his.length;
+  // Somebody else's conversations are untouched: a candidate who only shares a first name with nobody's evidence loses nothing.
+  assert.ok((await row(standIn.at(0).id)).match);
 });
 
 test('only the read-only tools were ever asked for, each with a reason, and the key went nowhere it should not', async () => {
@@ -647,7 +675,7 @@ test('only the read-only tools were ever asked for, each with a reason, and the 
 
 test('forgetting the key forgets what was never brought in; the calls in The Oracle stay', async () => {
   const before = await status();
-  assert.ok(before.in_the_book >= 5 && before.known > 130);
+  assert.ok(before.in_the_book >= 5 && before.known > 120);
   const kept = (await w.owner.get('/oracle/calls?source=metaview')).body;
   assert.equal(kept.length, before.in_the_book);
   const forgotten = await w.owner.del('/metaview/key');
@@ -673,7 +701,7 @@ test('forgetting the key forgets what was never brought in; the calls in The Ora
   // Connecting again starts the list afresh, and does not bring the same conversations in twice.
   await connect(w.owner);
   const again = await settled();
-  assert.equal(again.known, standIn.conversations.length);
+  assert.equal(again.known, standIn.conversations.length - c.forgotten, 'all of them but the erased candidate\'s, which stay forgotten');
   assert.equal(again.in_the_book, before.in_the_book);
   assert.equal((await open(w.sam, standIn.at(0).id)).body.call_id, (await row(standIn.at(0).id)).call_id);
   assert.equal((await w.owner.get('/oracle/calls?source=metaview')).body.length, before.in_the_book);

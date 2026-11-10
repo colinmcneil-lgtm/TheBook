@@ -48,9 +48,13 @@ function CandidateView({ data, onClose }) {
 
   const [restore] = useAction(async () => { await api.post(`/applications/${app.id}/restore`); bump(); });
   const [withdraw] = useAction(async () => { await api.post(`/applications/${app.id}/withdraw`); toast('Marked as withdrawn'); bump(); });
+  // Only asked for the agency: erasing somebody says what happens to their Metaview calls when Metaview is connected.
+  const { data: metaview } = useApi(isAgency ? '/metaview/status' : null);
   const [erase] = useAction(async () => {
     const others = data.others.length ? ` This also removes their ${data.others.length === 1 ? 'application' : 'applications'} for ${data.others.map((o) => o.job_title).join(', ')}.` : '';
-    if (!window.confirm(`Permanently delete everything held on ${candidate.name} at ${client.name}: contact details, notes, scorecards, interviews, emails, résumé and recorded calls?${others} This cannot be undone.`)) return;
+    const inMetaview = metaview?.connected || calls?.some((c) => c.source === 'metaview')
+      ? `\n\nThe Book also forgets their Metaview calls. The conversations themselves stay in Metaview: delete them there too if they must go altogether.` : '';
+    if (!window.confirm(`Permanently delete everything held on ${candidate.name} at ${client.name}: contact details, notes, scorecards, interviews, emails, résumé and recorded calls?${others} This cannot be undone.${inMetaview}`)) return;
     await api.del(`/candidates/${candidate.id}`);
     toast(`All data on ${candidate.name} deleted`);
     onClose();
@@ -470,6 +474,14 @@ function CallsTab({ data, calls, error, reload }) {
   const { data: metaview } = useApi('/metaview/status');
   const waiting = useLive(metaview?.connected ? url('/metaview/calls', { candidate_id: candidate.id, show: 'new' }) : null);
   const inMetaview = (waiting.data?.calls || []).filter((c) => !c.call_id);
+  // Some of these are certainly this person's. Others only may be: the number on the call is also on somebody
+  // else's record, or its address and its name point at two people. Those say so, and are only added one at a time.
+  const certain = inMetaview.filter((c) => c.match?.candidate_id === candidate.id);
+  const whoElse = (c) => {
+    if (certain.includes(c)) return null;
+    const others = (c.suggestions || []).filter((s) => s.candidate_id !== candidate.id).map((s) => `${s.name}’s`);
+    return others.length ? `Could also be ${others.join(' or ')}` : `May not be ${firstName(candidate.name)}’s`;
+  };
   const [adding, setAdding] = useState(null); // the Metaview call being brought in just now
   // One at a time, so Metaview is asked for one transcript at a time however many calls there are.
   const add = async (list) => {
@@ -525,10 +537,12 @@ function CallsTab({ data, calls, error, reload }) {
             <div className="min-w-0 flex-1 basis-56">
               <h3 className="text-sm font-semibold text-stone-900">In Metaview</h3>
               <p className="text-[13px] text-stone-500">
-                {inMetaview.length === 1 ? 'A call' : 'Calls'} with {firstName(candidate.name)} in Metaview that {inMetaview.length === 1 ? 'is' : 'are'} not in The Book yet. Adding one brings in its transcript and notes.
+                {inMetaview.length === 1 ? 'A call' : 'Calls'} {certain.length === inMetaview.length
+                  ? `with ${firstName(candidate.name)} in Metaview that ${inMetaview.length === 1 ? 'is' : 'are'}`
+                  : `in Metaview that may be with ${firstName(candidate.name)} and ${inMetaview.length === 1 ? 'is' : 'are'}`} not in The Book yet. Adding one brings in its transcript and notes.
               </p>
             </div>
-            {inMetaview.length > 1 && <Button size="sm" busy={Boolean(adding)} onClick={() => add(inMetaview)}>Add all {inMetaview.length}</Button>}
+            {certain.length > 1 && <Button size="sm" busy={Boolean(adding)} onClick={() => add(certain)}>Add all {certain.length}</Button>}
           </div>
           <Card className="divide-y divide-line overflow-hidden">
             {inMetaview.map((c) => (
@@ -537,6 +551,7 @@ function CallsTab({ data, calls, error, reload }) {
                 <span className="min-w-0 flex-1 basis-56">
                   <span className="block truncate text-sm font-medium text-stone-900">{c.title}</span>
                   <span className="block truncate text-[13px] text-stone-500">{[fmtWhen(c.started_at), kindLine(c)].filter(Boolean).join(' · ')}</span>
+                  {whoElse(c) && <span className="block truncate text-[13px] font-medium text-amber-700">{whoElse(c)}</span>}
                 </span>
                 {adding === c.id
                   ? <span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-brand-700" role="status"><LoaderCircle className="size-3.5 animate-spin" />Bringing it in…</span>

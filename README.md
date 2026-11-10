@@ -243,14 +243,23 @@ the app can be removed in the app.
   calls** looks at once. A recent conversation that has changed in Metaview (a transcript that arrived later, a corrected name) is
   brought up to date at the same time, and once a week the whole list is read again, which also takes out
   conversations that have been deleted in Metaview and were never brought in.
-- **Each call is matched to a candidate.** First by an e-mail address of somebody on the call, then by phone
-  number (the last ten digits are compared, so it does not matter how the number was typed), then by exact full
-  name. Capitals and accents do not count. Anything weaker (a first name on its own, part of a name, the same
-  address on two records) never chooses anybody: those people are offered, and a recruiter picks. A person chosen
-  by hand always wins and is remembered. Interviewers, and anyone with a login to The Book, are never taken for
-  the candidate. Metaview often knows somebody on a phone call only by a first name and their number, so in
-  practice most calls are matched by the phone number on the candidate's record: a candidate with no number in The
-  Book will usually have to be chosen by hand.
+- **Each call is matched to a candidate.** By an e-mail address of the person on the call, by their phone number,
+  or by their exact full name. Capitals and accents do not count. Anything weaker (a first name on its own, part
+  of a name) never chooses anybody: those people are offered, and a recruiter picks. A person chosen by hand
+  always wins and is remembered. Interviewers, and anyone with a login to The Book, are never taken for the
+  candidate. Metaview often knows somebody on a phone call only by a first name and their number, so in practice
+  most calls are matched by the phone number on the candidate's record: a candidate with no number in The Book
+  will usually have to be chosen by hand.
+- **Phone numbers are compared however they were typed.** "(647) 555-0199", "647.555.0199", "647/555/0199 ext 4"
+  and "+1 647 555 0199" are one number, and a box holding two numbers ("416-555-0183 / 647-555-0199") counts for
+  both. The last ten digits are compared together with the country: the same ten digits in another country
+  ("+44 …") are a different number. A number with nothing in front is taken to be a North American one.
+- **Evidence that points two ways chooses nobody.** If the address on a call is one candidate's and its number or
+  its exact name is another's, or if Metaview lists two people on the call who are two different candidates,
+  nobody is chosen: they are all offered, the call is never brought in by itself, and it is listed on each of
+  their profiles until a recruiter decides. Two people on file with the same number (a household) or the same
+  address are told apart by the name on the call; when the name does not settle it, both are offered. The same
+  person on file under two clients is matched to the record that is still in progress, if only one is.
 - **A caller Metaview has no name for** goes by their phone number there, and so the call is listed as "Call with
   +1 647…" here. The number still matches them to their candidate, and once the call is on a candidate it, and
   the speaker in its transcript, carry the candidate's name.
@@ -267,8 +276,9 @@ the app can be removed in the app.
   it out later, the transcript and the notes arrive by themselves.
 - **Recent calls come in without anyone clicking.** With "bring calls in by themselves" on (it is on unless an
   admin turns it off), a conversation from the last 14 days, and every new one, that an e-mail address or a phone
-  number ties to exactly one candidate is brought in and put on that candidate automatically. A match by name is
-  never enough for that, and older history is only listed until somebody opens it. No more than 50 calls a day
+  number ties to exactly one candidate, with nothing else about the call pointing anywhere else, is brought in and
+  put on that candidate automatically. A match by name is never enough for that, nor is a number shared by two
+  people on file, and older history is only listed until somebody opens it. No more than 50 calls a day
   come in this way (`METAVIEW_AUTO_PER_DAY` changes the number), so a mistake cannot fill the workspace, and a call
   somebody deleted is never brought back by itself.
 
@@ -291,26 +301,44 @@ conversation there. That happens only for conversations that are brought in.
 ### What The Book keeps, and where
 
 - **For every conversation Metaview lists:** Metaview's number for it and its link, when it took place, its title,
-  type, channel (Phone, Zoom...), length and language, whether it has a transcript, and the people on it with their
-  part in the call, their e-mail addresses and their phone numbers. That is what is needed to list a conversation
-  and to work out who it was with, and nothing more is kept. Addresses and numbers are used for matching and
-  searching on the server and are not sent to the browser, with one exception: where the number is all Metaview
-  has to call somebody by, it is shown as their name, as it is in Metaview.
+  type, channel (Phone, Zoom...) and length, whether it has a transcript, and the names of the people on it with
+  their part in the call. E-mail addresses and phone numbers are kept only where they are used: the candidate's
+  (or, when Metaview names no candidate, everybody's who is not an interviewer), to work out who the call was
+  with, and each interviewer's e-mail address, for "Mine" and for whose call it is. An interviewer's own phone
+  number is not kept, nor are the contact details of anybody else on a call that has a candidate. That is what is
+  needed to list a conversation and to match it, and nothing more is kept. Addresses and numbers are used for
+  matching and searching on the server and are not sent to the browser, with one exception: where the number is
+  all Metaview has to call somebody by, it is shown as their name, as it is in Metaview.
 - **For a conversation that has been brought in:** its transcript and notes, on the call in The Oracle.
 - **Never:** audio. Metaview does not give it out.
 - **The key:** sealed with a secret that the server makes on first use and keeps in `DATA_DIR/server-secret`, beside
   the database. It is never shown again, never returned by the server and never written to a log. Back the data
-  folder up as a whole; if the secret file is lost, the key simply has to be entered again.
+  folder up as a whole; if the secret file is lost, the key simply has to be entered again. A key set on the
+  server (`METAVIEW_API_KEY`) that cannot be a key, such as one pasted with a line break in the middle, is not
+  sent anywhere: the Metaview card says that it needs setting again.
+- **What is deleted is written over.** When the key is replaced or Metaview is disconnected, and when a candidate
+  is erased, the old contents are overwritten in the database's files, not just marked as free space. A backup
+  taken *before* that still holds them, and a key keeps working in Metaview until it is deleted there: to retire
+  a key for good, delete it in Metaview too (Settings, Integrations, MCP).
 
 Nothing about your candidates in The Book is sent to Metaview: matching happens on your server. When a recruiter
 has the notes written again or a write-up drafted, the transcript goes to Anthropic like any other call's (see
 [What is sent outside your server](#what-is-sent-outside-your-server)).
 
-Everything is agency only: client users are refused on every route and see nothing of it. "Delete candidate data"
-deletes the calls that were brought in for that person. The Metaview tab will still list that their conversations
-exist, because they still exist in Metaview; delete them there too if they must go altogether. An admin can
-**Disconnect** Metaview (Settings, Agency): that removes the key and everything remembered about conversations
-that were never brought in. Calls already in The Oracle stay, and still open.
+Everything is agency only: client users are refused on every route and see nothing of it.
+
+**Erasing a candidate** ("Delete all data on this person", or removing somebody's only application) deletes the
+calls that were brought in for them, and also what The Book remembered about their other Metaview conversations:
+those leave the Metaview tab, the search and the profile lists, with the person's name, address and number. Only
+Metaview's numbers for those conversations are kept, so that the next reading of Metaview's list does not put
+them back; they stay off the list even if the person is added to The Book again later. The conversations
+themselves are still in Metaview: delete them there too if they must go altogether. (Deleting a whole job removes
+the people who were only in that job and their calls, but does not do this for each of them.)
+
+An admin can **Disconnect** Metaview (Settings, Agency): that removes the key and everything remembered about
+conversations that were never brought in, at once, even if The Book is in the middle of reading Metaview at that
+moment. Calls already in The Oracle stay, and still open. The same care is taken when the key is replaced by one
+for another Metaview workspace: nothing of the first workspace's list is carried into the second.
 
 ### Before you rely on Metaview
 
@@ -453,6 +481,24 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   approved. Set `APP_URL` to the workspace's address (Railway is detected automatically): without it the app
   does not know its own address, so it emails no link and shows it to the approver instead.
 
+### If your workspace had the calendar or the phone line
+
+Earlier versions of The Book could read a recruiter's calendar from a link they pasted in, and had a phone line
+with a mobile number and a PIN for each recruiter. Both were taken out. Starting the new version never deletes
+anything, so a database that was in use before still holds what people saved for them: each saved calendar link
+(sealed, but such a link opens that person's whole calendar), what was remembered about their calendar events, and
+their mobile numbers and PINs. Nothing reads any of it any more, and nobody can remove it from inside the app any
+more. To clear it, run this once where The Book is hosted (on Railway: open a shell on the service, in `/app`):
+
+```
+node server/forget-removed.js          # says what is there and changes nothing
+node server/forget-removed.js --yes    # clears it
+```
+
+It can be run while the app is running, clears only those four things (written over, not just marked as deleted),
+and leaves every call in The Oracle alone, phone calls included. Anyone who had saved a calendar link can also
+reset their calendar's private address with their calendar provider, which makes the old link useless everywhere.
+
 ## How it is built
 
 ```
@@ -470,6 +516,7 @@ server/
   mail.js    Optional SMTP delivery; every email is logged either way
   secret.js  The server's own secret, kept in the data folder; seals the Metaview key
   seed.js    Demo data
+  forget-removed.js  Run by hand: clears what the calendar and the phone line (both taken out) left in an older database
 src/
   App.jsx, state.jsx, lib.js, ui.jsx   App shell, data hooks, helpers, shared components
   components/                           Candidate profile, modals, forms, layout

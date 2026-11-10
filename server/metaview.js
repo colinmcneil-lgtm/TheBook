@@ -9,8 +9,8 @@
 //      is kept in the database, so a restart carries on from there. Only what is needed to list a conversation and
 //      to work out who it was with is remembered (metaview_calls): no transcripts and no notes. Once a week the
 //      whole list is read again, which is how a conversation deleted in Metaview leaves The Book's list.
-//   3. Each conversation is matched to a candidate: by a participant's e-mail address, then by phone number, then
-//      by exact full name. Anything weaker is only offered (see match.js).
+//   3. Each conversation is matched to a candidate: by a participant's e-mail address, by their phone number, or
+//      by their exact full name. Anything weaker, and anything where those disagree, is only offered (see match.js).
 //   4. Bringing a conversation in fetches its transcript and Metaview's notes, once, and makes it a call in The
 //      Oracle (oracle.js), on the candidate. A person does this by opening it. With "auto" on, recent conversations
 //      that an address or a number ties to exactly one candidate are brought in with nobody clicking, up to a
@@ -18,10 +18,13 @@
 //
 // The Book only reads from Metaview: nothing here changes anything there. A failure or a refusal is written down
 // as a sentence for the status, and tried again later; it never stops the rest of The Book.
+//
+// Disconnecting, or entering another key, can happen while the background is half-way through a request. Whatever
+// was asked for the old connection is then dropped when it comes back, not written down: see `during`.
 // Everything here is for the agency only: client users are refused on every route.
-import { q, now, tx, getSetting, setSetting } from './db.js';
+import { q, now, tx, scrub, getSetting, setSetting } from './db.js';
 import { seal, unseal } from './secret.js';
-import { fold, nameTokens, phoneTail, matchConversations, chosenMatch } from './match.js';
+import { fold, nameTokens, phoneParts, phonesIn, matchConversations, chosenMatch } from './match.js';
 import { MetaviewError, whoAmI, listConversations, oneConversation, transcriptTurns, onlyANumber } from './metaview-client.js';
 import { addOutsideCall, fillOutsideCall, putCallOn, whenNotesAwaited, UNTITLED } from './oracle.js';
 
@@ -47,29 +50,36 @@ const NO_NOTES = 'Metaview has not written notes for this conversation. You can 
 const RECORDED_IN_METAVIEW = 'This conversation was recorded in Metaview, not in The Book. The Book brought in its transcript and notes.';
 const TROUBLE = 'The Book could not read Metaview just now. It will try again by itself in a few minutes.';
 const LOST_KEY = 'The Metaview key saved here can no longer be read. Enter it again.';
+const BAD_HOST_KEY = 'The Metaview key set where The Book is hosted (METAVIEW_API_KEY) does not look like a key: it may have been pasted with a line break or a space in it. Set it again there, or enter the key in The Book under Settings, Agency, Metaview.';
+const ENDED = 'Metaview was disconnected, or its key was changed, while this call was being brought in. Try again.';
 
 // ---------- the key and what is known about the connection ----------
 const KEY_PURPOSE = 'metaview-key';
 const forget = (...names) => { for (const name of names) q.run('DELETE FROM settings WHERE key = ?', `metaview_${name}`); };
-/** The key in use and where it comes from: one an admin entered wins over one set where The Book is hosted. */
+/** What a key can be: one run of ordinary characters. Anything else is never sent, because a request that cannot even be made may quote it in its complaint. */
+const looksLikeAKey = (text) => text.length >= 8 && text.length <= 500 && /^[\x21-\x7e]+$/.test(text);
+/**
+ * The key in use and where it comes from: one an admin entered wins over one set where The Book is hosted. With no
+ * usable key, `problem` is the sentence that says why, when there is something to say.
+ */
 function currentKey() {
   const sealed = getSetting('metaview_key');
   const saved = sealed ? unseal(sealed, KEY_PURPOSE) : null;
   if (saved) return { key: saved, source: 'settings' };
-  const fromServer = (process.env.METAVIEW_API_KEY || '').trim();
-  if (fromServer) return { key: fromServer, source: 'server' };
-  return { key: null, source: null, lost: Boolean(sealed) };
+  const fromServer = (process.env.METAVIEW_API_KEY || '').trim().replace(/^Bearer\s+/i, '');
+  if (looksLikeAKey(fromServer)) return { key: fromServer, source: 'server' };
+  return { key: null, source: null, problem: sealed ? LOST_KEY : fromServer ? BAD_HOST_KEY : null };
 }
 const autoOn = () => getSetting('metaview_auto', '1') !== '0';
 const historyDone = () => getSetting('metaview_history_done') === '1';
 
 function statusFor(user) {
-  const { key, source, lost } = currentKey();
+  const { key, source, problem } = currentKey();
   const counts = q.get('SELECT COUNT(*) AS known, COUNT(call_id) AS in_the_book FROM metaview_calls');
   return {
     connected: Boolean(key), workspace: key ? getSetting('metaview_workspace') || null : null, source, can_manage: user.role === 'admin',
     last_checked_at: key ? getSetting('metaview_checked_at') : null, known: counts.known, in_the_book: counts.in_the_book,
-    catching_up: Boolean(key) && !historyDone(), error: key ? getSetting('metaview_error') : lost ? LOST_KEY : null, auto: autoOn(),
+    catching_up: Boolean(key) && !historyDone(), error: key ? getSetting('metaview_error') : problem ?? null, auto: autoOn(),
     // How many conversations Metaview says it has in all, so the screens can say "600 of about 2,100 so far" while
     // the history is read. Null until Metaview has said.
     total: key ? Number(getSetting('metaview_total')) || null : null,
@@ -92,19 +102,94 @@ function noteWorkspace(who) {
   setSetting('metaview_workspace', who.workspace ?? '');
 }
 
+// ---------- one connection at a time ----------
+// The background takes the key once and then works for a while: a request to Metaview can be half a minute in the
+// air. If Metaview is disconnected meanwhile, or another key is entered, nothing that was asked for the old
+// connection may be written down when it comes back: Disconnect promises that what was remembered is forgotten, and
+// a list must never hold another workspace's conversations. So every connection has a number, each piece of work
+// remembers the number it started under, and it stops the moment the number has moved on.
+let connection = 0;
+class Ended extends Error {}
+/** The connection as it stands: its key, and its number. */
+const linkNow = () => ({ ...currentKey(), n: connection });
+const live = (link) => link.n === connection;
+/** How a request for `link` is made: in its turn, and not at all if the connection has ended by then. */
+const asking = (link, urgent = false) => ({ urgent, stillWanted: () => live(link) });
+/**
+ * Wait for something that takes time (a request to Metaview, a pause) on behalf of `link`. Resolves to what it
+ * gave, unless the connection ended while it was awaited: then it throws Ended whatever came back, and whoever
+ * was waiting writes nothing.
+ */
+async function during(link, waiting) {
+  const outcome = await Promise.resolve(waiting).then((answer) => ({ answer }), (error) => ({ error }));
+  if (!live(link)) throw new Ended();
+  if (outcome.error) throw outcome.error;
+  return outcome.answer;
+}
+
 // ---------- what The Book remembers about a conversation ----------
 /** The people on a conversation who might be the candidate: the ones Metaview calls candidates, or, when it names none, everybody who is not an interviewer. */
 function otherSide(people) {
   const candidates = people.filter((p) => p.role === 'candidate');
   return candidates.length ? candidates : people.filter((p) => p.role === 'other');
 }
-/** What a remembered conversation is matched by, in the shape match.js reads. */
-const evidenceOf = (row) => {
-  const others = otherSide(json(row.people, []));
+/** What a remembered conversation is matched by, in the shape match.js reads: each person on the other side with their own name, addresses and numbers. */
+const evidenceOf = (row) => ({
+  key: row.id,
   // A phone number standing where a name would be says nothing about what the person is called.
-  return { key: row.id, emails: others.flatMap((p) => p.emails || []), phones: others.flatMap((p) => p.phones || []), names: others.map((p) => p.name).filter((name) => name && !onlyANumber(name)) };
-};
+  people: otherSide(json(row.people, [])).map((p) => ({ name: onlyANumber(p.name) ? '' : p.name, emails: p.emails || [], phones: p.phones || [] })),
+});
 const nameOfOther = (people) => otherSide(people).find((p) => p.name)?.name || null;
+
+/**
+ * The conversations that carry a candidate's address, their number or their exact full name: conditions on
+ * metaview_calls (m), any of which will do, with the values they take. A number is compared the way match.js
+ * compares numbers (see sameNumber): the same ten digits, in the same country where both say which.
+ */
+function factsOf(candidate) {
+  const facts = [], values = [];
+  const add = (kind, value, also = '', ...more) => {
+    facts.push(`m.id IN (SELECT call_id FROM metaview_people WHERE kind = '${kind}' AND value = ?${also})`);
+    values.push(value, ...more);
+  };
+  if (candidate.email) add('email', candidate.email);
+  for (const n of phonesIn(candidate.phone)) {
+    if (n.lead === '') add('phone', n.tail, ` AND first != '1'`);          // the country is not known: any but North America, which is never written that way
+    else if (n.lead === '1') add('phone', n.tail, ` AND first = '1'`);
+    else add('phone', n.tail, ` AND first IN (?, '')`, n.lead);
+  }
+  const words = nameTokens(candidate.name);
+  if (words.length > 1) add('name', words.join(' '));
+  return { facts, values };
+}
+
+// ---------- when a candidate is erased ----------
+// Erasing a person from The Book deletes the calls that were brought in for them (the database does that). What The
+// Book remembered about their other conversations in Metaview has their name, address and number in it too, so it
+// goes as well, and the conversations' numbers are noted so that the next reading of Metaview's list does not put
+// it all back. The conversations themselves are Metaview's: they stay there until somebody deletes them there.
+/**
+ * The conversations that are a candidate's: the ones brought in as their calls, and the ones matched to them (and to
+ * nobody else). Call this before the candidate is deleted, and outside any transaction.
+ */
+export function conversationsWith(candidateId) {
+  const candidate = q.get('SELECT id, name, lower(email) AS email, phone FROM candidates WHERE id = ?', candidateId);
+  if (!candidate) return [];
+  const { facts, values } = factsOf(candidate);
+  const waiting = facts.length ? q.all(`SELECT m.* FROM metaview_calls m WHERE m.call_id IS NULL AND (${facts.join(' OR ')})`, ...values) : [];
+  const found = matchConversations(waiting.map(evidenceOf), { suggestions: false });
+  return [
+    ...q.all('SELECT id FROM metaview_calls WHERE call_id IN (SELECT id FROM calls WHERE candidate_id = ?)', candidate.id).map((row) => row.id),
+    ...waiting.filter((row) => found.get(row.id)?.match?.candidate_id === candidate.id).map((row) => row.id),
+  ];
+}
+/** Forget these conversations for good. Run it in the transaction that deletes the candidate they were with. */
+export function forgetConversations(ids) {
+  for (const id of ids) {
+    q.run('INSERT OR IGNORE INTO metaview_forgotten (id) VALUES (?)', id);
+    q.run('DELETE FROM metaview_calls WHERE id = ?', id);
+  }
+}
 
 /**
  * Keep what a page of Metaview's list says: new conversations are added, and ones already known are brought up to
@@ -113,18 +198,21 @@ const nameOfOther = (people) => otherSide(people).find((p) => p.name)?.name || n
 function remember(conversations) {
   return tx(() => {
     let fresh = 0;
+    // Conversations that were with somebody who has since been erased from The Book are not remembered again.
+    const forgotten = new Set(conversations.length ? q.all(`SELECT id FROM metaview_forgotten WHERE id IN (${conversations.map((c) => c.id).join(',')})`).map((row) => row.id) : []);
     for (const c of conversations) {
+      if (forgotten.has(c.id)) continue;
       const people = JSON.stringify(c.people);
       const others = otherSide(c.people);
       const search = fold([c.title, ...c.people.flatMap((p) => [p.name, ...p.emails, ...p.phones.map((n) => n.replace(/\D/g, ''))])].filter(Boolean).join(' ')).slice(0, 4000);
       const known = q.get('SELECT people, has_transcript, call_id FROM metaview_calls WHERE id = ?', c.id);
       if (!known) {
         fresh++;
-        q.run(`INSERT INTO metaview_calls (id, url, started_at, title, kind, channel, minutes, language, has_transcript, people, search, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          c.id, c.url, c.startedAt, c.title || null, c.kind || null, c.channel || null, c.minutes, c.language || null, c.hasTranscript ? 1 : 0, people, search, now());
+        q.run(`INSERT INTO metaview_calls (id, url, started_at, title, kind, channel, minutes, has_transcript, people, search, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          c.id, c.url, c.startedAt, c.title || null, c.kind || null, c.channel || null, c.minutes, c.hasTranscript ? 1 : 0, people, search, now());
       } else {
-        q.run(`UPDATE metaview_calls SET url = ?, started_at = ?, title = ?, kind = ?, channel = ?, minutes = ?, language = ?, has_transcript = ?, people = ?, search = ?, seen_at = ? WHERE id = ?`,
-          c.url, c.startedAt, c.title || null, c.kind || null, c.channel || null, c.minutes, c.language || null, c.hasTranscript ? 1 : 0, people, search, now(), c.id);
+        q.run(`UPDATE metaview_calls SET url = ?, started_at = ?, title = ?, kind = ?, channel = ?, minutes = ?, has_transcript = ?, people = ?, search = ?, seen_at = ? WHERE id = ?`,
+          c.url, c.startedAt, c.title || null, c.kind || null, c.channel || null, c.minutes, c.hasTranscript ? 1 : 0, people, search, now(), c.id);
         // A call that was brought in before Metaview had written it out: its transcript is fetched now that there is one.
         if (known.call_id && !known.has_transcript && c.hasTranscript && q.get('SELECT 1 AS x FROM calls WHERE id = ? AND transcript IS NULL', known.call_id)) {
           q.run('UPDATE metaview_calls SET fetch_next_at = ?, fetch_tries = 0 WHERE id = ?', now(), c.id);
@@ -136,7 +224,8 @@ function remember(conversations) {
       const add = (kind, value, first = null, last = null) => q.run('INSERT INTO metaview_people (call_id, kind, value, first, last) VALUES (?, ?, ?, ?, ?)', c.id, kind, value, first, last);
       for (const p of others) {
         for (const email of p.emails) add('email', email);
-        for (const tail of new Set(p.phones.map(phoneTail).filter(Boolean))) add('phone', tail);
+        const numbers = new Map(p.phones.map(phoneParts).filter(Boolean).map((n) => [`${n.tail} ${n.lead}`, n]));
+        for (const n of numbers.values()) add('phone', n.tail, n.lead);
         const words = onlyANumber(p.name) ? [] : nameTokens(p.name);
         if (words.length) add('name', words.join(' '), words[0], words.length > 1 ? words.at(-1) : '');
       }
@@ -166,14 +255,15 @@ class Gone extends Error {}
  * bringing calls in by itself: it only does so while an address or a number still points at exactly one candidate.
  * Resolves to the call's id, or to null when `unasked` found nothing certain.
  */
-async function fetchAndKeep(id, key, { applicationId = null, userId = null, unasked = false }) {
-  const got = await oneConversation(key, id, { urgent: !unasked });
+async function fetchAndKeep(id, link, { applicationId = null, userId = null, unasked = false }) {
+  const got = await during(link, oneConversation(link.key, id, asking(link, !unasked)));
   if (!got) {
     q.run('DELETE FROM metaview_calls WHERE id = ? AND call_id IS NULL', id);
     throw new Gone();
   }
   remember([got.conversation]);
   const row = rowOf(id);
+  if (!row) throw new Gone();   // it was with somebody who was erased from The Book while Metaview was answering
   const people = json(row.people, []);
   let onto = applicationId;
   if (!onto) {
@@ -199,23 +289,24 @@ async function fetchAndKeep(id, key, { applicationId = null, userId = null, unas
 
 // Opening the same conversation twice at once must give one call, so the second waits for the first.
 const opening = new Map();
-async function bringIn(id, key, options) {
+async function bringIn(id, link, options) {
   while (opening.has(id)) await opening.get(id).catch(() => {});
   const already = callOf(id);
   if (already) {
     if (options.applicationId) putCallOn(already, options.applicationId, options.userId);
     return already;
   }
-  const work = fetchAndKeep(id, key, options);
+  if (!live(link)) throw new Ended();
+  const work = fetchAndKeep(id, link, options);
   opening.set(id, work);
   try { return await work; } finally { opening.delete(id); }
 }
 
 // ---------- the background work ----------
 /** Read the newest page of the list, and carry on down while everything on a page is new (more than a page arrived since the last look). */
-async function readNewest(key) {
+async function readNewest(link) {
   for (let offset = 0, pages = 0; pages < 100; pages++) {
-    const page = await listConversations(key, { offset });
+    const page = await during(link, listConversations(link.key, { offset }, asking(link)));
     const fresh = remember(page.conversations);
     noteTotal(page);
     setSetting('metaview_checked_at', now());
@@ -227,13 +318,13 @@ async function readNewest(key) {
       break;
     }
     if (!historyDone() || fresh < page.conversations.length || !page.received) break;
-    await sleep(PAGE_PAUSE);
+    await during(link, sleep(PAGE_PAUSE));
   }
 }
 /** Read one more page of the history, from where the last one stopped. */
-async function readHistoryPage(key) {
+async function readHistoryPage(link) {
   const offset = Number(getSetting('metaview_history_offset', '0')) || 0;
-  const page = await listConversations(key, { offset });
+  const page = await during(link, listConversations(link.key, { offset }, asking(link)));
   remember(page.conversations);
   noteTotal(page);
   setSetting('metaview_checked_at', now());
@@ -250,7 +341,7 @@ async function readHistoryPage(key) {
  * never brought in are forgotten this way; a call in The Oracle is The Book's own and stays.
  * Resolves to true while the reading is under way.
  */
-async function readAgain(key) {
+async function readAgain(link) {
   const startedAt = getSetting('metaview_walk_started_at');
   if (!startedAt) {
     const last = getSetting('metaview_walked_at');
@@ -260,7 +351,7 @@ async function readAgain(key) {
     return true;
   }
   const offset = Number(getSetting('metaview_walk_offset', '0')) || 0;
-  const page = await listConversations(key, { offset });
+  const page = await during(link, listConversations(link.key, { offset }, asking(link)));
   remember(page.conversations);
   if (page.more && page.received) {
     setSetting('metaview_walk_offset', String(offset + page.received));
@@ -271,8 +362,8 @@ async function readAgain(key) {
   const missed = q.all('SELECT id FROM metaview_calls WHERE seen_at < ? AND call_id IS NULL AND brought_in_at IS NULL ORDER BY id LIMIT 1000', startedAt).map((row) => row.id);
   for (let i = 0; i < missed.length; i += 50) {
     const some = missed.slice(i, i + 50);
-    if (i) await sleep(PAGE_PAUSE);
-    remember((await listConversations(key, { ids: some })).conversations);
+    if (i) await during(link, sleep(PAGE_PAUSE));
+    remember((await during(link, listConversations(link.key, { ids: some }, asking(link)))).conversations);
     q.run(`DELETE FROM metaview_calls WHERE seen_at < ? AND call_id IS NULL AND brought_in_at IS NULL AND id IN (${some.join(',')})`, startedAt);
   }
   tx(() => { setSetting('metaview_walked_at', now()); forget('walk_started_at', 'walk_offset'); });
@@ -284,7 +375,7 @@ async function readAgain(key) {
  * that arrived after the call was brought in. A few at a time. Each conversation is asked for a limited number of
  * times, so one that Metaview cannot answer for never holds up the rest.
  */
-async function fetchOwed(key) {
+async function fetchOwed(link) {
   const due = q.all('SELECT id, call_id, fetch_tries FROM metaview_calls WHERE fetch_next_at IS NOT NULL AND fetch_next_at <= ? ORDER BY fetch_next_at LIMIT 3', now());
   for (const row of due) {
     const state = () => (row.call_id ? q.get('SELECT transcript IS NOT NULL AS has_transcript, notes IS NOT NULL AS has_notes FROM calls WHERE id = ?', row.call_id) : null);
@@ -300,9 +391,9 @@ async function fetchOwed(key) {
     if (!before || (before.has_transcript && before.has_notes)) { settle(null, 0); continue; }   // the call is gone, or somebody has written what was missing
     let got;
     try {
-      got = await oneConversation(key, row.id);
+      got = await during(link, oneConversation(link.key, row.id, asking(link)));
     } catch (err) {
-      later(before.has_transcript);
+      if (!(err instanceof Ended)) later(before.has_transcript);
       throw err;
     }
     if (!got) { later(before.has_transcript); continue; }   // Metaview does not have it just now, or any more
@@ -326,7 +417,7 @@ function nextOwedIn() {
  * Never one that was brought in before (somebody may have deleted it on purpose), never more than the daily limit.
  * Resolves to true when there may be more to do.
  */
-async function bringInUnasked(key) {
+async function bringInUnasked(link) {
   if (!autoOn()) return false;
   const room = AUTO_PER_DAY - q.get('SELECT COUNT(*) AS n FROM metaview_calls WHERE auto_at > ?', new Date(Date.now() - DAY).toISOString()).n;
   if (room <= 0) return false;
@@ -338,11 +429,12 @@ async function bringInUnasked(key) {
   const certain = waiting.filter((row) => found.get(row.id)?.sure);
   const batch = certain.slice(0, Math.min(room, AUTO_AT_ONCE));
   for (const [i, row] of batch.entries()) {
-    if (i) await sleep(PAGE_PAUSE);
+    if (i) await during(link, sleep(PAGE_PAUSE));
     try {
-      await bringIn(row.id, key, { unasked: true });
+      await bringIn(row.id, link, { unasked: true });
     } catch (err) {
       if (err instanceof Gone) continue;
+      if (err instanceof Ended) throw err;
       // Counted, so a conversation Metaview cannot answer for is left to a person after a few tries.
       q.run('UPDATE metaview_calls SET fetch_tries = fetch_tries + 1 WHERE id = ? AND call_id IS NULL', row.id);
       throw err;
@@ -355,23 +447,23 @@ let checkedKey = null;      // the key Metaview has accepted since this server s
 let lastLook = 0;           // when the newest page was last read
 let lookAsked = false;      // somebody pressed "refresh"
 let failures = 0;
-/** One round of background work. Resolves to how long to wait before the next, or to null when there is no key to work with. */
-async function round() {
-  const { key } = currentKey();
+/** One round of background work for the connection `link`. Resolves to how long to wait before the next, or to null when there is no key to work with. */
+async function round(link) {
+  const { key } = link;
   if (!key) return null;
   if (checkedKey !== key) {
-    noteWorkspace(await whoAmI(key));
+    noteWorkspace(await during(link, whoAmI(key, asking(link))));
     checkedKey = key;
   }
   if (lookAsked || Date.now() - lastLook >= POLL) {
     lookAsked = false;
-    await readNewest(key);
+    await readNewest(link);
     lastLook = Date.now();
   }
-  await fetchOwed(key);
-  const moreToBring = await bringInUnasked(key);
-  if (!historyDone()) await readHistoryPage(key);
-  const readingAgain = historyDone() && await readAgain(key);
+  await fetchOwed(link);
+  const moreToBring = await bringInUnasked(link);
+  if (!historyDone()) await readHistoryPage(link);
+  const readingAgain = historyDone() && await readAgain(link);
   if (moreToBring || !historyDone() || readingAgain) return PAGE_PAUSE;
   return Math.max(1000, Math.min(lastLook + POLL - Date.now(), nextOwedIn() ?? POLL));
 }
@@ -398,14 +490,18 @@ function wake(delay = 0) {
 async function run() {
   if (running) { again = true; return; }
   running = true;
-  let wait = null;
+  let wait = null, link = null;
   try {
-    wait = await round();
+    link = linkNow();
+    wait = await round(link);
     failures = 0;
     forget('error');
   } catch (err) {
+    // The connection this round was working for has ended: what went wrong with it is nobody's problem now, and
+    // the next round starts at once with whatever key there is.
+    if (err instanceof Ended || (link && !live(link))) again = true;
     // The database may be closing as the server stops: then there is nothing left to do, and nothing to say.
-    try { wait = noteProblem(err); } catch { wait = null; }
+    else try { wait = noteProblem(err); } catch { wait = null; }
   } finally {
     running = false;
   }
@@ -420,9 +516,10 @@ export function registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, 
 
   const limit = (name, user, max) => { if (!takeHit(`metaview-${name}:${user.id}`, max, HOUR)) bad('That is a lot in one hour. Try again a little later.', 429); };
   /** Refuse with the sentence for what went wrong at Metaview, and keep it for the status. */
-  const metaviewSaid = (err, status = 502) => {
+  const metaviewSaid = (err, link, status = 502) => {
+    if (err instanceof Ended) bad(ENDED, 409);
     if (!(err instanceof MetaviewError)) throw err;
-    try { noteProblem(err); } catch { /* the refusal below still says it */ }
+    try { if (live(link)) noteProblem(err); } catch { /* the refusal below still says it */ }
     bad(err.message, status);
   };
 
@@ -432,15 +529,18 @@ export function registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, 
   api.put('/metaview/key', agencyOnly, adminOnly, async (req, res) => {
     const typed = typeof req.body?.key === 'string' ? req.body.key.trim().replace(/^Bearer\s+/i, '') : '';
     if (!typed) bad('Paste the key from Metaview first.');
-    if (typed.length < 8 || typed.length > 500 || !/^[\x21-\x7e]+$/.test(typed)) bad('That does not look like a Metaview key. Copy it again from Metaview (Settings, Integrations, MCP).');
+    if (!looksLikeAKey(typed)) bad('That does not look like a Metaview key. Copy it again from Metaview (Settings, Integrations, MCP).');
     limit('key', req.user, 20);
     const who = await whoAmI(typed, { urgent: true }).catch((err) => (err instanceof MetaviewError ? bad(err.message, err.kind === 'key' ? 400 : 502) : Promise.reject(err)));
     tx(() => {
+      // From here on this is another connection: whatever the background was half-way through for the key before is dropped.
+      connection++;
       noteWorkspace(who);
       setSetting('metaview_key', seal(typed, KEY_PURPOSE));
       setSetting('metaview_checked_at', now());
       forget('error');
     });
+    scrub();   // the key that was replaced is not left readable in the database's files
     checkedKey = typed;
     failures = 0;
     lookAsked = true;
@@ -454,11 +554,14 @@ export function registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, 
       bad('This key is set where The Book is hosted (METAVIEW_API_KEY), so it cannot be removed here. Remove that setting there.', 409);
     }
     tx(() => {
+      // The connection ends here: a request that is in the air for it writes nothing when it lands (see `during`).
+      connection++;
       forget('key', 'workspace', 'org', 'checked_at', 'error');
       forgetUnbrought();
     });
+    scrub();   // what was just forgotten is not left readable in the database's files either
     checkedKey = null;
-    if (currentKey().key) wake(0);   // a key set where The Book is hosted is still there, and takes over
+    if (currentKey().key) { lookAsked = true; wake(0); }   // a key set where The Book is hosted is still there, and takes over
     res.json({ ok: true });
   });
 
@@ -518,12 +621,8 @@ export function registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, 
     let candidate = null;
     if (req.query.candidate_id !== undefined) {
       candidate = q.get('SELECT id, name, lower(email) AS email, phone FROM candidates WHERE id = ?', int(req.query.candidate_id)) ?? bad('That candidate was not found. They may have been removed.', 404);
-      const facts = [`m.call_id IN (SELECT id FROM calls WHERE candidate_id = ?)`], values = [candidate.id];
-      const add = (kind, value) => { if (value) { facts.push(`m.id IN (SELECT call_id FROM metaview_people WHERE kind = '${kind}' AND value = ?)`); values.push(value); } };
-      add('email', candidate.email);
-      add('phone', phoneTail(candidate.phone));
-      add('name', nameTokens(candidate.name).length > 1 ? nameTokens(candidate.name).join(' ') : null);
-      where.push(`(${facts.join(' OR ')})`); p.push(...values);
+      const { facts, values } = factsOf(candidate);
+      where.push(`(${['m.call_id IN (SELECT id FROM calls WHERE candidate_id = ?)', ...facts].join(' OR ')})`); p.push(candidate.id, ...values);
     }
     const from = `FROM metaview_calls m LEFT JOIN calls k ON k.id = m.call_id ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`;
     const select = `SELECT m.*, k.application_id AS on_application, k.candidate_id AS on_candidate ${from} ORDER BY m.started_at DESC, m.id DESC`;
@@ -561,12 +660,12 @@ export function registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, 
       applicationId = int(given);
       if (!q.get('SELECT 1 AS x FROM applications WHERE id = ?', applicationId)) bad('That candidate was not found. They may have been removed.', 404);
     }
-    const { key } = currentKey();
-    if (!key && !callOf(id)) bad('Metaview is not connected, so this call cannot be brought in. An admin can connect it with a key from Metaview.', 409);
+    const link = linkNow();
+    if (!link.key && !callOf(id)) bad('Metaview is not connected, so this call cannot be brought in. An admin can connect it with a key from Metaview.', 409);
     limit('open', req.user, 240);
-    const callId = await bringIn(id, key, { applicationId, userId: req.user.id }).catch((err) => {
+    const callId = await bringIn(id, link, { applicationId, userId: req.user.id }).catch((err) => {
       if (err instanceof Gone) bad('Metaview no longer has this conversation.', 404);
-      return metaviewSaid(err);
+      return metaviewSaid(err, link);
     });
     res.json({ call_id: callId });
   });

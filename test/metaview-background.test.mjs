@@ -9,7 +9,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { until, tempDir, sleep } from './oracle-helpers.mjs';
 import { metaviewStandIn, PEOPLE, SPECIAL } from './metaview-standin.mjs';
-import { PORTS, startBook, workspace, connect, look } from './metaview-helpers.mjs';
+import { PORTS, GOOD_KEY, startBook, workspace, connect, look } from './metaview-helpers.mjs';
 
 const started = [];   // servers, stand-ins and folders to clear away, whatever a test did
 after(async () => {
@@ -56,6 +56,190 @@ test('a restart carries on where the history stopped, and still fetches the note
   assert.equal(standIn.mostAtOnce, 1);
   await server.stop();
   await standIn.stop();   // the next tests use these ports again
+});
+
+/** Whether any file in a data folder holds a piece of text (the database, and the file it keeps recent changes in). */
+const inFiles = (dataDir, text) => fs.readdirSync(dataDir).some((name) => {
+  const file = path.join(dataDir, name);
+  return fs.statSync(file).isFile() && fs.readFileSync(file).includes(text);
+});
+
+test('disconnecting, or changing the key, while Metaview is being read: nothing asked for the old connection is kept', async () => {
+  const standIn = keep(await metaviewStandIn(PORTS.standInRestart, { count: 400 }));
+  const dataDir = keep(tempDir('metaview-midway'));
+  const server = keep(await startBook({ port: PORTS.restart, dataDir, standIn, env: { METAVIEW_TIMEOUT_MS: '5000' } }));
+  const w = await workspace(server.base);
+  await w.owner.putJson('/metaview/settings', { auto: false });
+  const sealedKey = () => look(dataDir, (all) => all(`SELECT value FROM settings WHERE key = 'metaview_key'`)[0].value);
+  /** Connect with every answer taking a quarter of a second, and wait until the history is being read with a request in the air. */
+  const midway = async () => {
+    standIn.delay = 250;
+    await connect(w.owner);
+    await until(() => statusOf(w.owner), (s) => s.known >= 100 && s.catching_up, 20000);
+    await until(async () => standIn.inFlight, (n) => n === 1, 5000);
+  };
+
+  // Disconnect with a page of the history on its way back.
+  await midway();
+  const sealed = sealedKey();
+  const asked = standIn.requests.length;
+  assert.deepEqual((await w.owner.del('/metaview/key')).body, { ok: true });
+  // At once, and again after the page that was in the air has landed: nothing is remembered, and nothing more is asked.
+  for (const wait of [0, 1500]) {
+    await sleep(wait);
+    assert.deepEqual(await statusOf(w.owner), { connected: false, workspace: null, source: null, can_manage: true, last_checked_at: null, known: 0, in_the_book: 0, catching_up: false, error: null, auto: false, total: null });
+    assert.deepEqual((await w.priya.get('/metaview/calls')).body, { total: 0, calls: [] });
+    look(dataDir, (all) => {
+      assert.equal(all('SELECT COUNT(*) AS n FROM metaview_calls')[0].n, 0);
+      assert.equal(all('SELECT COUNT(*) AS n FROM metaview_people')[0].n, 0);
+      assert.deepEqual(all(`SELECT key FROM settings WHERE key LIKE 'metaview_%' AND key != 'metaview_auto'`), []);
+    });
+  }
+  assert.equal(standIn.requests.length, asked, 'the background stopped asking');
+  // Nor is any of it still readable in the files: not the sealed key, not the people Metaview told The Book about.
+  for (const text of [sealed, '@mail.example', PEOPLE[0].name, PEOPLE[0].phone.slice(2)]) assert.equal(inFiles(dataDir, text), false, text);
+
+  // Connecting again reads the whole history from the top: no page is skipped because of where the old reading had got to.
+  standIn.delay = 0;
+  const from = standIn.requests.length;
+  await connect(w.owner);
+  assert.equal((await settled(w.owner)).known, 400);
+  assert.deepEqual(pagesAsked(standIn, from).filter((offset) => offset > 0), [50, 100, 150, 200, 250, 300, 350]);
+  await w.owner.del('/metaview/key');
+
+  // A key for another workspace entered while this one's history is being read: none of this one's conversations end up in the new list.
+  const theirs = new Set(standIn.addWorkspace('mv-another-workspace-key', { workspace: 'Another Agency', count: 60 }).map((c) => c.id));
+  await midway();
+  const replaced = sealedKey();
+  const changed = await w.owner.putJson('/metaview/key', { key: 'mv-another-workspace-key' });
+  const changedAt = Date.now();
+  assert.equal(changed.body.workspace, 'Another Agency');
+  standIn.delay = 0;
+  const done = await settled(w.owner);
+  await sleep(600);   // anything still on its way for the first workspace would have landed by now
+  assert.deepEqual([done.known, done.total, done.workspace], [60, 60, 'Another Agency']);
+  look(dataDir, (all) => {
+    const kept = all('SELECT id FROM metaview_calls').map((row) => row.id);
+    assert.equal(kept.length, 60);
+    assert.ok(kept.every((id) => theirs.has(id)), 'only the new workspace\'s conversations are listed');
+  });
+  // The old key was not used again once the new one was accepted, and it is not left behind in the files.
+  assert.deepEqual(standIn.requests.filter((r) => r.key === GOOD_KEY && r.at > changedAt), []);
+  assert.equal(inFiles(dataDir, replaced), false);
+  assert.equal(standIn.mostAtOnce, 1);
+  assert.equal(/Metaview:/.test(server.output()), false, 'none of this was a problem worth a line in the log');
+  await server.stop();
+  await standIn.stop();
+});
+
+test('what is known about a call points two ways: nobody is chosen, and nothing is brought in by itself', async () => {
+  const standIn = keep(await metaviewStandIn(PORTS.standInRestart, { count: 0 }));
+  const dataDir = keep(tempDir('metaview-two-ways'));
+  const server = keep(await startBook({ port: PORTS.restart, dataDir, standIn }));
+  const w = await workspace(server.base);
+  const on = {
+    ana: await w.candidate({ name: 'Ana Ruiz', email: 'ana.ruiz@mail.example', phone: '416-555-0150' }),
+    ben: await w.candidate({ name: 'Ben Okafor', email: 'ben.okafor@mail.example', phone: '416-555-0151' }),
+    carl: await w.candidate({ name: 'Carl Imre', email: 'carl.imre@mail.example' }),
+    dee: await w.candidate({ name: 'Dee Lund', phone: '4165550157' }),
+    // Two people in one household with one number, written two ways. Ines is in progress; Otto was turned down for another job.
+    ines: await w.candidate({ name: 'Ines Vale', email: 'ines.vale@mail.example', phone: '(905) 555-0152' }),
+    otto: await w.candidate({ name: 'Otto Vale', email: 'otto.vale@mail.example', phone: '905.555.0152', jobId: w.otherJob }),
+    // A number in another country whose last ten digits are a Toronto number.
+    lena: await w.candidate({ name: 'Lena Marsh', email: 'lena.marsh@mail.example', phone: '+44 4165 550158' }),
+    // Numbers typed the way people type them.
+    petra: await w.candidate({ name: 'Petra Novak', email: 'petra.novak@mail.example', phone: '416-555-0183 ext 4' }),
+    quentin: await w.candidate({ name: 'Quentin Abara', email: 'quentin.abara@mail.example', phone: '416/555/0184' }),
+    rhea: await w.candidate({ name: 'Rhea Sandhu', email: 'rhea.sandhu@mail.example', phone: '416-555-0185 / 647-555-0186 (evenings)' }),
+  };
+  assert.equal((await w.owner.post(`/applications/${on.otto.application_id}/reject`, {})).status, 200);
+  const call = {
+    // Ana's address, with Ben's number and Ben's name.
+    mixed: standIn.add({ person: { name: 'Ben Okafor', email: 'ana.ruiz@mail.example', phone: '+14165550151' }, minutesAgo: 30 }),
+    // Two candidates on one call, one known by address and one by number.
+    panel: standIn.add({ person: { name: 'Carl Imre', email: 'carl.imre@mail.example' }, also: [{ name: 'Dee Lund', phone: '+14165550157' }], channel: 'Zoom', title: 'Panel', minutesAgo: 29 }),
+    // The household's number, with Otto's name, with his first name only, and with no name at all.
+    ottoNamed: standIn.add({ person: { name: 'Otto Vale', phone: '+19055550152' }, minutesAgo: 28 }),
+    ottoFirstName: standIn.add({ person: { name: 'Otto', phone: '+19055550152' }, minutesAgo: 27 }),
+    household: standIn.add({ person: { name: 'Nobody', phone: '+19055550152' }, shown: '+19055550152', minutesAgo: 26 }),
+    // A Toronto caller whose number ends in the same ten digits as Lena's in another country.
+    toronto: standIn.add({ person: { name: 'Nobody', phone: '+14165550158' }, shown: '+14165550158', minutesAgo: 25 }),
+    ext: standIn.add({ person: { name: 'Petra', phone: '+14165550183' }, minutesAgo: 24 }),
+    slashes: standIn.add({ person: { name: 'Quentin Abara', phone: '+14165550184' }, minutesAgo: 23 }),
+    second: standIn.add({ person: { name: 'Rhea', phone: '+16475550186' }, minutesAgo: 22 }),
+    plain: standIn.add({ person: { name: 'Ana Ruiz', email: 'ana.ruiz@mail.example' }, minutesAgo: 21 }),
+  };
+  await connect(w.owner);
+  await settled(w.owner);
+  // "Auto" is on. The four calls that one number or one address ties to one candidate come in; the other six do not.
+  const brought = await until(() => oracleCalls(w.owner), (calls) => calls.length === 4, 20000);
+  await sleep(900);
+  assert.equal((await statusOf(w.owner)).in_the_book, 4);
+  const onto = Object.fromEntries(brought.map((c) => [c.external_url, c.candidate_id]));
+  assert.deepEqual([call.ext, call.slashes, call.second, call.plain].map((c) => onto[c.url]), [on.petra, on.quentin, on.rhea, on.ana].map((who) => who.candidate_id));
+
+  const list = (await w.owner.get('/metaview/calls?limit=100')).body.calls;
+  const of = (conv) => list.find((row) => row.id === conv.id);
+  const matched = (conv) => { const { match } = of(conv); return match && [match.candidate_id, match.how]; };
+  const offered = (conv) => of(conv).suggestions.map((s) => [s.candidate_id, s.how]).sort();
+  // The address says Ana, the number and the name say Ben: both are offered, each with what it rests on.
+  assert.equal(matched(call.mixed), null);
+  assert.deepEqual(offered(call.mixed), [[on.ana.candidate_id, 'email'], [on.ben.candidate_id, 'phone']].sort());
+  // Two candidates on one call: both offered.
+  assert.equal(matched(call.panel), null);
+  assert.deepEqual(offered(call.panel), [[on.carl.candidate_id, 'email'], [on.dee.candidate_id, 'phone']].sort());
+  // The household's number: the name on the conversation says which of the two it was, whoever is still in progress.
+  assert.deepEqual(matched(call.ottoNamed), [on.otto.candidate_id, 'phone']);
+  assert.deepEqual(matched(call.ottoFirstName), [on.otto.candidate_id, 'phone']);
+  assert.equal(matched(call.household), null);
+  assert.deepEqual(offered(call.household), [[on.ines.candidate_id, 'phone'], [on.otto.candidate_id, 'phone']].sort());
+  // The same last ten digits in another country are another number.
+  assert.deepEqual([matched(call.toronto), offered(call.toronto)], [null, []]);
+  assert.deepEqual([call.ext, call.slashes, call.second].map((c) => of(c).match.how), ['phone', 'phone', 'phone']);
+
+  // Each profile lists what is, or may be, that person's, and nothing that is plainly somebody else's.
+  const theirs = async (who) => (await w.owner.get(`/metaview/calls?candidate_id=${who.candidate_id}`)).body.calls.map((row) => row.id);
+  assert.deepEqual(await theirs(on.ines), [call.household.id]);
+  assert.deepEqual(await theirs(on.otto), [call.household.id, call.ottoFirstName.id, call.ottoNamed.id]);
+  assert.deepEqual(await theirs(on.ana), [call.plain.id, call.mixed.id]);
+  assert.deepEqual(await theirs(on.ben), [call.mixed.id]);
+  assert.deepEqual(await theirs(on.dee), [call.panel.id]);
+  assert.deepEqual(await theirs(on.lena), []);
+  assert.deepEqual(await theirs(on.petra), [call.ext.id]);
+  assert.deepEqual(await theirs(on.rhea), [call.second.id]);
+
+  // Opening one without saying who it is for puts it on nobody when nobody could be chosen, and on Otto when the name said Otto.
+  const opened = async (conv) => (await w.owner.get(`/oracle/calls/${(await w.sam.post(`/metaview/calls/${conv.id}/open`)).body.call_id}`)).body.call;
+  for (const conv of [call.household, call.mixed, call.panel, call.toronto]) assert.deepEqual([(await opened(conv)).application_id, (await opened(conv)).candidate_id], [null, null]);
+  const ottos = await opened(call.ottoNamed);
+  assert.deepEqual([ottos.application_id, ottos.candidate_id, ottos.title], [on.otto.application_id, on.otto.candidate_id, 'Call with Otto Vale']);
+  assert.deepEqual((await history(w.owner, on.otto.application_id)).map((a) => a.detail), ['Metaview call, 12 min']);
+  for (const who of [on.ines, on.ben, on.carl, on.dee, on.lena]) assert.deepEqual(await history(w.owner, who.application_id), [], 'nobody else\'s history says anything about a call');
+  // Only Ana's own call is on Ana.
+  assert.deepEqual((await history(w.owner, on.ana.application_id)).map((a) => a.detail), ['Metaview call, 12 min']);
+  await server.stop();
+  await standIn.stop();
+});
+
+test('a key set where The Book is hosted that cannot be a key is never sent and never logged, and the status says so', async () => {
+  const standIn = keep(await metaviewStandIn(PORTS.standInRestart, { count: 5 }));
+  const dataDir = keep(tempDir('metaview-bad-host-key'));
+  // Pasted over two lines, which is how a long key ends up with a line break in the middle.
+  const server = keep(await startBook({ port: PORTS.restart, dataDir, standIn, env: { METAVIEW_API_KEY: 'mv-key-pasted\non-two-lines' } }));
+  const w = await workspace(server.base);
+  await sleep(500);
+  const s = await statusOf(w.owner);
+  assert.deepEqual([s.connected, s.source, s.catching_up], [false, null, false]);
+  assert.match(s.error, /METAVIEW_API_KEY\) does not look like a key/);
+  assert.equal((await w.priya.post('/metaview/refresh')).status, 409);
+  assert.equal(standIn.requests.length, 0, 'nothing was sent to Metaview');
+  assert.equal(/mv-key-pasted|on-two-lines/.test(server.output()), false);
+  // A key entered in the app works all the same.
+  assert.equal((await connect(w.owner)).source, 'settings');
+  assert.equal((await settled(w.owner)).known, 5);
+  assert.equal(/mv-key-pasted|on-two-lines/.test(server.output()), false);
+  await server.stop();
+  await standIn.stop();
 });
 
 test('with "auto" on, recent calls that an address or a number ties to one candidate are brought in by themselves', async () => {

@@ -3,11 +3,11 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
-import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
+import { q, now, tx, scrub, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
 import { registerAutofill } from './autofill.js';
 import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCalls, forgetSavedNote } from './oracle.js';
-import { registerMetaview } from './metaview.js';
+import { registerMetaview, conversationsWith, forgetConversations } from './metaview.js';
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
 
 export const api = express.Router();
@@ -1368,33 +1368,39 @@ api.delete('/applications/:id', agencyOnly, (req, res) => {
   const a = loadApp(req.params.id, req.user);
   const photo = q.get('SELECT photo_file FROM candidates WHERE id = ?', a.candidate_id)?.photo_file;
   const calls = callFilesOf([a.candidate_id]);
+  const inMetaview = conversationsWith(a.candidate_id);
   const gone = tx(() => {
     // Calls recorded with this person stay on their record while they are in another job; they go when the person does.
     detachCallsFrom(a.id);
     q.run('DELETE FROM applications WHERE id = ?', a.id);
     if (q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ?', a.candidate_id)) return false;
+    forgetConversations(inMetaview);   // what The Book remembered about their conversations in Metaview goes with them
     q.run('DELETE FROM candidates WHERE id = ?', a.candidate_id);
     return true;
   });
   removeUpload(a.resume_file);
-  if (gone) { removeUpload(photo); removeCallFiles(calls); }
+  if (gone) { removeUpload(photo); removeCallFiles(calls); scrub(); }
   res.json({ ok: true });
 });
 
 // Erase a person completely: every application they made at this client, with its notes, scorecards, interviews,
-// emails and résumé files, their recorded calls (audio, transcripts and notes), and their contact record.
+// emails and résumé files, their recorded calls (audio, transcripts and notes), their contact record, and what The
+// Book remembered about their conversations in Metaview. (The conversations themselves stay in Metaview.)
 api.delete('/candidates/:id', agencyOnly, (req, res) => {
   const cand = q.get('SELECT * FROM candidates WHERE id = ?', int(req.params.id));
   if (!cand || !canSee(req.user, cand.client_id)) bad('Not found', 404);
   const files = q.all('SELECT resume_file FROM applications WHERE candidate_id = ?', cand.id).map((r) => r.resume_file);
   const calls = callFilesOf([cand.id]);
+  const inMetaview = conversationsWith(cand.id);
   tx(() => {
+    forgetConversations(inMetaview);
     q.run('DELETE FROM applications WHERE candidate_id = ?', cand.id);
     q.run('DELETE FROM candidates WHERE id = ?', cand.id); // their calls are removed with them
   });
   files.forEach(removeUpload);
   removeUpload(cand.photo_file);
   removeCallFiles(calls);
+  scrub();   // what was deleted is not left readable in the database's files
   res.json({ ok: true });
 });
 

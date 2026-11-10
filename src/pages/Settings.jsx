@@ -118,7 +118,7 @@ function MetaviewCard({ metaview }) {
   const [setAuto, savingAuto] = useAction(async (auto) => metaview.set(await api.put('/metaview/settings', { auto })));
   const [disconnect, disconnecting] = useAction(async () => {
     const here = Number(status.in_the_book || 0);
-    if (!window.confirm(`Disconnect Metaview?\n\nKept: ${here === 1 ? 'the 1 call' : `the ${here.toLocaleString('en-CA')} calls`} already in The Oracle, with ${here === 1 ? 'its' : 'their'} transcripts, notes and submission drafts.\n\nForgotten: the key, and what The Book remembered about the Metaview calls that were never brought in.\n\nNothing in Metaview is changed.`)) return;
+    if (!window.confirm(`Disconnect Metaview?\n\nKept: ${here === 1 ? 'the 1 call' : `the ${here.toLocaleString('en-CA')} calls`} already in The Oracle, with ${here === 1 ? 'its' : 'their'} transcripts, notes and submission drafts.\n\nForgotten: the key, and what The Book remembered about the Metaview calls that were never brought in.\n\nNothing in Metaview is changed. The key itself keeps working there until you delete it in Metaview (Settings, Integrations, MCP).`)) return;
     await api.del('/metaview/key');
     toast('Metaview disconnected');
     await metaview.reload();
@@ -148,7 +148,8 @@ function MetaviewCard({ metaview }) {
           metaview.error ? <Notice tone="bad">The Metaview connection could not be checked. {metaview.error}</Notice> : <LoaderCircle className="size-5 animate-spin text-stone-400" aria-label="Loading" />
         ) : !status.connected ? (
           <>
-            {status.error && <Notice tone="warn"><span className="font-medium">The last time The Book tried Metaview, it did not work.</span> {status.error}</Notice>}
+            {/* Not connected, with something to say: a saved key that can no longer be read, or one set on the host that cannot be a key. */}
+            {status.error && <Notice tone="warn">{status.error}</Notice>}
             <ol className="list-decimal space-y-1.5 pl-5">{METAVIEW_STEPS.map((step, i) => <li key={i}>{step}</li>)}</ol>
             {keyForm('Metaview API key', 'Connect')}
             <p className="text-[13px] text-stone-500">The key belongs to the person who makes it, and The Book sees the Metaview calls that person can see. Make it from an account that sees the whole team’s calls.</p>
