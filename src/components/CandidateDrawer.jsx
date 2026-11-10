@@ -78,9 +78,9 @@ function CandidateView({ data, onClose }) {
     // entry goes back to The Book as a record of its own. The question says so, and both profiles then point at each other.
     const staysIn = data.others.map((o) => o.job_title).join(', ');
     const question = app.from_book && data.others.length
-      ? `Remove ${candidate.name} from ${job.title}? They stay in ${staysIn} at ${client.name}. What was kept on this entry (its notes, résumé, calls and history) goes back to The Book without a job as a separate record, and is no longer on their ${client.name} profile, which will say where it went. Their interviews, scorecards, rating and any offer for ${job.title} are deleted.`
+      ? `Remove ${candidate.name} from ${job.title}? They stay in ${staysIn} at ${client.name}. What was kept on this entry (its notes, résumé, calls and history) goes back to The Book without a job as a separate record, and is no longer on their ${client.name} profile, which will say where it went. Their interviews, scorecards, rating and any offer for ${job.title} are deleted, with the write-up for the hiring team and the hiring team’s review.`
       : app.from_book
-      ? `Remove ${candidate.name} from ${job.title}? They go back to The Book without a job and keep their notes, résumé, calls and history. Their interviews, scorecards, rating and any offer for this job are deleted.`
+      ? `Remove ${candidate.name} from ${job.title}? They go back to The Book without a job and keep their notes, résumé, calls and history. Their interviews, scorecards, rating and any offer for this job are deleted, with the write-up for the hiring team and the hiring team’s review.`
       : `Remove ${candidate.name} from ${job.title}? Their notes, scorecards and interviews for this job are deleted.${data.others.length ? ' Their other applications are kept.' : ` This is their only application, so their record is removed too${calls?.length ? ', along with the calls recorded with them' : ''}.`}`;
     if (!window.confirm(question)) return;
     const result = await api.del(`/applications/${app.id}`);

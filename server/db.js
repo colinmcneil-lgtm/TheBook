@@ -312,11 +312,14 @@ function rebuildTable(table, change) {
       undo();
       if (diskFull(err)) {
         // Said in plain words, because the owner of a nearly full volume would otherwise see the server start, fail
-        // and start again with nothing to go on. Nothing has been changed: the table is as it was before this start.
+        // and start again with nothing to go on. No row has been changed or lost: this table is as it was before this
+        // start (one rebuilt before it stays rebuilt, with the rows it had). Measured, the most room needed at
+        // once is about one and a half times the size of app.db in all: free space of about half its size.
         let size = '';
         try { size = ` (it is ${Math.ceil(fs.statSync(path.join(DATA_DIR, 'app.db')).size / 1e6)} MB now)`; } catch { /* the sentence does without it */ }
-        throw new Error(`The disk that holds ${DATA_DIR} is full, so the database could not be upgraded. Nothing has been changed or lost. `
-          + `The first start of this version needs free space of about one and a half times the size of app.db${size} while it rebuilds the table "${table}". `
+        throw new Error(`The disk that holds ${DATA_DIR} is full, so the database could not be upgraded. No row has been changed or lost. `
+          + `The first start of this version needs room for about one and a half times the size of app.db${size} in all, so free space of about half its size, `
+          + `while it rebuilds the table "${table}". `
           + 'Free some space or make the volume larger, and start again.', { cause: err });
       }
       throw err;
@@ -506,11 +509,23 @@ export function keepForAgency(which, params = [], toApplicationId = null) {
 // A build of this release that was never deployed kept such lines where they were and marked them (a column
 // agency_only on activities and on emails), or told them by their date (older than applications.general_until). A
 // database that build has opened is put right here: the lines move to the agency's tables. The two columns stay,
-// unused. A database that has only ever been opened by released versions has neither column, and nothing happens.
+// unused. The same build left a covering note saved with an entry on the application when the entry went on a job,
+// and let screening answers and a consent date given to one client travel on to the next client's job. All three
+// are taken off every application that came from The Book and kept as one agency-only note, as this version does
+// at the moment of joining. A database that has only ever been opened by released versions has neither column,
+// and nothing happens.
 if (['activities', 'emails'].every((table) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === 'agency_only'))) {
   db.exec('BEGIN IMMEDIATE');
   try {
     keepForAgency('x.agency_only = 1 OR (a.job_id IS NOT NULL AND a.general_until IS NOT NULL AND x.created_at < a.general_until)');
+    const left = `job_id IS NOT NULL AND general_until IS NOT NULL AND (cover_note IS NOT NULL OR answers != '[]' OR consent_at IS NOT NULL)`;
+    db.exec(`INSERT INTO notes (application_id, user_id, body, private, created_at)
+      SELECT id, COALESCE(owner_id, (SELECT MIN(id) FROM users), 0), 'From before they were put on this job. Kept for the agency only.'
+        || COALESCE(char(10) || char(10) || 'Saved with their entry in The Book: ' || cover_note, '')
+        || CASE WHEN answers != '[]' THEN char(10) || char(10) || 'Screening answers they gave elsewhere: ' || answers ELSE '' END
+        || COALESCE(char(10) || char(10) || 'They agreed to their data being processed, elsewhere, on ' || substr(consent_at, 1, 10), ''), 1, general_until
+      FROM applications WHERE ${left}`);
+    db.exec(`UPDATE applications SET cover_note = NULL, answers = '[]', consent_at = NULL WHERE ${left}`);
     db.exec('COMMIT');
   } catch (err) {
     undo();

@@ -10,6 +10,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
@@ -17,9 +18,10 @@ import { session, tempDir, until, RECORDING, PORTS as SHARED } from './oracle-he
 import { startBook, connect } from './metaview-helpers.mjs';
 import { metaviewStandIn } from './metaview-standin.mjs';
 
-// Two ports: POOL_TEST_PORT and the one after it, or the two kept for this file (see oracle-helpers.mjs).
+// Four ports: POOL_TEST_PORT, the one after it, and the fifth and sixth from it (a second server with e-mail
+// delivery connected, and the stand-in for its mail provider), or the four kept for this file (see oracle-helpers.mjs).
 const BASE_PORT = Number(process.env.POOL_TEST_PORT) || SHARED.pool;
-const PORTS = { api: BASE_PORT, metaview: BASE_PORT + 1 };
+const PORTS = { api: BASE_PORT, metaview: BASE_PORT + 1, mailApi: BASE_PORT + 4, mail: BASE_PORT + 5 };
 const NEEDS_JOB = { error: 'Add them to a job first.' };
 // A real picture, one pixel square: the workspace reads a photo's own size and refuses a file that only starts like one.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
@@ -1258,7 +1260,9 @@ test('removed from a job, somebody who came from The Book goes back to it; anyon
   const ilse = await detail(dana, book.ilse);
   assert.deepEqual([ilse.application.general, ilse.candidate.id, ilse.candidate.client_id], [true, ilsePerson, null]);
   assert.deepEqual(ilse.notes.map((n) => [n.body, n.private]).sort(), [['Applied through the site.', 1], ['Salary expectations are high.', 1], ['Saved with their entry in The Book: Kept with her entry.', 1]]);
-  assert.deepEqual(ilse.earlier_resumes.map((r) => r.name), ['Ilse book.pdf']);
+  // The résumé her entry brought is her résumé again, and the one that was on Northline's application is an earlier one.
+  assert.deepEqual([ilse.application.resume_name, ilse.earlier_resumes.map((r) => r.name)], ['Ilse book.pdf', ['Ilse applied.pdf']]);
+  assert.equal((await dana.get(`/applications/${book.ilse}/resume`)).body.toString(), 'Ilse, from The Book');
   assert.equal((await dana.get(`/oracle/calls/${book.ilseCall}`)).body.call.application_id, book.ilse);
   assert.equal((await noor.get(`/applications/${book.ilse}`)).status, 404);
   // Erasing her erases the earlier résumé with the rest.
@@ -1536,17 +1540,20 @@ test('what somebody wrote to one client when they applied there is never shown t
     questions: [{ id: 'q1', label: 'What salary do you expect at Northline?', type: 'short', required: true }, { id: 'q2', label: 'Can you work Saturdays?', type: 'yesno' }] })).body.id;
   // Petra applies on Northline's careers page: she answers Northline's questions, writes them a note and ticks their consent box.
   const sent = await session(api.base).upload(`/public/careers/${slug}/jobs/${clinic}/apply`, { name: 'Petra Novak', email: 'petra@example.com', consent: 'yes',
-    answers: JSON.stringify({ q1: 'NORTHLINE-ANSWER: 95k, and I would take less', q2: 'yes' }), cover_note: 'Dear Northline, I have always wanted to work for you.' });
+    answers: JSON.stringify({ q1: 'NORTHLINE-ANSWER: 95k, and I would take less', q2: 'yes' }), cover_note: 'Dear Northline, I have always wanted to work for you.',
+    resume: resume('Petra, written for Northline Dental', 'Petra for Northline.pdf') });
   assert.equal(sent.status, 200, JSON.stringify(sent.body));
   const hers = (await list(alex, `?job_id=${clinic}`))[0].id;
   const atNorthline = await detail(noor, hers);
   assert.deepEqual([atNorthline.application.answers.map((a) => a.answer), atNorthline.application.cover_note, atNorthline.application.source, Boolean(atNorthline.application.consent_at)],
     [['NORTHLINE-ANSWER: 95k, and I would take less', 'yes'], 'Dear Northline, I have always wanted to work for you.', 'careers_page', true]);
   // The agency has her in The Book as well, and joins that entry to the application she made.
-  const entry = await saved(dana, { name: 'Petra Novak', email: 'petra@example.com', note: 'Met at a careers fair.' });
+  const entry = await saved(dana, { name: 'Petra Novak', email: 'petra@example.com', note: 'Met at a careers fair.', resume: resume('Petra, as the agency holds her', 'Petra CV.pdf') });
   assert.deepEqual((await addToJob(dana, entry, { job_id: clinic, into: atNorthline.candidate.id })).body, { id: hers, merged: true });
-  // Northline still sees what she wrote to Northline.
+  // Northline still sees what she wrote to Northline, and the résumé she sent them. The agency's copy is set aside.
   assert.equal((await detail(noor, hers)).application.answers.length, 2);
+  assert.equal((await detail(noor, hers)).application.resume_name, 'Petra for Northline.pdf');
+  assert.deepEqual((await detail(dana, hers)).earlier_resumes.map((r) => r.name), ['Petra CV.pdf']);
 
   // Removed from the job, she goes back to The Book. What she wrote to Northline is kept for the agency as a note,
   // and is no longer on the application that will go on to the next job.
@@ -1561,6 +1568,10 @@ test('what somebody wrote to one client when they applied there is never shown t
     'Screening answers:\nWhat salary do you expect at Northline?\nNORTHLINE-ANSWER: 95k, and I would take less\n\nCan you work Saturdays?\nyes',
     'Note from the candidate:\nDear Northline, I have always wanted to work for you.',
   ].join('\n\n'));
+  // So is the résumé she sent Northline: the entry has the agency's own copy again, and hers to Northline is an earlier one.
+  assert.deepEqual([inBook.application.resume_name, inBook.earlier_resumes.map((r) => r.name)], ['Petra CV.pdf', ['Petra for Northline.pdf']]);
+  assert.equal((await dana.get(`/applications/${hers}/resume`)).body.toString(), 'Petra, as the agency holds her');
+  assert.equal((await dana.get(`/applications/${hers}/resumes/${inBook.earlier_resumes[0].id}`)).body.toString(), 'Petra, written for Northline Dental');
 
   // Put on a job at Maple. Maple's hiring team is shown her name, details and résumé, and not a word of Northline's.
   const fleet = (await alex.post('/jobs', { client_id: client.maple, title: 'Fleet Planner', status: 'open' })).body.id;
@@ -1568,6 +1579,8 @@ test('what somebody wrote to one client when they applied there is never shown t
   const atMaple = await detail(maya, hers);
   assert.deepEqual([atMaple.application.answers, atMaple.application.cover_note, atMaple.application.consent_at, atMaple.application.source, atMaple.notes, atMaple.emails, atMaple.activities.map((a) => a.detail)],
     [[], null, null, 'agency_sourced', [], [], ['Added to Fleet Planner at Applied']]);
+  assert.deepEqual([atMaple.application.resume_name, atMaple.earlier_resumes, (await maya.get(`/applications/${hers}/resume`)).body.toString()], ['Petra CV.pdf', [], 'Petra, as the agency holds her']);
+  assert.equal((await maya.get(`/applications/${hers}/resumes/${inBook.earlier_resumes[0].id}`)).status, 403);
   for (const answer of [atMaple, (await maya.get('/dashboard')).body, await list(maya, '?status=all'), (await maya.get(`/reports?job_id=${fleet}`)).body]) {
     assert.equal(/northline|95k|careers/i.test(JSON.stringify(answer)), false, 'nothing of Northline reaches Maple');
   }
@@ -1587,8 +1600,30 @@ test('what somebody wrote to one client when they applied there is never shown t
   assert.deepEqual([still.application.answers, still.application.cover_note, still.application.consent_at], [[], null, null]);
   assert.equal(JSON.stringify(still).includes('LEFT BEHIND'), false);
   assert.equal((await detail(dana, hers)).application.cover_note, 'LEFT BEHIND');
-  // Somebody who applied to Maple themselves is shown to Maple with their answers, as before.
   assert.equal((await dana.del(`/candidates/${whole.candidate.id}`)).status, 200);
+
+  // The agency held no résumé of its own for Rolf. The one he sent Northline does not become his résumé in The Book,
+  // by either road: on the application he made, or as the copy that went with him to another of Northline's jobs.
+  for (const viaCopy of [false, true]) {
+    const address = `rolf${viaCopy ? '.copy' : ''}@example.com`;
+    assert.equal((await session(api.base).upload(`/public/careers/${slug}/jobs/${clinic}/apply`, { name: 'Rolf Maier', email: address, consent: 'yes',
+      answers: JSON.stringify({ q1: 'a lot' }), resume: resume(`Rolf, written for Northline (${viaCopy})`, 'Rolf for Northline.pdf') })).status, 200);
+    let his = (await list(alex, `?job_id=${clinic}`)).find((r) => r.email === address).id;
+    const record = (await detail(dana, his)).candidate.id;
+    if (viaCopy) his = (await addToJob(dana, his, { job_id: job.hygienist })).body.id;
+    const rolf = await saved(dana, { name: 'Rolf Maier', email: address });
+    assert.deepEqual((await addToJob(dana, rolf, { job_id: viaCopy ? job.hygienist : clinic, into: record })).body, { id: his, merged: true });
+    assert.equal((await detail(noor, his)).application.resume_name, 'Rolf for Northline.pdf');
+    assert.deepEqual((await dana.del(`/applications/${his}`)).body, { ok: true, returned: true, id: his });
+    const back = await detail(dana, his);
+    assert.deepEqual([back.application.general, back.application.resume_name, back.earlier_resumes.map((r) => r.name)], [true, null, ['Rolf for Northline.pdf']]);
+    assert.deepEqual((await addToJob(dana, his, { job_id: fleet })).body, { id: his, merged: false });
+    const shown = await detail(maya, his);
+    assert.deepEqual([shown.application.resume_name, shown.earlier_resumes, (await maya.get(`/applications/${his}/resume`)).status], [null, [], 404]);
+    assert.equal(/northline/i.test(JSON.stringify(shown)), false);
+    assert.equal((await dana.del(`/candidates/${shown.candidate.id}`)).status, 200);
+    if (viaCopy) assert.equal((await dana.del(`/candidates/${record}`)).status, 200);
+  }
 });
 
 test('found in The Book by their link with another address typed, the entry keeps its own address and the history says so, for the agency only', async () => {
@@ -1630,6 +1665,11 @@ test('one person on file in two places: each profile points to the other, and de
   const theirs = await detail(maya, second);
   assert.equal('elsewhere' in theirs, false);
   assert.equal(JSON.stringify(theirs).includes('The Book'), false);
+  // Nor the day the agency first saved her. Maple's record of her is the one that was made then, and the application
+  // that came from The Book has left it: to the hiring team the record still begins with her first application here.
+  assert.ok(db('SELECT created_at FROM candidates WHERE id = ?', onJob.candidate.id)[0].created_at < theirs.application.applied_at);
+  assert.equal(theirs.candidate.created_at, theirs.application.applied_at);
+  assert.equal(onJob.candidate.created_at, db('SELECT created_at FROM candidates WHERE id = ?', onJob.candidate.id)[0].created_at);
 
   // Another client's record of the same person is pointed out too: here one that shares only her LinkedIn link.
   const hygiene = (await alex.post('/jobs', { client_id: client.northline, title: 'Hygiene Lead', status: 'open' })).body.id;
@@ -1702,6 +1742,133 @@ test('nothing the agency kept is stored where the hiring team is shown from: rea
   // The comparison was not an empty one: people who came from The Book are on these jobs, with history only the agency reads.
   assert.ok(fromBook >= 8, `${fromBook} applications that came from The Book`);
   assert.ok(withHistory >= 8, `${withHistory} with history or e-mails only the agency is shown`);
+});
+
+test('a note written by a client user can only be deleted by them while they can still open the person it is on', async () => {
+  const entry = await saved(dana, { name: 'Tova Lindqvist', email: 'tova@example.com' });
+  assert.equal((await addToJob(dana, entry, { job_id: job.accountant })).status, 200);
+  const write = async (body) => (await maya.post(`/applications/${entry}/notes`, { body })).body.id;
+  const first = await write('Maple: liked her.'), second = await write('Maple: second thoughts.'), third = await write('Maple: third.');
+  // While she is on Maple's job, a note of Maya's own goes when Maya deletes it.
+  assert.deepEqual((await maya.del(`/notes/${first}`)).body, { ok: true });
+  // Back in The Book, Maya is told the same about her note as about a note that never existed, and it stays.
+  assert.deepEqual((await dana.del(`/applications/${entry}`)).body, { ok: true, returned: true, id: entry });
+  assert.equal((await maya.get(`/applications/${entry}`)).status, 404);
+  const refused = await maya.del(`/notes/${second}`), never = await maya.del('/notes/99999999');
+  assert.deepEqual([refused.status, refused.body], [403, { error: 'You can only delete your own notes.' }]);
+  assert.deepEqual([never.status, never.body], [refused.status, refused.body]);
+  // On another client's job it is the same.
+  assert.equal((await addToJob(dana, entry, { job_id: job.hygienist })).status, 200);
+  assert.deepEqual([(await maya.del(`/notes/${third}`)).status, (await noor.del(`/notes/${third}`)).status], [403, 403]);
+  assert.deepEqual((await detail(dana, entry)).notes.map((n) => [n.body, n.private]).sort(), [['Maple: second thoughts.', 1], ['Maple: third.', 1]]);
+  assert.deepEqual((await detail(noor, entry)).notes, []);
+  assert.equal((await dana.del(`/candidates/${(await detail(dana, entry)).candidate.id}`)).status, 200);
+});
+
+// The record of an e-mail is written when the mail provider has answered, which can take seconds. These tests hold
+// the provider's answer back (a stand-in for Resend's web API, on this machine) and change the application meanwhile.
+test('an e-mail still on its way when the person is put on a job, joined to an application or deleted is recorded where the agency alone reads it, or not at all', async () => {
+  const held = [];
+  let asked = 0;
+  const provider = http.createServer((req, res) => { req.resume(); req.on('end', () => { asked += 1; held.push(() => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"id":"stand-in"}'); }); }); });
+  await new Promise((resolve) => provider.listen(PORTS.mail, '127.0.0.1', resolve));
+  const dir = tempDir('pool-mail');
+  const server = await startBook({ port: PORTS.mailApi, dataDir: dir, standIn: metaview,
+    env: { RESEND_API_KEY: 'stand-in', MAIL_FROM: 'agency@agency.example', RESEND_API_URL: `http://127.0.0.1:${PORTS.mail}/emails` } });
+  const read = (query, ...params) => {
+    const database = new DatabaseSync(path.join(dir, 'app.db'), { readOnly: true });
+    try { return database.prepare(query).all(...params).map((row) => ({ ...row })); } finally { database.close(); }
+  };
+  /** Where anything about a message with this subject is recorded: a list of "table application" (and the line, for history). */
+  const recorded = (subject) => [
+    ...read('SELECT application_id AS id FROM emails WHERE subject = ?', subject).map((r) => `emails ${r.id}`),
+    ...read('SELECT application_id AS id FROM agency_emails WHERE subject = ?', subject).map((r) => `agency_emails ${r.id}`),
+    ...read('SELECT application_id AS id FROM activities WHERE detail = ?', `Emailed candidate: ${subject}`).map((r) => `activities ${r.id}`),
+    ...read('SELECT application_id AS id FROM agency_activities WHERE detail = ?', `Emailed candidate: ${subject}`).map((r) => `agency_activities ${r.id}`),
+  ];
+  /** Start sending, wait until the provider has the message, do `meanwhile`, then let the provider answer. */
+  const sendWhile = async (who, id, subject, meanwhile) => {
+    const before = asked;
+    const sending = who.post(`/applications/${id}/emails`, { subject, body: `BODY of ${subject}` });
+    await until(async () => asked, (n) => n > before);
+    await meanwhile();
+    held.splice(0).forEach((answer) => answer());
+    return sending;
+  };
+  try {
+    const owner = session(server.base);
+    assert.equal((await owner.post('/setup', { agencyName: 'Harbour Talent', name: 'Alex Morgan', email: 'alex@agency.example', password: 'demo1234' })).status, 200);
+    const kestrel = (await owner.post('/clients', { name: 'Kestrel Logistics' })).body.id, lumen = (await owner.post('/clients', { name: 'Lumen Health' })).body.id;
+    const { token } = (await owner.post('/invites', { role: 'client', email: 'kim@kestrel.example', client_id: kestrel })).body;
+    const kim = session(server.base);
+    assert.equal((await kim.post(`/invites/${token}/accept`, { name: 'Kim Client', password: 'demo1234' })).status, 200);
+    const sales = (await owner.post('/jobs', { client_id: kestrel, title: 'Head of Sales', status: 'open' })).body.id;
+    const nurse = (await owner.post('/jobs', { client_id: lumen, title: 'Nurse Lead', status: 'open' })).body.id;
+    const inBook = async (fields) => (await owner.upload('/applications', fields)).body.id;
+    const seenByKim = async (id) => { const d = (await kim.get(`/applications/${id}`)).body; return [d.emails.map((e) => e.subject), d.activities.map((a) => a.detail)]; };
+    const feed = async () => (await kim.get('/dashboard')).body.recent.map((r) => r.detail);
+
+    // Nothing happens meanwhile: recorded on the application, as it always was, for the hiring team to read too.
+    const plain = (await owner.upload('/applications', { job_id: sales, name: 'Pia Plain', email: 'pia@example.com' })).body.id;
+    const ordinary = await sendWhile(owner, plain, 'ON-THE-JOB', async () => {});
+    assert.deepEqual([ordinary.status, ordinary.body.delivery, ordinary.body.id > 0], [200, 'sent', true]);
+    assert.deepEqual(recorded('ON-THE-JOB'), [`emails ${plain}`, `activities ${plain}`]);
+    assert.deepEqual(await seenByKim(plain), [['ON-THE-JOB'], ['Emailed candidate: ON-THE-JOB', 'Added to the pipeline (agency sourced)']]);
+
+    // Sent from The Book, and put on a job before the provider answers: the agency's own tables, with the moment it was sent.
+    const dana_ = await inBook({ name: 'Dana Whitlock', email: 'dana.whitlock@example.com' });
+    const moved = await sendWhile(owner, dana_, 'BOOK-MAIL', async () => assert.equal((await addToJob(owner, dana_, { job_id: sales })).status, 200));
+    assert.deepEqual([moved.status, moved.body.delivery, moved.body.id < 0], [200, 'sent', true]);
+    assert.deepEqual(recorded('BOOK-MAIL'), [`agency_emails ${dana_}`, `agency_activities ${dana_}`]);
+    assert.deepEqual(await seenByKim(dana_), [[], ['Added to Head of Sales at Applied']]);
+    const whole = (await owner.get(`/applications/${dana_}`)).body;
+    assert.deepEqual(whole.emails.map((e) => [e.id, e.subject, e.body, e.delivery]), [[moved.body.id, 'BOOK-MAIL', 'BODY of BOOK-MAIL', 'sent']]);
+    assert.deepEqual(whole.activities.map((a) => a.detail), ['Added to Head of Sales at Applied', 'Emailed candidate: BOOK-MAIL', 'Added to The Book (agency sourced)']);
+    assert.ok(read('SELECT created_at FROM agency_emails WHERE application_id = ?', dana_)[0].created_at < whole.application.general_until);
+
+    // Sent from a job, and by the time the provider answers they are back in The Book and on another client's job.
+    const next = await sendWhile(owner, dana_, 'KESTREL-MAIL', async () => {
+      assert.equal((await owner.del(`/applications/${dana_}`)).body.returned, true);
+      assert.equal((await addToJob(owner, dana_, { job_id: nurse })).status, 200);
+    });
+    assert.deepEqual([next.status, next.body.id < 0], [200, true]);
+    assert.deepEqual(recorded('KESTREL-MAIL'), [`agency_emails ${dana_}`, `agency_activities ${dana_}`]);
+    assert.deepEqual(read('SELECT COUNT(*) AS n FROM emails WHERE application_id = ?', dana_), [{ n: 0 }]);
+
+    // Sent from The Book, and the entry is joined to the application the client's record already has: recorded there, for the agency.
+    const there = (await owner.upload('/applications', { job_id: sales, name: 'Enzo Ferri', email: 'enzo@example.com' })).body.id;
+    const record = (await owner.get(`/applications/${there}`)).body.candidate.id;
+    const enzo = await inBook({ name: 'Enzo Ferri', email: 'enzo@example.com' });
+    const joined = await sendWhile(owner, enzo, 'ENTRY-MAIL', async () => assert.deepEqual((await addToJob(owner, enzo, { job_id: sales, into: record })).body, { id: there, merged: true }));
+    assert.deepEqual([joined.status, joined.body.delivery, joined.body.id < 0], [200, 'sent', true]);
+    assert.deepEqual(recorded('ENTRY-MAIL'), [`agency_emails ${there}`, `agency_activities ${there}`]);
+    assert.deepEqual(await seenByKim(there), [[], ['Added to the pipeline (agency sourced)']]);
+    assert.ok((await owner.get(`/applications/${there}`)).body.emails.some((e) => e.subject === 'ENTRY-MAIL'));
+
+    // Two entries in The Book merged into one meanwhile: recorded on the one that is kept.
+    const one = await inBook({ name: 'Gus Hale', email: 'gus@example.com' }), other = await inBook({ name: 'Gus Hale', linkedin: 'https://www.linkedin.com/in/gus-hale' });
+    const person = async (id) => (await owner.get(`/applications/${id}`)).body.candidate.id;
+    const [going, kept] = [await person(other), await person(one)];
+    const merged = await sendWhile(owner, one, 'TWO-ENTRIES', async () => assert.equal((await owner.post(`/candidates/${kept}/merge`, { into: going })).status, 200));
+    assert.deepEqual([merged.status, merged.body.id > 0], [200, true]);
+    assert.deepEqual(recorded('TWO-ENTRIES'), [`emails ${other}`, `activities ${other}`]);
+
+    // The application is deleted meanwhile: the request still answers, and nothing is recorded anywhere.
+    const gone = await sendWhile(owner, plain, 'DELETED', async () => assert.deepEqual((await owner.del(`/applications/${plain}`)).body, { ok: true }));
+    assert.deepEqual([gone.status, gone.body], [200, { id: null, delivery: 'sent' }]);
+    assert.deepEqual(recorded('DELETED'), []);
+
+    // The hiring team's feed has the one line that was theirs to see, and no trace of the rest.
+    assert.equal(/BOOK-MAIL|KESTREL-MAIL|ENTRY-MAIL|TWO-ENTRIES/.test(JSON.stringify([await feed(), await seenByKim(there), (await kim.get('/applications?status=all')).body])), false);
+    assert.equal(asked, 6);
+    assert.equal(server.output().includes('constraint failed'), false, server.output());
+  } finally {
+    held.splice(0).forEach((answer) => answer());
+    await server.stop();
+    provider.closeAllConnections();
+    await new Promise((resolve) => provider.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the demo data has people in The Book without a job', () => {

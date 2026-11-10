@@ -34,9 +34,30 @@ async function deliver({ to, subject, body }) {
   await transport.sendMail({ from, to: recipients, subject, text: body, disableFileAccess: true, disableUrlAccess: true });
 }
 
+/**
+ * An entry in The Book that was folded into another application, and the application it went to (see foldEntry and
+ * entryIntoApplication in api.js). A message can be with the mail provider while that happens; it is recorded once
+ * the provider has answered, on the application the entry went to. Held in memory only: it matters for the seconds
+ * a send takes, and ids are never used twice.
+ */
+const folded = new Map();
+export const foldedInto = (fromId, intoId) => { folded.set(fromId, intoId); };
+
+/**
+ * Send one message to a candidate and record it on their application. Resolves to the record's id (below zero when
+ * it is one of the agency's own, as the profile numbers them; null when the application has gone), how delivery
+ * went, and where and when it was recorded, so that the caller's history line can be written beside it.
+ *
+ * Delivery can take seconds, and the application can change meanwhile. Somebody in The Book can be put on a job:
+ * what was sent to them before that is the agency's business, so the record goes to the agency's own table, never
+ * where the client's hiring team is shown from. Their entry can be folded into another application: the record
+ * goes there. And the application can be deleted: then there is nothing to record on.
+ */
 export async function sendMail({ applicationId, to, subject, body, userId = null }) {
   subject = String(subject).replace(/[\r\n]+/g, ' ').slice(0, 300);
   body = String(body);
+  const began = now();
+  const wasInBook = q.get('SELECT job_id FROM applications WHERE id = ?', applicationId)?.job_id == null;
   let delivery = 'not_configured';
   if (mailConfigured()) {
     try {
@@ -47,10 +68,17 @@ export async function sendMail({ applicationId, to, subject, body, userId = null
       delivery = 'failed';
     }
   }
+  const find = (id) => q.get('SELECT id, job_id, general_until FROM applications WHERE id = ?', id);
+  let app = find(applicationId);
+  for (let id = applicationId; !app && folded.has(id);) { id = folded.get(id); app = find(id); }
+  if (!app) return { id: null, delivery, applicationId: null, agencyOnly: false, at: began };
+  // On a job now, and sent before they were on it: from The Book, or from a job they have since left for another.
+  const agencyOnly = app.job_id != null && (wasInBook || (app.general_until != null && app.general_until > began));
+  const at = agencyOnly ? began : now();
   const id = q.insert(
-    'INSERT INTO emails (application_id, to_email, subject, body, sent_by, delivery, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    applicationId, to, subject, body, userId, delivery, now());
-  return { id, delivery };
+    `INSERT INTO ${agencyOnly ? 'agency_emails' : 'emails'} (application_id, to_email, subject, body, sent_by, delivery, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    app.id, to, subject, body, userId, delivery, at);
+  return { id: agencyOnly ? -id : id, delivery, applicationId: app.id, agencyOnly, at };
 }
 
 /** Where the workspace lives, for links in emails. Never taken from the request, which a sender could forge. */

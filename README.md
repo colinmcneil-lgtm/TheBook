@@ -94,6 +94,10 @@ candidate in the app, and put on a job later when the right role comes up.
   the e-mails from before it are moved off the application into tables only the agency is read from, their notes
   are all agency-only, and a covering note saved with their entry becomes an agency-only note ("Saved with their
   entry in The Book: ..."). Your own view of the profile is unchanged: the whole history, every e-mail and note.
+  An e-mail is recorded when the mail provider has answered, which can take seconds. One sent from The Book that
+  is still on its way when the person is put on a job is recorded in the agency's own table as well, with the
+  moment it was sent; if their entry was folded into another application meanwhile it is recorded there, and if
+  the application was deleted meanwhile nothing is recorded.
   Put straight into an interview stage, Offer or Hired, they are picked out in Recent activity on the dashboard
   as anyone added straight into that stage is. Recent activity holds the job's news only, for you as for the
   client: nothing from before the job is listed beside the job's name. If they go back to The Book and are later
@@ -117,13 +121,28 @@ candidate in the app, and put on a job later when the right role comes up.
   kept as an earlier one, for the agency). The dialog says so before you join.
 - **If the job is deleted, or they are removed from it,** somebody who was in The Book before goes back to The Book
   without a job, with their notes, résumé, e-mails, calls and history, including what was added while they were on
-  the job. Only what belonged to the job goes: interviews and scorecards, the offer, the rating and the write-up for
-  the hiring team. Everyone else in a deleted job is deleted with it, as before.
+  the job. Only what belonged to the job goes: interviews and scorecards, the offer, the rating, the write-up for
+  the hiring team and the hiring team's review of it. Everyone else in a deleted job is deleted with it, as before.
+  A note a client user wrote stays on the entry as the agency's; that user can no longer delete it, and is told
+  the same as for a note that does not exist.
 - **What they wrote to one client never reaches another.** Somebody may have applied on a client's careers page
   themselves and then been joined with their entry in The Book. When that application goes back to The Book, the
   answers they gave to that client's questions, their note to that client and the consent they ticked there are
   taken off it and kept as one agency-only note ("From their own application for ... at ..."), and its source
   becomes "Agency sourced". Put on another client's job afterwards, that client's hiring team is shown none of it.
+  The résumé goes the same way. When the entry was joined to an application that had a résumé of its own, the
+  entry's was set aside; back in The Book the entry has the résumé it brought again, and the application's own is
+  kept under "Earlier résumés", which only the agency is given. When the entry brought none, a résumé the person
+  sent that client with their own application is still taken off and kept under Earlier résumés (also the copy
+  of it on another of that client's jobs they were added to, for as long as the application they made themselves
+  is still on the client's record), and the entry goes back without a résumé. One case leaves the agency's own
+  copy under Earlier résumés instead of on the profile: an application they made themselves without a résumé,
+  which had been using the entry's.
+- **What a hiring team could still work out.** Nothing from before the job is shown, but two things are as they
+  are because the entry is kept and not copied: its history line reads "Added to (job) at (stage)", where somebody
+  added straight to a job has "Added to the pipeline (...)" (the same line as for anyone added to a second job at
+  the client); and the entry keeps its number, so its profile address can be lower than that of somebody added to
+  the job before it, and is the same one it had at an earlier client.
 - **One person, more than one record.** Each client keeps its own record of a person and The Book keeps its own,
   so the same person can be on file in two places: in The Book and on a client's record (they applied on a careers
   page while in The Book, or were removed from one of a client's jobs while still on another, which sends what you
@@ -168,16 +187,20 @@ through it again.) All of this was run on made-up databases, not on a copy of a 
 
 **Before the first deploy, and if you ever go back.**
 
-- **Room on the disk.** Rebuilding the two tables needs free space of about one and a half times the size of
-  `app.db` for the length of the first start (a 92 MB database needed 124 MB). With less, the start fails and the
-  log says that the disk is full ("The disk that holds ... is full, so the database could not be upgraded. Nothing
-  has been changed or lost.", or SQLite's own "database or disk is full" when it runs out after the tables are
-  rebuilt). Nothing is lost either way: the version before still starts on the database, and the next start with
-  room finishes the job.
+- **Room on the disk.** Rebuilding the two tables needs room for about one and a half times the size of `app.db`
+  in all for the length of the first start, so free space of about half its size (a 115 MB database took 165 MB
+  at the most, 50 MB more than it had). With less, the start fails and the log says that the disk is full ("The
+  disk that holds ... is full, so the database could not be upgraded. No row has been changed or lost.", or
+  SQLite's own "database or disk is full" when it runs out after the tables are rebuilt). No row is changed or
+  lost either way (a table rebuilt before the disk ran out stays rebuilt, with the rows it had): the version
+  before still starts on the database, and the next start with room finishes the job.
 - **Two copies of the app on one data folder.** A host that starts the new container before the old one has
-  stopped has both writing to the same database for a moment. Each now waits up to five seconds for the other
-  instead of failing with "database is locked", and two first starts at the same moment leave the database as one
-  would have.
+  stopped has both writing to the same database for a moment. This version waits up to five seconds for the
+  other instead of failing with "database is locked", and two first starts at the same moment leave the database
+  as one would have. The version being replaced by this deploy does not wait: anything saved in it during the
+  moment the new one rebuilds the two tables (milliseconds on a small database, about half a second with 50,000
+  candidates) can fail with "Something went wrong on our side" and should be saved again. Reading is not
+  affected, and it does not happen on a host that stops the old container first, nor on any later deploy.
 - **Treat this deploy as one-way once somebody from The Book has been put on a job.** The version before this one
   starts on the upgraded database and loses nothing by itself, but it does not know about people without a job:
   - They disappear from its lists, their profiles answer "Not found", looking one up finds nothing (so adding them
@@ -196,8 +219,9 @@ through it again.) All of this was run on made-up databases, not on a copy of a 
   - If you must go back for longer than it takes to fix a start, the safe order is: on this version, remove the
     people who came from The Book from their jobs (they return to The Book, which the old version shows to
     nobody), then roll back.
-`test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview, on two ports from
-`POOL_TEST_PORT` (the fifteenth and sixteenth from `ORACLE_TEST_PORT` unless set; `test/oracle-helpers.mjs` lists
+`test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview, on four ports counted from
+`POOL_TEST_PORT` (it, the next, and the fifth and sixth; the fifteenth, sixteenth, nineteenth and twentieth from
+`ORACLE_TEST_PORT` unless set; `test/oracle-helpers.mjs` lists
 which test file uses which port). `npm test` uses thirty ports in a row from `ORACLE_TEST_PORT` (3610 unless
 set): `ORACLE_TEST_PORT=5080 npm test`. Node refuses to fetch from a few ports whatever is listening on them
 (5060 and 5061 among them), so a base that puts one of the thirty on such a port, any base from 5031 to 5061 for

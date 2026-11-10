@@ -801,10 +801,11 @@ test('a database an unfinished build of this release has used: the lines it mark
     INSERT INTO jobs (id, client_id, title, created_at) VALUES (1, 1, 'Dispatcher', '2026-01-01');
     INSERT INTO stages (id, job_id, name, kind, position) VALUES (1, 1, 'Applied', 'applied', 0);
     INSERT INTO candidates (id, client_id, name, created_at) VALUES (1, 1, 'On A Job', '2026-04-01'), (2, NULL, 'In The Book', '2026-04-01'), (3, 1, 'Joined', '2026-04-01');
-    INSERT INTO applications (id, candidate_id, job_id, stage_id, applied_at, stage_entered_at, updated_at, general_until) VALUES
-      (1, 1, 1, 1, '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z'),
-      (2, 2, NULL, NULL, '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', NULL),
-      (3, 3, 1, 1, '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', NULL);
+    INSERT INTO applications (id, candidate_id, job_id, stage_id, applied_at, stage_entered_at, updated_at, general_until, cover_note, answers, consent_at) VALUES
+      (1, 1, 1, 1, '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z',
+        'Between us: wants out by June', '[{"question":"Salary at Northline?","answer":"95k"}]', '2026-02-10T09:00:00.000Z'),
+      (2, 2, NULL, NULL, '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', NULL, 'Kept with the entry', '[]', NULL),
+      (3, 3, 1, 1, '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', NULL, 'Dear Maple', '[{"question":"Q","answer":"A"}]', '2026-03-01T00:00:00.000Z');
     INSERT INTO activities (application_id, user_id, type, detail, created_at, agency_only) VALUES
       (1, 7, 'added', 'Added to The Book (linkedin)', '2026-04-01T00:00:00.000Z', 0),
       (1, 7, 'call', 'Call added, 9 min', '2026-04-02T00:00:00.000Z', 0),
@@ -829,6 +830,8 @@ test('a database an unfinished build of this release has used: the lines it mark
       kept: all('SELECT application_id, user_id, type, detail, created_at FROM agency_activities ORDER BY application_id, id'),
       mailShown: all('SELECT application_id, subject FROM emails ORDER BY application_id, created_at, id').map((r) => `${r.application_id} ${r.subject}`),
       mailKept: all('SELECT application_id, to_email, subject, body, sent_by, delivery, created_at FROM agency_emails ORDER BY application_id, id'),
+      written: all('SELECT id, cover_note, answers, consent_at FROM applications ORDER BY id').map((r) => [r.id, r.cover_note, r.answers, r.consent_at]),
+      notes: all('SELECT application_id, body, private, created_at FROM notes ORDER BY id'),
     };
     now.close();
     return out;
@@ -850,6 +853,15 @@ test('a database an unfinished build of this release has used: the lines it mark
     { application_id: 1, to_email: 'a@example.com', subject: 'Before the job', body: 'Between us', sent_by: 7, delivery: 'sent', created_at: '2026-04-03T00:00:00.000Z' },
     { application_id: 3, to_email: 'c@example.com', subject: 'From the entry', body: 'Between us', sent_by: 7, delivery: 'sent', created_at: '2026-02-02T00:00:00.000Z' },
   ]);
+  // That build also left a covering note saved with an entry on the application when it went on a job, and let
+  // answers and a consent date given to another client travel with it. They are off the application, where the
+  // release before this one would show them to the hiring team, and kept as one note for the agency. An entry still
+  // in The Book keeps its covering note, and an application somebody made themselves keeps what they wrote.
+  assert.deepEqual(after_.written, [[1, null, '[]', null], [2, 'Kept with the entry', '[]', null], [3, 'Dear Maple', '[{"question":"Q","answer":"A"}]', '2026-03-01T00:00:00.000Z']]);
+  assert.deepEqual(after_.notes, [{ application_id: 1, private: 1, created_at: '2026-05-01T00:00:00.000Z', body: [
+    'From before they were put on this job. Kept for the agency only.', 'Saved with their entry in The Book: Between us: wants out by June',
+    'Screening answers they gave elsewhere: [{"question":"Salary at Northline?","answer":"95k"}]', 'They agreed to their data being processed, elsewhere, on 2026-02-10',
+  ].join('\n\n') }]);
   start(NOW, dataDir);
   assert.deepEqual(read(), after_, 'the next start changes nothing more');
 });
@@ -864,8 +876,8 @@ forEachBefore('a disk that fills up during the upgrade is reported as a full dis
   // What every release up to the live one does first is not what fills the disk: it is done, and then compared against.
   const run = open_(NOW, dataDir, { DISK_FULL: '1' });
   assert.notEqual(run.status, 0, 'the start fails');
-  assert.match(run.stderr, /The disk that holds .* is full, so the database could not be upgraded\. Nothing has been changed or lost\./);
-  assert.match(run.stderr, /about one and a half times the size of app\.db \(it is \d+ MB now\) while it rebuilds the table "\w+"/);
+  assert.match(run.stderr, /The disk that holds .* is full, so the database could not be upgraded\. No row has been changed or lost\./);
+  assert.match(run.stderr, /room for about one and a half times the size of app\.db \(it is \d+ MB now\) in all, so free space of about half its size, while it rebuilds the table "\w+"/);
   assert.doesNotMatch(run.stderr, /cannot rollback/);
   const left = snapshot(dataDir);
   assert.deepEqual(left.problems, { integrity: [{ integrity_check: 'ok' }], foreignKeys: [] });

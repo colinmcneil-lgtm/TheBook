@@ -22,6 +22,7 @@ export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-c
 //   +0 to +4    Otterview tests: three for servers, then one for each stand-in
 //   +12, +13    the workspace tests: a server and a stand-in
 //   +14, +15    people saved without a job (pool.test.mjs): a server and a stand-in for Metaview
+//   +18, +19    the same file: a server with e-mail delivery connected, and a stand-in for its mail provider
 //   +16, +17    the reporting tests: two servers
 //   +20 to +29  the Metaview tests (see metaview-helpers.mjs)
 // Node refuses to fetch from a few ports whatever is listening there (the list browsers refuse, among them 3659,

@@ -444,7 +444,7 @@ export function AddToJobModal({ data, onClose }) {
               </Select>
             </Field>
             {!another && !refusal && (
-              <p className="text-xs text-stone-500">Everything on {first}’s profile comes with them: notes, résumé, calls and history. The client’s hiring team sees their details and résumé, and none of the notes, emails or history from before now.</p>
+              <p className="text-xs text-stone-500">Everything on {first}’s profile comes with them: notes, résumé, calls and history. The client’s hiring team sees their details, photo and résumé, and none of the notes, emails or history from before now.</p>
             )}
           </>
         )}

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { q, now, tx, scrub, keepForAgency, UPLOAD_DIR, getSetting, setSetting, createStages, agencyStageName, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
-import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
+import { sendMail, sendTemplate, foldedInto, mailConfigured, notify, appUrl } from './mail.js';
 import { registerAutofill } from './autofill.js';
 import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, forgetDraftsFor, moveCalls, moveCallsToEntry, moveEntryCallsToRecord, forgetSavedNote } from './oracle.js';
 import { registerMetaview, conversationsWith, forgetConversations } from './metaview.js';
@@ -1376,10 +1376,12 @@ api.get('/applications/:id', (req, res) => {
   const { photo_file, ...candidate } = q.get('SELECT * FROM candidates WHERE id = ?', a.candidate_id);
   candidate.photo = seesPhotos(req.user) ? photoTag(photo_file) : null;
   // A record that came from The Book was made when the agency first saved the person. To the hiring team it begins
-  // with their first application at this client: the earlier date would say they were in The Book before.
+  // with their first application at this client: the earlier date would say they were in The Book before. That holds
+  // for every record, whether or not an application that came from The Book is still on it: the one that came from
+  // The Book may have left (removed from its job, or the job deleted) while the record stays for another job.
   if (!agency) {
-    const here = q.get('SELECT MIN(applied_at) AS first, MAX(general_until) AS came FROM applications WHERE candidate_id = ?', candidate.id);
-    if (here.came && here.first > candidate.created_at) candidate.created_at = here.first;
+    const first = q.get('SELECT MIN(applied_at) AS at FROM applications WHERE candidate_id = ?', candidate.id).at;
+    if (first > candidate.created_at) candidate.created_at = first;
   }
   // The entry of someone saved to The Book without a job has no job, client or stages; the rest is as for anyone.
   const general = isGeneral(a);
@@ -1607,7 +1609,10 @@ api.post('/applications/:id/notes', (req, res) => {
 
 api.delete('/notes/:id', (req, res) => {
   const note = q.get('SELECT * FROM notes WHERE id = ?', int(req.params.id));
-  if (!note || note.user_id !== req.user.id) bad('You can only delete your own notes.', 403);
+  // A note on somebody the user can no longer open (they left the client's job for The Book, or for another client's
+  // job) answers as a note that does not exist: the answer must not say that the person is still on file.
+  const on = note && q.get('SELECT j.client_id FROM applications a LEFT JOIN jobs j ON j.id = a.job_id WHERE a.id = ?', note.application_id);
+  if (!note || note.user_id !== req.user.id || !canSee(req.user, on?.client_id)) bad('You can only delete your own notes.', 403);
   tx(() => {
     q.run('DELETE FROM notes WHERE id = ?', note.id);
     forgetSavedNote(note.id); // a call whose summary was saved as this note must not write over whatever is written next
@@ -1622,9 +1627,11 @@ api.post('/applications/:id/emails', async (req, res) => {
   const body = text(req.body?.body, 20000);
   if (!subject || !body) bad('Subject and message are required.');
   if (!a.candidate_email) bad('There is no email address on file for this candidate. Add one under Edit details first.');
-  const result = await sendMail({ applicationId: a.id, to: a.candidate_email, subject, body, userId: req.user.id });
-  logActivity(a.id, req.user.id, 'email', `Emailed candidate: ${subject}`);
-  res.json(result);
+  // The message is recorded when the mail provider has answered, on the application as it is by then (see sendMail):
+  // the history line goes where the record went, or nowhere when the application was deleted meanwhile.
+  const sent = await sendMail({ applicationId: a.id, to: a.candidate_email, subject, body, userId: req.user.id });
+  if (sent.applicationId) logActivity(sent.applicationId, req.user.id, 'email', `Emailed candidate: ${subject}`, { at: sent.at, agencyOnly: sent.agencyOnly });
+  res.json({ id: sent.id, delivery: sent.delivery });
 });
 
 api.put('/applications/:id/offer', agencyOnly, (req, res) => {
@@ -1864,6 +1871,7 @@ function foldEntry(going, kept, userId) {
   const spare = carryResume(going, kept, userId);
   q.run('UPDATE applications SET cover_note = COALESCE(cover_note, ?), owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', going.cover_note, going.owner_id, now(), kept.id);
   q.run('DELETE FROM applications WHERE id = ?', going.id);
+  foldedInto(going.id, kept.id); // a message still on its way to them is recorded there
   return spare;
 }
 
@@ -1941,11 +1949,14 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
   keepForAgency('x.application_id = ?', [entry.id], there.id);
   for (const table of ['agency_activities', 'agency_emails']) q.run(`UPDATE ${table} SET application_id = ? WHERE application_id = ?`, there.id, entry.id);
   moveCallsToEntry(entry.id, there.id);
-  const spareResume = carryResume(entry, there, user.id);
+  // When the application has a résumé of its own, the one the entry brought is set aside as an earlier résumé. It is
+  // marked as set aside (nobody "sent a newer one"), so that it can be put back if they return to The Book.
+  const spareResume = carryResume(entry, there, null);
   // A covering note saved with the entry was never the candidate's word to this client, so it becomes an agency-only note.
   if (entry.cover_note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', there.id, user.id, `Saved with their entry in The Book: ${entry.cover_note}`, now());
   q.run('UPDATE applications SET owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', entry.owner_id, now(), there.id);
   q.run('DELETE FROM applications WHERE id = ?', entry.id);
+  foldedInto(entry.id, there.id); // a message still on its way to them is recorded there, for the agency
   const left = absorbRecord(person, into);
   logActivity(there.id, user.id, 'merged', `Joined with their entry in The Book, which had no job${alsoHad(left, 'That entry')}`, { agencyOnly: true });
   return [spareResume, into.photo_file && person.photo_file ? person.photo_file : null];
@@ -1995,6 +2006,23 @@ function returnToBook(a, user, said, made) {
     ].filter(Boolean).join('\n\n');
     q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', a.id, user.id, kept, t);
   }
+  // The résumé is the same question. An application the client's record already had kept its own résumé when the
+  // entry was joined to it, and the one the entry brought was set aside as an earlier résumé (see
+  // entryIntoApplication). Back in The Book the entry has the résumé it brought again, and the application's own is
+  // kept as an earlier résumé, which only the agency is given: it was that client's, and left as the entry's résumé
+  // it would be shown to the next client's hiring team. When the entry brought none, a résumé the person sent this
+  // client with their own application is still taken off (also the copy of it that went with them to another of the
+  // client's jobs), and the entry goes back without one.
+  const brought = q.get('SELECT * FROM earlier_resumes WHERE application_id = ? AND kept_by IS NULL ORDER BY kept_at DESC, id DESC LIMIT 1', a.id);
+  const theirOwn = a.resume_file && (a.consent_at || a.source === 'careers_page'
+    || q.all(`SELECT resume_file FROM applications WHERE candidate_id = ? AND id != ? AND resume_file IS NOT NULL AND (consent_at IS NOT NULL OR source = 'careers_page')`, a.candidate_id, a.id)
+      .some((other) => sameUpload(other.resume_file, a.resume_file)));
+  if (brought || theirOwn) {
+    if (a.resume_file) q.run('INSERT INTO earlier_resumes (application_id, resume_file, resume_name, kept_at, kept_by) VALUES (?, ?, ?, ?, ?)', a.id, a.resume_file, a.resume_name, t, user.id);
+    q.run('UPDATE applications SET resume_file = ?, resume_name = ? WHERE id = ?', brought?.resume_file ?? null, brought?.resume_name ?? null, a.id);
+    if (brought) q.run('DELETE FROM earlier_resumes WHERE id = ?', brought.id);
+  }
+  q.run('UPDATE earlier_resumes SET kept_by = ? WHERE application_id = ? AND kept_by IS NULL', user.id, a.id); // nothing stays set aside in The Book
   q.run(
     `UPDATE applications SET job_id = NULL, stage_id = NULL, status = 'active', rating = NULL, reject_reason = NULL, review_status = NULL, submission_note = NULL,
        review_note = NULL, submitted_by = NULL, reviewed_by = NULL, reviewed_at = NULL, hired_at = NULL, general_until = NULL,
