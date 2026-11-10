@@ -70,11 +70,21 @@ Rules:
 - Write in the same variety of English as the documents (for example British spelling if they use it).
 - Salaries are yearly base figures as whole numbers ("85k" is 85000). If only one figure is given, use it for both ends.`;
 
-const wrap = (tag, body) => (body ? `<${tag}>\n${body}\n</${tag}>` : `<${tag}>\n(none provided)\n</${tag}>`);
+// The documents sit between these two pairs of tags. A document cannot close its own tag or open the other one:
+// any copy of the tags inside it is taken out, so what the model sees between them is always the document.
+const untagged = (body) => body.replace(/<\s*\/?\s*(?:job_description|intake_notes)\b[^>]*>/gi, ' ');
+const wrap = (tag, body) => (body ? `<${tag}>\n${untagged(body)}\n</${tag}>` : `<${tag}>\n(none provided)\n</${tag}>`);
 
-/** Ask Claude for a draft. Throws the SDK's typed errors; resolves to null when the model declines. */
+// How long to wait for a draft. Without a limit of its own the request would wait ten minutes and then try twice more.
+const AI_TIMEOUT = Number(process.env.AUTOFILL_AI_TIMEOUT_MS) || 150000;
+
+/**
+ * Ask Claude for a draft. Resolves to { draft }, or to { problem } when there is an answer but no draft in it:
+ * 'declined' (the model would not read the documents) or 'too_long' (it ran out of room before finishing).
+ * Throws the SDK's typed errors.
+ */
 export async function aiAutofill(description, notes) {
-  const message = await anthropic().beta.messages.parse({
+  const ask = () => anthropic().beta.messages.parse({
     model: MODEL,
     max_tokens: 16000,
     // If the model declines for policy reasons, let the API retry on its default fallback model.
@@ -83,17 +93,33 @@ export async function aiAutofill(description, notes) {
     output_config: { effort: 'medium', format: betaZodOutputFormat(Draft) },
     system: SYSTEM,
     messages: [{ role: 'user', content: `${wrap('job_description', description)}\n\n${wrap('intake_notes', notes)}` }],
-  });
-  if (message.stop_reason === 'refusal' || !message.parsed_output) return null;
-  return message.parsed_output;
+  }, { timeout: AI_TIMEOUT, maxRetries: 0 });
+  let message;
+  try {
+    message = await ask();
+  } catch (err) {
+    // One more try when the service itself stumbled. Never after a timeout or a "slow down": the recruiter is waiting.
+    if (!(err instanceof Anthropic.InternalServerError)) throw err;
+    message = await ask();
+  }
+  if (message.stop_reason === 'max_tokens') return { problem: 'too_long' };
+  if (message.stop_reason === 'refusal' || !message.parsed_output) return { problem: 'declined' };
+  return { draft: message.parsed_output };
 }
+
+const TOO_LONG = 'These documents were too much to draft from in one go, so only the basics were filled in. Trying again will not help: paste a shorter part, such as the section of the call about this role.';
+const AI_PROBLEMS = { declined: 'The AI service declined to read these documents, so only the basics were filled in.', too_long: TOO_LONG };
 
 /** A sentence for the recruiter explaining why the AI draft could not be made, from the SDK's error type. */
 export function aiErrorMessage(err) {
   if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) return 'The AI key set for this workspace was rejected, so only the basics were filled in. Ask whoever hosts The Book to check ANTHROPIC_API_KEY.';
+  if (err instanceof Anthropic.NotFoundError) return 'The AI service did not recognise what this workspace asked for, so only the basics were filled in. Ask whoever hosts The Book to check AUTOFILL_MODEL.';
   if (err instanceof Anthropic.RateLimitError) return 'The AI service is busy or over its limit right now, so only the basics were filled in. Try again in a minute.';
   if (err instanceof Anthropic.BadRequestError) return 'The AI service could not process these documents, so only the basics were filled in.';
+  if (err instanceof Anthropic.APIConnectionTimeoutError) return 'The AI service took too long to answer, so only the basics were filled in. Try again, or paste a shorter part of the documents.';
   if (err instanceof Anthropic.APIConnectionError) return 'The AI service could not be reached, so only the basics were filled in.';
+  // An answer that stops half way through cannot be read as a draft: the reply ran out of room.
+  if (!(err instanceof Anthropic.APIError) && /structured output|JSON/i.test(String(err?.message))) return TOO_LONG;
   return 'The AI service had a problem, so only the basics were filled in. Try again in a minute.';
 }
 
@@ -102,90 +128,182 @@ const HEADINGS = {
   must_haves: /^(requirements?|qualifications?|what (we|you)('| a)?re looking for|what you('ll| will)? (need|bring)|who you are|about you|essential( skills| criteria| experience)?|must[- ]haves?|skills( and| &) experience|key skills|you (have|should have)|your (experience|profile|background))\b/i,
   nice_to_haves: /^(nice[- ]to[- ]haves?|desirable|preferred|bonus( points)?|it('s| is) a plus|would be (nice|great)|advantageous|plus points)\b/i,
   selling_points: /^(what we offer|benefits|perks|why (join|work)|what('s| is) in it for you|we offer|rewards|package)\b/i,
-  other: /^(responsibilit|what you('ll| will) (do|be doing)|the role|about (the role|us|the company|the team)|key (duties|responsibilities)|duties|your role|overview|summary|company|how to apply|equal opportunit|diversity)/i,
+  other: /^(responsibilit\w*|what you('ll| will) (do|be doing)|the role|about (the role|us|the company|the team)|key (duties|responsibilities)|duties|your role|overview|summary|company|how to apply|equal opportunit\w*|diversity)/i,
 };
 const bullet = (line) => line.replace(/^[\s•●▪◦*·\-–—o]+\s+|^\d+[.)]\s+/, '').trim();
 const isHeading = (line) => line.length <= 60 && !/[.!?]$/.test(line) && Object.values(HEADINGS).some((re) => re.test(line.replace(/[:\s]+$/, '')));
-const labelled = (lines, re) => { for (const l of lines) { const m = re.exec(l); if (m && m[1].trim()) return m[1].trim().slice(0, 160); } return ''; };
+/** Which list a heading opens ('other' for a section that is not a list this reader keeps), or null when the line only starts like one. */
+function sectionOf(name) {
+  for (const [key, re] of Object.entries(HEADINGS)) {
+    const m = re.exec(name);
+    // A heading is the whole line: "Requirements", "Benefits and perks", not "Requirements gathering with stakeholders".
+    if (m && name.slice(m[0].length).trim().split(/\s+/).filter(Boolean).length <= 2) return key;
+  }
+  return null;
+}
 
-const CURRENCIES = [[/£|\bGBP\b/i, 'GBP'], [/€|\bEUR\b/i, 'EUR'], [/\bUS\$|\bUSD\b/i, 'USD'], [/\bCA\$|\bCAD\b/i, 'CAD'], [/\bA\$|\bAUD\b/i, 'AUD'], [/\bCHF\b/i, 'CHF'], [/\bAED\b/i, 'AED'], [/\bSGD\b/i, 'SGD'], [/\$/, 'USD']];
-/** The first yearly salary or range stated in the text: { min, max, currency }, or null. */
+// ----- salary -----
+const CODE = '(?:GBP|EUR|USD|CAD|AUD|NZD|HKD|SGD|CHF|AED)';
+const SIGN = `(?:£|€|(?:US|CA|C|AU|A|NZ|HK|S)?\\$|${CODE}\\s?\\$?)`;
+const CURRENCIES = [[/£|\bGBP\b/i, 'GBP'], [/€|\bEUR\b/i, 'EUR'], [/\bUS\$|\bUSD\b/i, 'USD'], [/\bCA?\$|\bCAD\b/i, 'CAD'], [/\bAU?\$|\bAUD\b/i, 'AUD'], [/\bNZ\$|\bNZD\b/i, 'NZD'],
+  [/\bHK\$|\bHKD\b/i, 'HKD'], [/\bS\$|\bSGD\b/i, 'SGD'], [/\bCHF\b/i, 'CHF'], [/\bAED\b/i, 'AED']];
+const DOLLARS = [[/^canadian/i, 'CAD'], [/^australian/i, 'AUD'], [/^(?:us|u\.s\.|american)/i, 'USD'], [/^new zealand/i, 'NZD'], [/^singapore/i, 'SGD'], [/^hong kong/i, 'HKD']];
+const AMOUNT = "(\\d{1,3}(?:[,.'’]\\d{3})+(?:\\.\\d{2}(?!\\d))?|\\d{2,3}(?:\\.\\d)?\\s?[kK]\\b|\\d{4,7}(?:\\.\\d{2}(?!\\d))?)";
+const YEARLY = '(?:\\s?\\/\\s?(?:yr|year|annum)\\b|\\s(?:per|a)\\s(?:year|annum)\\b)?';
+const SEP = '\\s?(?:-|–|—|to|and)\\s?';
+// One figure or a range, with the currency in front of or behind it: "£85,000 - £105,000", "$120,000.00 - $150,000.00",
+// "$75,000/yr – $90,000/yr", "£85-105k", "85-105k GBP", "CHF 120'000". Whether it is a salary is decided afterwards.
+const FIGURES = new RegExp(`(?<![\\d.,])(?:${SIGN}\\s?)?(?:(\\d{2,3})(?=${SEP}(?:${SIGN}\\s?)?\\d{2,3}\\s?[kK]\\b)|${AMOUNT})${YEARLY}(?:${SEP}(?:${SIGN}\\s?)?${AMOUNT}${YEARLY})?(?:\\s?${CODE}\\b)?`, 'g');
+// Money that is not the salary: what the company raised or turns over, a budget the person will hold, bonus and
+// on-target figures, fees. In front of the figure ("raised $42,000,000") or straight after it ("£90k OTE").
+const NOT_PAY_BEFORE = /\b(?:rais(?:ed|ing)|funding|funded|series [a-e]|revenues?|turnover|budgets?|valuation|valued|arr|customers|bonus|ote|on[- ]target|commission|allowance|sign[- ]on|equity|fees?|charg(?:ed|es?)|invoic\w+|quota|targets?|portfolio|assets|grant|p&l)\b[^.;\n]*$/i;
+const NOT_PAY_AFTER = /^\+?\s*(?:\w+\s){0,2}(?:budget|bonus|ote|on[- ]target|commission|allowance|(?:in\s)?funding|series [a-e]|revenue|turnover|sign[- ]on|quota|target|fee|arr)\b/i;
+// A rate for anything shorter than a year.
+const RATE_AFTER = /^\+?\s*(?:(?:per|an?|each|\/|p\/?)\s?(?:hour|hr|h|day|d|week|wk|month|mo|mth)\b|hourly|daily|weekly|monthly|pcm\b|p\.?m\.?(?![\w.])|p\.?w\.?(?![\w.]))/i;
+const RATE_BEFORE = /\b(?:hourly|daily|day|weekly|monthly) (?:rate|pay|wage)s?\W*(?:(?:of|is|from)\s)?$/i;
+const PAY_WORD = /\b(?:salary|salaries|pay(?:ing|s)?|compensation|remuneration|base|basic|package|earn(?:ing)?s?|wages?)\b/i;
+// A line (or the heading above the figure) that is there to state the salary: "Salary: …", "Compensation" then the range.
+const PAY_LABEL = /(?:^|\n)\W*(?:(?:annual|base|basic|starting|yearly|gross)\s)?(?:salary|pay|compensation|remuneration|wage|package)(?:\s(?:range|band|scale|package))?\s*(?:[:\-–]|\n)[^\n]{0,25}$/i;
+
+/**
+ * The yearly salary or range the text states: { min, max, currency }, or null. A figure on a line that is there to
+ * give the salary wins over one that mentions pay in passing, and that over a bare amount of money. When the text
+ * gives several different ones of the same standing (three roles, say), none is taken: an empty box is checked,
+ * a wrong number is published. `currency` is '' when the text does not say (a "$" alone is some country's dollar).
+ */
 export function findSalary(text) {
-  const money = '(?:£|€|\\$|US\\$|CA\\$|A\\$|GBP|EUR|USD|CAD|AUD|CHF|AED|SGD)';
-  const amount = '(\\d{1,3}(?:[,.]\\d{3})+|\\d{2,3}(?:\\.\\d)?\\s?[kK]|\\d{4,7})';
-  const sep = '\\s?(?:-|–|—|to|and)\\s?';
-  const re = new RegExp(
-    `${money}\\s?(\\d{2,3})${sep}${money}?\\s?(\\d{2,3}\\s?[kK])|(\\d{2,3})${sep}(\\d{2,3}\\s?[kK])\\s?${money}?` +   // "£85-105k", "85-105k GBP"
-    `|${money}\\s?${amount}(?:${sep}${money}?\\s?${amount})?|${amount}${sep}${amount}\\s?${money}|${amount}\\s?${money}`, 'g');
   const value = (s) => {
     if (!s) return null;
     const k = /k$/i.test(s.trim());
-    const n = Number(s.replace(/[kK\s]/g, '').replace(/[,.](?=\d{3}\b)/g, ''));
+    const digits = s.replace(/[kK\s]/g, '').replace(/(?<=\d{3})\.\d{2}$/, ''); // cents
+    const n = Number(k ? digits : digits.replace(/[,.'’](?=\d{3}(?:\D|$))/g, ''));
     return Number.isFinite(n) ? Math.round(k ? n * 1000 : n) : null;
   };
-  for (const m of text.matchAll(re)) {
+  const found = [];
+  let last = 0;
+  for (const m of text.matchAll(FIGURES)) {
+    // What stands between the figure before and this one, and what follows on the same line.
+    const before = text.slice(Math.max(last, m.index - 80), m.index), after = text.slice(m.index + m[0].length).split('\n')[0].slice(0, 40);
+    last = m.index + m[0].length;
     const nums = m.slice(1).filter(Boolean).map(value).filter((n) => n !== null);
     if (!nums.length) continue;
     let [min, max = min] = nums;
     if (max < min && max < 1000 && min >= 1000) max *= 1000;         // "£85,000 - 105k" style mixes
     if (min < 1000 && max >= 1000 && /k/i.test(m[0])) min *= 1000;   // "85-105k"
-    // Yearly salaries only: skip hourly or daily rates and stray figures.
-    const around = text.slice(Math.max(0, m.index - 30), m.index + m[0].length + 30);
-    if (min < 10000 || /per (hour|day)|\/(hr|hour|day)|an hour|a day|hourly|day rate/i.test(around)) continue;
-    const currency = (CURRENCIES.find(([test]) => test.test(m[0])) || [])[1] || '';
-    return { min: Math.min(min, max), max: Math.max(min, max), currency };
+    if (min < 10000 || RATE_AFTER.test(after) || RATE_BEFORE.test(before)) continue; // yearly salaries only
+    if (NOT_PAY_BEFORE.test(before.slice(-45)) || NOT_PAY_AFTER.test(after)) continue;
+    const label = PAY_LABEL.test(before), stated = label || PAY_WORD.test(before.split(/[.;]\s/).pop());
+    // A currency written beside the figure, or just outside it: "CAD $95,000", "$95,000 - $110,000 CAD", "(Canadian dollars)".
+    const near = `${before.slice(-6)}${m[0]}`, said = /^\s*(?:(?:per|a)\s(?:year|annum)|annually|p\.?a\.?|gross)?\s*\(?\s*([A-Za-z. ]{2,12}?)\s?(?:\$|dollars)|^\s*(?:(?:per|a)\s(?:year|annum)|annually|p\.?a\.?|gross)?\s*\(?\s*([A-Z]{3})\b/.exec(after);
+    const currency = (CURRENCIES.find(([test]) => test.test(near)) || [])[1]
+      || (said && ((DOLLARS.find(([test]) => test.test(said[1] || '')) || [])[1] || (CURRENCIES.find(([test]) => test.test(said[2] || '')) || [])[1])) || '';
+    const money = /[£€$]|[A-Z]{3}/.test(m[0]);
+    if (!money && !stated) continue; // a bare number is only a salary where the text says so
+    found.push({ min: Math.min(min, max), max: Math.max(min, max), currency, rank: label ? 2 : stated ? 1 : 0 });
   }
-  return null;
+  const best = Math.max(-1, ...found.map((f) => f.rank));
+  const pool = found.filter((f) => f.rank === best);
+  if (!pool.length || pool.some((f) => f.min !== pool[0].min || f.max !== pool[0].max)) return null;
+  const { min, max } = pool[0];
+  return { min, max, currency: pool.find((f) => f.currency)?.currency || '' };
 }
 
+// ----- title, working pattern, contract -----
+const ROLE_WORD = /\b(?:manager|director|engineer|developer|designer|analyst|accountant|consultant|specialist|co-?ordinator|administrator|officer|executive|lead|head|chief|president|assistant|associate|advis[oe]r|supervisor|technician|nurse|teacher|architect|scientist|controller|partner|representative|recruiter|planner|buyer|clerk|operator|driver|chef|editor|writer|lawyer|solicitor|counsel|paralegal|intern|apprentice|trainee|programmer|strategist|producer|researcher|auditor|bookkeeper|receptionist|secretary|surveyor|estimator|foreman|mechanic|electrician|plumber|dispatcher|merchandiser|marketer|therapist|pharmacist|physician|doctor|surgeon|dentist|carer|tutor|lecturer|professor|trader|broker|underwriter|educator|practitioner|vp|cto|cfo|ceo|coo|cmo|cio|founder)\b/i;
+const NOT_A_TITLE = /^(?:permanent|temporary|full[- ]?time|part[- ]?time|contract|fixed[- ]term|reporting|reports|remote|hybrid|on-?site|open|closed|vacant|filled|new|tbc|n\/a)\b/i;
+/** A line that could be a job title: short, not a sentence, a bullet, a heading, a "Label: value" pair or a salary. */
+const titleLike = (l) => l.length >= 4 && l.length <= 70 && l.split(' ').length <= 8 && !/[.!?:]$/.test(l) && bullet(l) === l && !isHeading(l)
+  && !/^[A-Za-z][A-Za-z ]{1,24}:\s/.test(l) && !/^(about|job description|we are|our|at )\b/i.test(l) && !NOT_A_TITLE.test(l) && !findSalary(l);
+// "Senior Engineer – London", "Developer | Full-time", "Engineer (Remote)": where or how, not part of the title. The
+// divider has spaces round it, so the hyphen in "Full-Stack" is left alone.
+const untail = (title) => title.replace(/\s+[|\-–—]\s+.+$|\s*\|\s*.+$/, (rest) => (/(remote|hybrid|on-?site|full|part|contract|london|manchester|uk|usa)/i.test(rest) ? '' : rest))
+  .replace(/\s*\((?:remote|hybrid|on-?site|full[- ]time|part[- ]time)[^)]*\)$/i, '').trim();
+
+const FACT_LABEL = /^(?:location|based(?: in)?|office|where|working pattern|work(?:ing)? (?:pattern|model|mode|arrangement|style)|workplace(?: type)?|hours|contract(?: type)?|job type|employment(?: type)?|type|position type|term|basis)\s*[:\-–]\s*/i;
+const ONLY_FACTS = /^(?:[\s,;/|·•()+&-]|and|full[- ]time|part[- ]time|permanent|temporary|contract|fixed[- ]term|hybrid|remote|on-?site|office[- ]based|\d+[- ]months?)+\.?$/i;
+
 /** What a job description states outright. Intake notes cannot be interpreted without AI, so they are kept as written. */
-export function basicAutofill(description, notes) {
-  const lines = description.split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim());
-  const filled = lines.filter(Boolean);
+export function basicAutofill(description, notes, aboutMax = 6000) {
+  const rows = [];
+  let gap = true; // whether an empty line stands above
+  for (const raw of description.split(/\r?\n/)) {
+    const line = raw.replace(/\s+/g, ' ').trim();
+    if (line) rows.push({ text: line, gap });
+    gap = !line;
+  }
+  const filled = rows.map((row) => row.text);
   const job = { title: '', department: '', location: '', work_mode: 'unknown', employment_type: 'unknown', salary_min: null, salary_max: null, salary_currency: '', openings: null, description: description.trim(), interview_stages: [] };
   const brief = {};
 
-  job.title = labelled(filled, /^(?:job title|position|role|title|vacancy)\s*[:\-–]\s*(.+)$/i);
-  if (!job.title) {
-    // Otherwise the first short line that reads like a title rather than a sentence or a section heading.
-    const first = filled.slice(0, 6).find((l) => l.length >= 4 && l.length <= 70 && !/[.!?:]$/.test(l) && !isHeading(l) && !/^(about|job description|we are|our|at )\b/i.test(l) && !findSalary(l));
-    if (first) job.title = first.replace(/\s*[|\-–—]\s*.+$/, (rest) => (/(remote|hybrid|on-?site|full|part|contract|london|manchester|uk|usa)/i.test(rest) ? '' : rest)).trim();
+  // A label that can only mean the title, then one that often does ("Position: Permanent, full time" does not).
+  let titleLine = filled.find((l) => /^job title\s*[:\-–]\s*\S/i.test(l)) || filled.find((l) => { const m = /^(?:position|role|title|vacancy)\s*[:\-–]\s*(.+)$/i.exec(l); return m && titleLike(m[1].trim()); });
+  if (titleLine) job.title = untail(titleLine.replace(/^[a-z ]+\s*[:\-–]\s*/i, '')).slice(0, 160);
+  else {
+    // Otherwise a short line near the top that reads like a title rather than a sentence or a section heading:
+    // the first that names a kind of job, so a company name on the line above is passed over.
+    const near = filled.slice(0, 6).filter(titleLike);
+    titleLine = near.find((l) => ROLE_WORD.test(l)) || near[0];
+    if (titleLine) job.title = untail(titleLine);
   }
-  job.department = labelled(filled, /^(?:department|team|function)\s*[:\-–]\s*(.+)$/i);
-  job.location = labelled(filled, /^(?:location|based in|office|where)\s*[:\-–]\s*(.+)$/i).replace(/\s*\((?:hybrid|remote|on-?site)[^)]*\)/i, '').trim();
+  const labelled = (re) => { for (const l of filled) { const m = re.exec(l); if (m && m[1].trim()) return m[1].trim().slice(0, 160); } return ''; };
+  job.department = labelled(/^(?:department|team|function)\s*[:\-–]\s*(.+)$/i);
+  job.location = labelled(/^(?:location|based in|office|where)\s*[:\-–]\s*(.+)$/i).replace(/\s*\((?:hybrid|remote|on-?site)[^)]*\)/i, '').trim();
 
-  const all = `${description}\n${notes}`;
-  if (/\bhybrid\b/i.test(description)) job.work_mode = 'hybrid';
-  else if (/\b(fully |100% )?remote\b|work from home/i.test(description)) job.work_mode = 'remote';
-  else if (/\bon-?site\b|office[- ]based|in the office (five|5) days/i.test(description)) job.work_mode = 'onsite';
-  if (/\bpart[- ]time\b/i.test(description)) job.employment_type = 'part_time';
-  else if (/\b(fixed[- ]term|contract(or)? role|\d+[- ]month contract|day rate)\b/i.test(description)) job.employment_type = 'contract';
-  else if (/\b(full[- ]time|permanent)\b/i.test(description)) job.employment_type = 'full_time';
+  // Working pattern and contract are read only where the text states them (the title, a labelled line, a line made
+  // of nothing else), never from a word in passing: "experience with remote monitoring", "not a hybrid role".
+  // Lines that disagree leave the form's own default.
+  const facts = filled.filter((l) => l === titleLine || FACT_LABEL.test(l) || (l.length <= 40 && ONLY_FACTS.test(l)))
+    .map((l) => l.replace(FACT_LABEL, '')).filter((l) => !/\b(?:not|no|non|never|isn['’]t)\b/i.test(l));
+  const modes = new Set(), types = new Set();
+  for (const l of facts) {
+    const remote = /\b(?:remote|work from home|home[- ]based)\b/i.test(l), office = /\bon-?site\b|office[- ]based|\bin[- ](?:the )?office\b/i.test(l);
+    if (/\bhybrid\b/i.test(l) || (office && /\b[1-4] days?\b/i.test(l))) modes.add('hybrid'); // "2 days a week on-site"
+    else if (remote !== office) modes.add(remote ? 'remote' : 'onsite');
+    const part = /\bpart[- ]time\b/i.test(l), full = /\b(?:full[- ]time|permanent)\b/i.test(l);
+    if (/\b(?:fixed[- ]term|contract|contractor|temporary|interim|ftc|\d+[- ]months?|day rate)\b/i.test(l)) types.add('contract');
+    else if (part !== full) types.add(part ? 'part_time' : 'full_time');
+    else if (part) types.add('part_time').add('full_time');
+  }
+  if (modes.size === 1) [job.work_mode] = modes;
+  if (types.has('contract')) types.delete('full_time'); // a full-time contract is a contract
+  if (types.size === 1) [job.employment_type] = types;
 
-  const salary = findSalary(description) || findSalary(notes);
+  // Only from the job description. A figure in the intake notes is as likely the fee, the budget or how far the
+  // client would stretch, and the salary boxes are shown on the careers page.
+  const salary = findSalary(description);
   if (salary) Object.assign(job, { salary_min: salary.min, salary_max: salary.max, salary_currency: salary.currency });
 
   // Lists under recognisable headings. Where a section uses bullets, only its bulleted lines count, so a
   // closing sentence after the list is not mistaken for an item.
   const sections = {};
   let section = null;
-  for (const line of filled) {
-    if (isHeading(line)) {
-      const name = line.replace(/[:\s]+$/, '');
-      section = HEADINGS.must_haves.test(name) ? 'must_haves' : HEADINGS.nice_to_haves.test(name) ? 'nice_to_haves' : HEADINGS.selling_points.test(name) ? 'selling_points' : null;
-      continue;
-    }
-    if (!section) continue;
+  rows.forEach(({ text: line, gap: apart }, i) => {
     const item = bullet(line);
+    if (item === line && line.length <= 60 && !/[.!?]$/.test(line)) {
+      const next = rows[i + 1]?.text, listBelow = next !== undefined && bullet(next) !== next;
+      // A heading stands apart from what is above it, ends in a colon or has a list under it; an item of an
+      // un-bulleted list that starts with the same word ("Benefits administration knowledge") does none of these.
+      const kind = apart || /:$/.test(line) || listBelow ? sectionOf(line.replace(/[:\s]+$/, '')) : null;
+      if (kind) { section = kind === 'other' ? null : kind; return; }
+      // A heading this reader does not know ("Our stack", "Interview process"): its list is not part of the one above.
+      if (listBelow) { section = null; return; }
+    }
+    if (!section) return;
     if (item.length >= 4 && item.length <= 300) (sections[section] ||= []).push({ item, bulleted: item !== line });
-  }
+  });
   for (const [name, items] of Object.entries(sections)) {
     const bulleted = items.filter((i) => i.bulleted);
     brief[name] = (bulleted.length ? bulleted : items).map((i) => i.item).slice(0, 40);
   }
   if (job.title) brief.search_titles = [job.title.replace(/\s*\(.*\)$/, '')];
-  if (notes.trim()) brief.about = `Intake call notes (not yet sorted into the sections below):\n\n${notes.trim()}`.slice(0, 6000);
-  return { job, ideal_profile: '', brief, used: all.trim().length > 0 };
+  let notes_cut = false;
+  if (notes.trim()) {
+    const about = `Intake call notes (not yet sorted into the sections below):\n\n${notes.trim()}`;
+    notes_cut = about.length > aboutMax;
+    // Longer than the section holds: keep whole lines up to the limit, and say so (the route passes it on).
+    brief.about = notes_cut ? about.slice(0, aboutMax).replace(/\n[^\n]*$/, (tail, at) => (at > aboutMax / 2 ? '' : tail)).trimEnd() : about;
+  }
+  return { job, ideal_profile: '', brief, notes_cut, used: `${description}\n${notes}`.trim().length > 0 };
 }
 
 // ---------- the route ----------
@@ -205,9 +323,9 @@ export function registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, b
     let draft = null, source = 'basic', warning = null;
     if (aiConfigured()) {
       try {
-        draft = await aiAutofill(description, notes);
-        if (draft) source = 'ai';
-        else warning = 'The AI service declined to read these documents, so only the basics were filled in.';
+        const answer = await aiAutofill(description, notes);
+        if (answer.draft) { draft = answer.draft; source = 'ai'; }
+        else warning = AI_PROBLEMS[answer.problem];
       } catch (err) {
         console.error('Job autofill failed:', err?.status ?? '', err?.name ?? '', err?.message ?? err);
         warning = aiErrorMessage(err);
@@ -232,6 +350,8 @@ export function registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, b
       },
       ideal_profile: text(draft.ideal_profile, 6000) || '',
       brief: briefFields(draft.brief),
+      // The plain reader keeps intake notes as they are: 'kept' whole, 'cut' when they were longer than the brief holds.
+      notes: source === 'basic' && notes ? (draft.notes_cut ? 'cut' : 'kept') : null,
     });
   });
 }

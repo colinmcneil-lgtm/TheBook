@@ -9,7 +9,9 @@ import ApplicationsTable from '../components/ApplicationsTable.jsx';
 import JobForm from '../components/JobForm.jsx';
 import JobBrief from '../components/JobBrief.jsx';
 
-const lastTab = () => { try { return localStorage.getItem('thebook.jobtab'); } catch { return null; } };
+// The tab each person used last, remembered per person: on a shared computer the next one starts on their own.
+const tabKey = (user) => `thebook.jobtab.${user.id}`;
+const lastTab = (user) => { try { return localStorage.getItem(tabKey(user)); } catch { return null; } };
 import { AddCandidateModal } from '../components/CandidateModals.jsx';
 
 function Board({ stages, apps }) {
@@ -139,7 +141,7 @@ function Details({ job, stages }) {
 
 export default function JobDetail() {
   const { id } = useParams();
-  const { isAgency, isAdmin, bump } = useApp();
+  const { user, isAgency, isAdmin, bump } = useApp();
   const toast = useToast();
   const navigate = useNavigate();
   const openCandidate = useOpenCandidate();
@@ -147,9 +149,9 @@ export default function JobDetail() {
   const [modal, setModal] = useState(null);
   // The address decides the tab, then whichever tab this person used last; recruiters start on the brief, clients on the pipeline.
   const allowed = isAgency ? ['brief', 'pipeline', 'all', 'details'] : ['pipeline', 'all', 'details'];
-  const tab = [params.get('tab'), lastTab(), allowed[0]].find((t) => allowed.includes(t));
+  const tab = [params.get('tab'), lastTab(user), allowed[0]].find((t) => allowed.includes(t));
   const setTab = (t) => {
-    try { localStorage.setItem('thebook.jobtab', t); } catch { /* storage unavailable */ }
+    try { localStorage.setItem(tabKey(user), t); } catch { /* storage unavailable */ }
     const next = new URLSearchParams(params);
     next.set('tab', t);
     setParams(next, { replace: true });

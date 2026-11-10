@@ -7,14 +7,42 @@ export async function extractResumeText(file) {
   return (await readFile(file)).text;
 }
 
+/**
+ * The same for a long document (a job description, a call transcript): every page up to `maxPages`, with how
+ * many pages the file has (`pages`) and how many were read (`read`) when it is a PDF, so the caller can say so.
+ */
+export async function extractDocumentText(file, maxPages = 300) {
+  const { text, pages, read } = await readFile(file, maxPages);
+  return { text, pages, read };
+}
+
+/**
+ * What kind of file this is, from its first bytes before its name: a PDF or a Word file saved under a ".txt"
+ * name is still a PDF or a Word file, and reading it as text would show (and parse) pages of binary.
+ */
+export function fileKind(bytes, name) {
+  const head = String.fromCharCode(...bytes.subarray(0, 8));
+  if (head.startsWith('%PDF-')) return 'pdf';
+  if (head.startsWith('PK\u0003\u0004')) return 'docx';
+  if (head.startsWith('{\\rtf')) return 'rtf';
+  return /\.(pdf|docx|rtf|txt)$/i.exec(name)?.[1].toLowerCase() || '';
+}
+
+// A résumé is read as far as its first pages: the contact details and the current job are there.
+const RESUME_PAGES = 4;
+
 /** The text plus what the format can tell about its layout: per-line font sizes and link targets (PDF), page footers (Word). */
-async function readFile(file) {
-  const name = file.name.toLowerCase();
-  if (name.endsWith('.pdf')) return pdfText(await file.arrayBuffer());
-  if (name.endsWith('.docx')) return docxText(new Uint8Array(await file.arrayBuffer()));
-  if (name.endsWith('.txt')) return { text: decodeText(new Uint8Array(await file.arrayBuffer())) };
-  if (name.endsWith('.rtf')) return { text: rtfText(decodeText(new Uint8Array(await file.arrayBuffer()))) };
-  return { text: '' };
+async function readFile(file, maxPages = RESUME_PAGES) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const kind = fileKind(bytes, file.name);
+  if (kind === 'pdf') return pdfText(bytes, maxPages);
+  if (kind === 'docx') return docxText(bytes);
+  if (kind !== 'txt' && kind !== 'rtf') return { text: '' };
+  const text = decodeText(bytes);
+  // Not text at all (a picture or another program's file under a text name): nothing to show or to read.
+  const odd = text.match(/[\u0000-\u0008\u000e-\u001f�]/g)?.length || 0;
+  if (text.includes('\u0000') || odd > text.length / 50) return { text: '', binary: true };
+  return { text: kind === 'rtf' ? rtfText(text) : text };
 }
 
 /** Text files are not always UTF-8: Notepad saves UTF-16, and older exports use the Windows code page. */
@@ -28,15 +56,17 @@ function decodeText(bytes) {
 const SPACED_LETTERS = /^(?:\p{L} +){2,}\p{L}$/u;
 const unspace = (s) => (SPACED_LETTERS.test(s) ? s.split(/ {2,}/).map((word) => word.replace(/ /g, '')).join(' ') : s);
 
-async function pdfText(buffer) {
+async function pdfText(buffer, maxPages) {
   // The "legacy" build carries its own polyfills, so it also runs in browsers a year or two old.
   const [pdfjs, { default: workerUrl }] = await Promise.all([import('pdfjs-dist/legacy/build/pdf.mjs'), import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')]);
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-  const task = pdfjs.getDocument({ data: buffer, isEvalSupported: false, disableFontFace: true });
+  // The character maps are what turn text set in the standard Chinese, Japanese and Korean fonts back into letters.
+  const task = pdfjs.getDocument({ data: buffer, isEvalSupported: false, disableFontFace: true, cMapUrl: '/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: '/pdfjs/standard_fonts/' });
   const doc = await task.promise;
   const lines = [], meta = [], links = [];
+  const pages = doc.numPages, read = Math.min(pages, maxPages);
   try {
-    for (let n = 1; n <= Math.min(doc.numPages, 4); n++) {
+    for (let n = 1; n <= read; n++) {
       const page = await doc.getPage(n);
       const content = await page.getTextContent();
       // A PDF is a list of positioned text fragments: sometimes whole lines, sometimes single letters (résumés made
@@ -75,42 +105,71 @@ async function pdfText(buffer) {
   } finally {
     await task.destroy?.(); // frees the worker's copy of the file
   }
-  return { text: lines.join('\n'), layout: { lines: meta, links } };
+  return { text: lines.join('\n'), layout: { lines: meta, links }, pages, read };
 }
 
 const xmlEntities = (s) => s.replace(/&#x([0-9a-f]+);/gi, (m, hex) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(\d+);/g, (m, dec) => String.fromCodePoint(+dec))
   .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
 
+// No part of a real document comes near this unpacked; a few kilobytes of zip can claim to hold a gigabyte.
+const MAX_PART = 8 * 1024 * 1024;
+
+/**
+ * The text of one part of a Word file. The XML is walked once, tag by tag: patterns that look for a closing tag
+ * start again from every opening one, which a file made of unclosed tags turns into minutes of work.
+ */
+function wordXmlText(xml, targets) {
+  let out = '', at = 0;
+  let skip = null; // the closing tag that ends a part being left out
+  let link = null; // an open hyperlink: where it goes, and where its text starts
+  for (;;) {
+    const lt = xml.indexOf('<', at), gt = lt < 0 ? -1 : xml.indexOf('>', lt);
+    if (gt < 0) return skip ? out : out + xml.slice(at);
+    if (!skip) out += xml.slice(at, lt);
+    at = gt + 1;
+    const name = /^\/?[\w:.-]*/.exec(xml.slice(lt + 1, lt + 40))[0], whole = xml[gt - 1] === '/'; // <w:tab/> has no closing tag
+    if (skip) { if (name === skip) skip = null; continue; }
+    // Text boxes are stored twice (once for older versions of Word); tab stop settings are not tab characters;
+    // deleted text and field codes are not on the page.
+    if (!whole && (name === 'mc:Fallback' || name === 'w:tabs' || name === 'w:delText' || name === 'w:instrText')) skip = `/${name}`;
+    else if (name === 'w:numPr' && !whole) { skip = '/w:numPr'; out += '• '; } // list items carry no bullet character of their own
+    else if (name === 'w:pStyle' && /w:val="List(?:Bullet|Number)/.test(xml.slice(lt, gt))) out += '• ';
+    else if (name === 'w:tab' && whole) out += '\t';
+    else if (((name === 'w:br' || name === 'w:cr') && whole) || name === '/w:p') out += '\n';
+    else if (name === 'w:hyperlink' && !whole) {
+      const id = /\br:id="([^"]*)"/.exec(xml.slice(lt, gt));
+      link = id ? { target: targets.get(id[1]) || '', from: out.length } : null;
+    } else if (name === '/w:hyperlink' && link) {
+      // Where a link goes matters when the visible text is only "LinkedIn" or "Email".
+      const shown = out.slice(link.from);
+      if (LINKEDIN.test(link.target) && !/linkedin\.com\//i.test(shown)) out += ` ${link.target}`;
+      else if (/^mailto:/i.test(link.target) && !shown.includes('@')) out += ` ${link.target.slice(7).split('?')[0]}`;
+      link = null;
+    }
+  }
+}
+
 async function docxText(bytes) {
   const { unzipSync, strFromU8 } = await import('fflate');
   // Name and contact details are often typed into the page header, which Word stores apart from the body.
   const part = /^word\/(?:_rels\/)?(header\d*|document|footer\d*)\.xml(?:\.rels)?$/;
-  const files = unzipSync(bytes, { filter: (f) => part.test(f.name) });
+  let oversized = false;
+  const files = unzipSync(bytes, { filter: (f) => part.test(f.name) && (f.originalSize <= MAX_PART || !(oversized = true)) });
+  if (oversized) throw new Error('This Word file unpacks to more than can be read here.');
   const rank = (name) => (name.includes('header') ? 0 : name.includes('document') ? 1 : 2);
   const names = Object.keys(files).filter((name) => !name.endsWith('.rels')).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, 'en', { numeric: true }));
   const parts = names.map((name) => {
-    // Where a link goes is kept in a side file; it matters when the visible text is only "LinkedIn" or "Email".
+    // Where a link goes is kept in a side file.
     const rels = files[name.replace('word/', 'word/_rels/') + '.rels'];
     const targets = new Map();
-    if (rels) for (const tag of strFromU8(rels).match(/<Relationship\b[^>]*>/g) || []) {
-      const id = /\bId="([^"]*)"/.exec(tag), target = /\bTarget="([^"]*)"/.exec(tag);
-      if (id && target) targets.set(id[1], xmlEntities(target[1]));
+    if (rels) {
+      const list = strFromU8(rels);
+      for (const tag of list.slice(0, list.lastIndexOf('>') + 1).match(/<Relationship\b[^>]*>/g) || []) {
+        const id = /\bId="([^"]*)"/.exec(tag), target = /\bTarget="([^"]*)"/.exec(tag);
+        if (id && target) targets.set(id[1], xmlEntities(target[1]));
+      }
     }
-    const text = strFromU8(files[name])
-      .replace(/<mc:Fallback\b[\s\S]*?<\/mc:Fallback>/g, '') // text boxes are stored twice, once for older versions of Word
-      .replace(/<w:tabs>[\s\S]*?<\/w:tabs>/g, '') // tab stop settings, not tab characters
-      .replace(/<w:(delText|instrText)\b[^>]*>[\s\S]*?<\/w:\1>/g, '') // deleted text and field codes are not on the page
-      .replace(/<w:hyperlink\b[^>]*\br:id="([^"]*)"[^>]*>([\s\S]*?)<\/w:hyperlink>/g, (m, id, inner) => {
-        const target = targets.get(id) || '';
-        if (LINKEDIN.test(target) && !/linkedin\.com\//i.test(inner)) return `${inner}<w:t> ${target}</w:t>`;
-        if (/^mailto:/i.test(target) && !inner.includes('@')) return `${inner}<w:t> ${target.slice(7).split('?')[0]}</w:t>`;
-        return inner;
-      })
-      .replace(/<w:numPr>[\s\S]*?<\/w:numPr>|<w:pStyle w:val="List(?:Bullet|Number)[^"]*"\s*\/>/g, '• ') // list items carry no bullet character of their own
-      .replace(/<w:tab\b[^>]*\/>/g, '\t')
-      .replace(/<w:(?:br|cr)\b[^>]*\/>|<\/w:p>/g, '\n')
-      .replace(/<[^>]+>/g, '');
-    return { text: xmlEntities(text), footer: name.includes('footer') };
+    return { text: xmlEntities(wordXmlText(strFromU8(files[name]), targets)), footer: name.includes('footer') };
   }).filter((part) => part.text.trim());
   // Which lines come from a page footer: contact details put there belong to the person, whatever section the body ends in.
   return { text: parts.map((part) => part.text).join('\n'), layout: { lines: parts.flatMap((part) => part.text.split('\n').map(() => ({ footer: part.footer }))) } };
@@ -169,12 +228,13 @@ const NEVER_NAME = new Set(('curriculum vitae resume cv profile summary objectiv
   + 'data engineering software development management design analysis analytics science machine learning cloud computing project business digital financial accounting customer services support research communication communications leadership strategy planning human resources web network quality assurance testing programming microsoft office excel powerpoint python java javascript sql apache spark aws azure google adobe photoshop figma agile scrum native bilingual fluent proficient intermediate beginner '
   + 'ltd limited inc llc llp plc gmbh corp corporation company group holdings university college school institute academy bank hospital clinic solutions technology consulting consultancy partners associates labs studio studios agency foundation trust council department ministry association society international industries enterprises ventures capital talent recruitment staffing health healthcare care').split(' '));
 const LANGUAGES = new Set('english french german spanish hindi urdu mandarin chinese cantonese arabic portuguese italian russian japanese korean dutch swedish norwegian danish finnish polish turkish greek hebrew bengali punjabi tamil telugu marathi gujarati swahili vietnamese thai indonesian malay'.split(' '));
+const FILE_WORDS = new Set('untitled document documents scanned scan scanner version template templates page pages file files image img photo screenshot download export print office black white grey gray blue green red pink purple orange yellow beige brown gold minimalist minimal modern simple elegant creative clean classic basic colorful colourful corporate big small large mb kb gb'.split(' '));
 const HONORIFICS = new Set('dr mr mrs ms miss mx prof professor sir eng ing'.split(' '));
 const PARTICLE = /^(?:de|da|del|della|di|dos|das|du|van|von|der|den|ter|ten|la|le|el|al|bin|binti|ibn|y|e|zu)$/;
 // Letters after a name, and whatever follows them: any of them after a comma, only the unmistakable ones without
 // ("LI MA" is a name).
 const POSTNOMINALS = /(?:,\s*(?:PMP|MBA|CPA|CFA|PhD|Ph\.D\.?|DPhil|MD|RN|PE|JD|ACA|FCA|ACCA|CIMA|CISSP|MSc|BSc|MEng|BEng|MA|BA|LLB|LLM|MCIPD|FCIPD|CEng|Esq\.?|Jr\.?|Sr\.?|II|III)|\s+(?:PMP|MBA|CPA|CFA|PhD|Ph\.D\.?|DPhil|ACCA|CIMA|CISSP|MSc|BSc|MEng|BEng|LLB|LLM|MCIPD|FCIPD))(?=$|[,\s]).*$/;
-const COMPANY_WORDS = /\b(?:ltd|limited|inc|llc|llp|plc|gmbh|ag|corp|corporation|company|co|group|holdings|university|college|school|institute|bank|hospital|council|nhs|s\.?a\.?|b\.?v\.?|pty)\.?$/i;
+const COMPANY_WORDS = /\b(?:ltd|limited|inc|llc|llp|plc|gmbh|ag|corp|corporation|company|co|group|holdings|university|college|school|institute|bank|hospital|council|nhs|society|association|club|union|committee|foundation|charity|s\.?a\.?|b\.?v\.?|pty)\.?$/i;
 const PLACES = new Set(('united kingdom|uk|england|scotland|wales|northern ireland|ireland|united states|usa|canada|australia|new zealand|india|pakistan|bangladesh|sri lanka|nepal|china|hong kong|singapore|malaysia|indonesia|philippines|thailand|vietnam|japan|south korea|taiwan|uae|united arab emirates|saudi arabia|qatar|kuwait|bahrain|oman|israel|turkey|egypt|nigeria|ghana|kenya|south africa|ethiopia|uganda|tanzania|morocco|germany|france|spain|portugal|italy|netherlands|belgium|luxembourg|switzerland|austria|sweden|norway|denmark|finland|iceland|poland|czech republic|czechia|slovakia|hungary|romania|bulgaria|greece|ukraine|russia|serbia|croatia|estonia|latvia|lithuania|brazil|argentina|chile|colombia|peru|mexico|deutschland|espana|italia|nederland|schweiz|osterreich|'
   + 'london|manchester|birmingham|leeds|liverpool|bristol|sheffield|newcastle|nottingham|glasgow|edinburgh|cardiff|belfast|dublin|cork|new york|new york city|nyc|los angeles|san francisco|san diego|san jose|seattle|chicago|boston|austin|dallas|houston|atlanta|miami|denver|phoenix|philadelphia|washington|washington dc|toronto|vancouver|montreal|ottawa|calgary|sydney|melbourne|brisbane|perth|auckland|wellington|mumbai|delhi|new delhi|bangalore|bengaluru|hyderabad|chennai|pune|kolkata|ahmedabad|gurgaon|gurugram|noida|karachi|lahore|islamabad|dhaka|colombo|beijing|shanghai|shenzhen|guangzhou|tokyo|osaka|seoul|taipei|bangkok|jakarta|manila|kuala lumpur|ho chi minh city|hanoi|dubai|abu dhabi|doha|riyadh|jeddah|tel aviv|istanbul|cairo|lagos|abuja|accra|nairobi|johannesburg|cape town|addis ababa|kampala|casablanca|berlin|munich|munchen|hamburg|frankfurt|cologne|koln|stuttgart|dusseldorf|paris|lyon|marseille|toulouse|madrid|barcelona|valencia|seville|lisbon|porto|rome|milan|turin|amsterdam|rotterdam|the hague|utrecht|eindhoven|brussels|antwerp|zurich|geneva|basel|vienna|stockholm|gothenburg|malmo|oslo|copenhagen|helsinki|reykjavik|warsaw|krakow|prague|budapest|bucharest|sofia|athens|kyiv|moscow|belgrade|zagreb|tallinn|riga|vilnius|sao paulo|rio de janeiro|buenos aires|santiago|bogota|lima|mexico city|'
   + 'california|texas|florida|illinois|massachusetts|ontario|quebec|british columbia|new south wales|queensland|bavaria|catalonia|remote').split('|'));
@@ -186,7 +246,7 @@ const PLACE_START = /^(?:north|south|east|west|new|san|santa|saint|st|los|las|co
 /** Lower case without accents, so "MÜLLER", "Müller" and "muller" compare equal. */
 const plain = (s) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 const lettersOf = (s) => plain(s).replace(/[^a-z]/g, '');
-const titleCase = (s) => s.toLowerCase().replace(/(^|[\s'’-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+const titleCase = (s) => s.toLowerCase().replace(/(^|[\s'’-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()).replace(/\bMc(\p{Ll})(?=\p{Ll}{2})/gu, (m, c) => `Mc${c.toUpperCase()}`); // "MCDONALD" is McDonald
 const SEPARATOR = /\s*[|•·●▪■◆‣∙│¦⋄◊♦]\s*/;
 const DASH = /\s+[–—-]\s+/;
 const EDGES = /^[\s|•·●▪■◆‣∙│¦⋄◊♦,;:–—()[\]/-]+|[\s|•·●▪■◆‣∙│¦⋄◊♦,;:–—()[\]/-]+$/g;
@@ -195,9 +255,9 @@ const tidy = (s) => { const t = s.replace(EDGES, ''); return t.includes('(') && 
 
 // Section headings, matched without accents or case. The first kind holds someone else's details; "References
 // available on request" lists nobody, so it opens nothing.
-const HEAD_REFS = /^(?:(?:professional|personal|character|academic|employment) )?(?:references?|referees?|referenzen|referencias|referenties)$|^(?:emergency contacts?(?: details)?|next of kin)$/;
+const HEAD_REFS = /^(?:(?:my|work|professional|personal|character|academic|employment|business|two|three) )?(?:references|referees?|referenzen|referencias|referenties)(?: (?:details|contacts?|list|and contacts?|\(.{0,30}))?$|^(?:(?:professional|personal|character|academic|employment) )?reference$|^reference (?:details|contacts?)$|^(?:emergency contacts?(?: details)?|next of kin)$/;
 const HEAD_CONTACT = /^(?:contact(?: (?:details|information|info|me))?|personal (?:details|information|info|data|particulars)|get in touch|kontakt|kontaktdaten|personliche daten|coordonnees|contacto|datos personales)$/;
-const HEAD_EXPERIENCE = /^(?:(?:professional|work|working|career|relevant|employment|industry|related|recent|selected|research|teaching|academic|clinical|practical|job|previous|internship) )?(?:experiences?|employment|history)(?: history| record| and \w+)?$|^(?:work|career|employment|professional|job) (?:history|background)$|^(?:(?:academic|professional|research|faculty) )?(?:appointments|positions)(?: held)?$|^(?:berufserfahrung|beruflicher werdegang|berufliche laufbahn|werdegang|experiences? professionnelles?|parcours professionnel|arbeitserfahrung|experiencias?(?: laboral(?:es)?| profesional(?:es)?| profissiona(?:l|is))?|esperienz[ae](?: lavorativ[ae]| professional[ei])?|werkervaring|doswiadczenie(?: zawodowe)?)$/;
+const HEAD_EXPERIENCE = /^(?:(?:professional|work|working|career|relevant|employment|industry|related|recent|selected|research|teaching|academic|clinical|practical|job|previous|internship) )?(?:experiences?|employment|history)(?: history| record| and \w+)?$|^(?:work|career|employment|professional|job) (?:history|background)$|^(?:work|career)$|^(?:(?:academic|professional|research|faculty) )?(?:appointments|positions)(?: held)?$|^(?:berufserfahrung|beruflicher werdegang|berufliche laufbahn|werdegang|experiences? professionnelles?|parcours professionnel|arbeitserfahrung|experiencias?(?: laboral(?:es)?| profesional(?:es)?| profissiona(?:l|is))?|esperienz[ae](?: lavorativ[ae]| professional[ei])?|werkervaring|doswiadczenie(?: zawodowe)?)$/;
 const HEAD_OTHER = /^(?:(?:professional|personal|career|executive|technical|key|core|top|relevant|additional|other|selected|academic|educational|soft|computer|language|it) )*(?:summary|profile|objective|statement|about(?: me)?|overview|education(?: and \w+)?|qualifications?|skills?(?: and \w+)?|competenc(?:ies|es)|expertise|areas of expertise|strengths|languages?|certifications?|certificates?|licen[sc]es?(?: and certifications)?|courses?|training|awards?(?: and \w+)?|honou?rs?(?: and awards)?|achievements?|accomplishments?|publications?|presentations?|conferences?|projects?|interests?|hobbies(?: and interests)?|activities|volunteer(?:ing)?(?: work| experience)?|memberships?|affiliations?|patents?|grants?|research(?: interests)?|teaching|information|highlights|technologies|tools|declaration|ausbildung|kenntnisse|sprachen|formation|competences|langues|educacion|formacion(?: academica)?|habilidades|idiomas|formacao(?: academica)?|educacao|competencias|istruzione|competenze|lingue|opleiding|vaardigheden|wyksztalcenie|umiejetnosci)$/;
 
 /** Which kind of section a line opens ('refs', 'contact', 'experience', 'other'), or null when it is not a heading. */
@@ -216,20 +276,31 @@ function headingOf(text) {
 /** The text as lines, each knowing its section, its column parts and (where the format says) its font size and page. */
 function readLines(text, layout = []) {
   const lines = [];
+  let gap = true; // whether an empty line stands above
   text.split(/\r?\n/).forEach((raw, i) => {
-    let t = raw.replace(/[\u200b-\u200d\ufeff]/g, '').replace(/[\u00a0\u2000-\u200a\u202f]/g, ' ').trim();
+    // No name, address or number is hundreds of characters without a space. Such a run (a line of digits, an
+    // embedded picture written out as text) is dropped: the patterns below would try it from every position.
+    let t = raw.replace(/\S{200,}/g, ' ').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/[\u00a0\u2000-\u200a\u202f]/g, ' ').trim();
+    if (!t) gap = true;
     if (!t || /^page \d+(?: of \d+)?$|^\d{1,3}(?: ?(?:of|\/) ?\d{1,3})?$/i.test(t)) return; // blank, or a page number
     t = unspace(t).replace(/\s*\t\s*| {3,}/g, ' · ').replace(/\s+/g, ' ');
-    lines.push({ text: t, parts: t.split(SEPARATOR).map((p) => p.trim()).filter(Boolean), size: layout[i]?.size || 0, page: layout[i]?.page || 1, footer: Boolean(layout[i]?.footer) });
+    lines.push({ text: t, parts: t.split(SEPARATOR).map((p) => p.trim()).filter(Boolean), size: layout[i]?.size || 0, page: layout[i]?.page || 1, footer: Boolean(layout[i]?.footer), gap });
+    gap = false;
   });
-  let section = 'head';
+  let section = 'head', others = false;
   for (const line of lines) {
     const heading = line.footer ? null : headingOf(line.text);
     if (heading) { section = heading; line.heading = true; }
     line.section = line.footer ? 'contact' : section;
+    // "Consultant: Sarah Lee, sarah.lee@agency…" on an agency's cover sheet, "Supervisor: …" in a job entry: the
+    // details on that line, and on the lines straight under it, are that person's and not the candidate's.
+    if (OTHER_PERSON.test(line.text)) others = true;
+    else if (line.gap || heading) others = false;
+    line.others = others;
   }
   return lines;
 }
+const OTHER_PERSON = /^(?:(?:consultant|recruiter|your contact|agency contact|account manager|referees?|references?|supervisor|line manager|manager|reports? to|reporting to)\s*:|(?:presented|prepared|submitted|introduced|sent|represented) by\b\s*[:–-]?)\s*\S/i;
 
 const isPlace = (s) => {
   const t = plain(s).replace(/[.]/g, '').trim();
@@ -241,28 +312,32 @@ const isPlace = (s) => {
  * "Contact" section first (an address in the work history may be a client's), and never a References section.
  */
 function contactFirst(lines) {
-  const own = lines.map((l, i) => i).filter((i) => lines[i].section !== 'refs');
+  const own = lines.map((l, i) => i).filter((i) => lines[i].section !== 'refs' && !lines[i].others);
   const top = (i) => lines[i].section === 'head' || lines[i].section === 'contact';
   return [...own.filter(top), ...own.filter((i) => !top(i))];
 }
 
 // ----- email -----
-const EMAIL = /[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/;
+const EMAIL = /[A-Za-z0-9][A-Za-z0-9._%+'-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/;
 
 /** The first address outside a References section. One cut in two by a line break is joined back, or dropped. */
 function findEmail(lines) {
   for (const i of contactFirst(lines)) {
     const { text } = lines[i];
-    const next = lines[i + 1]?.section === 'refs' ? '' : lines[i + 1]?.text || '';
+    const next = lines[i + 1]?.section === 'refs' || lines[i + 1]?.others ? '' : lines[i + 1]?.text || '';
     // The line ends inside the address ("name@", "name@mail." or "name@my-"): the rest is the next line, or nothing is taken.
-    const cut = /[A-Za-z0-9][A-Za-z0-9._%+-]*@(?:[A-Za-z0-9-]+\.)*(?:[A-Za-z0-9-]*-)?$/.exec(text);
+    const cut = /[A-Za-z0-9][A-Za-z0-9._%+'-]*@(?:[A-Za-z0-9-]+\.)*(?:[A-Za-z0-9-]*-)?$/.exec(text);
     if (cut && !EMAIL.test(cut[0].replace(/\.$/, ''))) {
       const whole = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/.test(next) && EMAIL.exec(cut[0] + next);
+      if (whole && /[\p{L}\p{M}’‘`]$/u.test(text.slice(0, cut.index))) return null;
       if (whole) return { value: whole[0].toLowerCase(), line: i };
       continue;
     }
     const found = EMAIL.exec(text);
     if (!found) continue;
+    // An accented letter or a curly apostrophe in front means the address starts earlier than the letters this
+    // reader knows: "josé.garcía@…" would come out as "a@…", a different and valid-looking address. Nothing is taken.
+    if (/[\p{L}\p{M}’‘`]$/u.test(text.slice(0, found.index))) return null;
     let value = found[0];
     const rest = text.slice(found.index + value.length);
     if (rest === '' && /^\.[a-z0-9-]+(?:\.[a-z0-9-]+)*$/.test(next)) value += next; // ".co.uk" on the next line
@@ -318,12 +393,25 @@ function findLinkedin(lines, links = []) {
 }
 
 // ----- phone -----
-const PHONE = /(?:(?:(?:\+|00)\d{1,3}[ .-]?)?(?:\(\+?\d{1,5}\)[ .-]?)?\d{1,5}(?:[ .-]?\d{1,5}){1,6}|0\d{2,4} ?\/ ?\d{2,5}(?:[ -]?\d{2,5}){1,3})(?![\w\/%-]|[.,]\d|\s?(?:[%€$£]|(?:usd|eur|gbp|million|billion|bn|mio|k|m)\b))/gi;
-const PHONE_LABEL = /(?:\b(?:tel|telephone|phone|mobile|mobil|mob|cell|cellphone|handphone|hp|handy|telefon|telefono|tél|téléphone|móvil|movil|whatsapp|contact)\.?(?: (?:no|number|nr)\.?)?\s*[:.)#–-]*|(?:^|[\s(|·•])[mtpc]\s*[:.)]+)\s*$/i;
+const PHONE = /(?:(?:(?:\+|00)\d{1,3}[ .-]?)?(?:\(\+?\d{1,5}\)[ .-]?)?\d{1,5}(?:[ .-]?\d{1,5}){1,6}|0\d{2,4} ?\/ ?\d{2,5}(?:[ -]?\d{2,5}){1,3})(?![\w\/%@-]|[.,]\d|\s?(?:[%€$£]|(?:usd|eur|gbp|million|billion|bn|mio|k|m)\b))/gi;
+const PHONE_LABEL = /(?:\b(?:tel|telephone|phone|ph|mobile|mobil|mob|cell|cellphone|handphone|hp|handy|telefon|telefono|tél|téléphone|móvil|movil|whatsapp|contact)\.?(?: (?:no|number|nr)\.?)?\s*[:.)#–-]*|(?:^|[\s(|·•])[mtpc]\s*[:.)]+)\s*$/i;
 const NOT_PHONE_LABEL = /\b(?:ref|reference|invoice|order|account|acct|iban|id|no|nr|number|code|isbn|issn|doi|orcid|vat|nif|ssn|nric|cpf|cnic|bvn|nin|tfn|aadhaa?r|pan|passport|licen[cs]e|registration|student|employee|dob|born|birth|fax|pin|zip|postcode|gpa|cgpa|grade|score)\b\W*$/i;
 // A number followed by what it counts ("100 200 300 units") is not a phone; one followed by which phone it is, is.
 const COUNTED = /^\s+(?!(?:and|und|oder|mobile?|cell|home|work|tel|direct|office|whatsapp|ext|personal)\b)\p{Ll}{3,}/u;
 const YEAR = /(?:^|\D)(?:19|20)\d{2}(?!\d)/g;
+// "Social Security: 123-45-6789", "NI: 12 34 56 78 9": a label for something else. Which phone it is ("Home:") is not.
+const OTHER_LABEL = /\p{L}[\p{L} .'’/-]{0,30}:\s*$/u;
+const WHICH_PHONE = /\b(?:home|work|office|direct|personal|landline|main|daytime|evening|private|business|uk|usa?)\s*:\s*$/i;
+// How a number is written when nothing says it is a phone: with a leading 0 or an area code in brackets, or in
+// one of the national forms. Nine to twelve digits of any other shape are as likely a student or tax number.
+const PHONE_SHAPES = [
+  /^[(0]/,
+  /^(?:1[ .-])?\(?[2-9]\d{2}\)?[ .-]\d{3}[ .-]\d{4}$/, // North America
+  /^[2-9]\d{9}$/, // ten digits run together (North America, India)
+  /^[6-9]\d{4}[ -]\d{5}$/, // India
+  /^1[3-9]\d[ -]?\d{4}[ -]?\d{4}$/, // China
+  /^[36789]\d{1,2}(?:[ .]\d{2,4}){2,3}$/, // Spain, Portugal, Italy
+];
 
 /**
  * A phone number: one with a label ("Tel:", "Mobile"), else one in the contact block, else one written in
@@ -332,13 +420,15 @@ const YEAR = /(?:^|\D)(?:19|20)\d{2}(?!\d)/g;
 function findPhone(lines, inContact) {
   const found = [];
   lines.forEach((line, i) => {
-    if (line.section === 'refs') return;
+    if (line.section === 'refs' || line.others) return;
     for (const m of line.text.matchAll(PHONE)) {
       const value = m[0].trim(), digits = value.replace(/\D/g, '').length, before = line.text.slice(0, m.index);
       const labelled = PHONE_LABEL.test(before), international = /^(?:\+|00)/.test(value);
       // Part of something longer: a code, an amount ("£1 200 000"), a web address, or the tail of another number.
       if (/[\w.\/$£€#-]$/.test(before) || (/\d[ .,-]$/.test(before) && /^\d/.test(value))) continue;
       if (!labelled && (NOT_PHONE_LABEL.test(before) || COUNTED.test(line.text.slice(m.index + m[0].length)))) continue;
+      if (!labelled && OTHER_LABEL.test(before) && !WHICH_PHONE.test(before)) continue;
+      if (!labelled && !international && !PHONE_SHAPES.some((shape) => shape.test(value))) continue;
       if (/^\d{1,3}(?:\.\d{1,3}){3}$|(?:^|\s)\d\.\d{1,2}(?=\s|$)/.test(value)) continue; // a network address, or figures such as "3.85 4.00"
       if ((value.match(YEAR) || []).length >= 2 || /^\d{1,2}[ .-]\d{1,2}[ .-](?:19|20)\d{2}$|^(?:19|20)\d{2}[ .-]\d{1,2}[ .-]\d{1,2}$|^\d{5}-\d{4}$/.test(value)) continue;
       if (!labelled && !international && /^(?:19|20)\d{2}(?!\d)/.test(value)) continue; // "2026-00417" is a reference, "2019 ..." a date
@@ -358,6 +448,8 @@ const FURNITURE = /^(?:page(?: \d+)?(?: of \d+)?|(?:private (?:and|&) |strictly 
 function asName(part) {
   let s = part.replace(/^(?:resume|résumé|cv|curriculum vitae)\s*(?:of|for|[:–—-])\s*/i, '').replace(/(?:['’]s)?\s*[:,–—-]?\s*\b(?:resume|résumé|cv|curriculum vitae)$/i, '');
   s = s.replace(/\s*\([^)]*\)$/, '').replace(/\s+["“][^"”]+["”](?=\s)/, '').replace(POSTNOMINALS, '').replace(/,$/, '').trim();
+  // "Alex Morgan MD", "Jane Doe BSN": capitals after a name written in normal case are letters after it, whichever they are.
+  s = s.replace(/^(\p{Lu}\p{Ll}[\p{L}'’-]*\.? \p{Lu}\p{Ll}[\p{L}'’-]*) (?:[A-Z]{2,5}|Jr\.?|Sr\.?)$/u, '$1');
   if (s.length < 4 || s.length > 45 || /[\d@/\\:;,!?&+=#*_()[\]{}<>"“”]/.test(s)) return null;
   const words = s.split(' ');
   if (words.length < 2 || words.length > 5) return null;
@@ -413,7 +505,7 @@ function findName(lines, email, hints, reachable) {
   const fileKey = hints.filename ? wordsOf(hints.filename.replace(/\.[^.]+$/, '')) : [];
   const pool = [];
   top.forEach((line, i) => {
-    if (line.section === 'refs' || line.heading) return;
+    if (line.section === 'refs' || line.heading || line.others) return;
     line.parts.flatMap((part) => part.split(DASH)).forEach((part, j) => {
       // "Jane Doe, Senior Engineer": the name is what stands before the job title.
       const titled = /^([^,]+),\s*(.+)$/.exec(part);
@@ -443,7 +535,8 @@ function findName(lines, email, hints, reachable) {
   // called after a job or a town, so it only backs a line that could not be one.
   const backed = pool.find((c) => (c.soft ? c.byEmail.full : c.byEmail.n >= 2 || c.byFile.n >= 2));
   if (backed) return pick(backed);
-  const partly = pool.find((c) => c.i < 40 && (c.byEmail.n || c.byFile.n) && !c.soft && top[c.i].section !== 'experience');
+  // One word shared with the file name proves nothing: "Barclays_CV.pdf" opens with "Barclays Wealth".
+  const partly = pool.find((c) => c.i < 40 && c.byEmail.n && !c.soft && top[c.i].section !== 'experience');
   if (partly) return pick(partly);
 
   // PDF: the name is the largest thing on the first page, headings aside. If that line is something else, size says nothing.
@@ -473,10 +566,13 @@ function findName(lines, email, hints, reachable) {
 const DEGREE = /^(?:BSc|MSc|BA|MA|BS|MS|PhD|MBA|BEng|MEng|LLB|LLM|ACA|ACCA|CFA|CPA|PMP|MD|RN|HND|BTEC|GCSE)$/i;
 const REGION = /^[\p{L}][\p{L} .'’-]{1,30}$/u;
 
+// What a "Personal details" block lists in the same shape as a place: "Indian, Hindu", "British, Single".
+const NOT_A_PLACE = /\b(?:indian|british|american|pakistani|bangladeshi|nigerian|ghanaian|kenyan|filipino|chinese|hindu|muslim|christian|sikh|buddhist|jewish|catholic|married|unmarried|single|male|female)\b/i;
+
 /** A part of a contact line read as a place ("Leeds, UK", "Greater Manchester", "Springfield, IL 62704"), or null. */
 function asLocation(part) {
   const s = part.replace(/\s*\([^)]*\)$/, '').trim();
-  if (!s || /[\d@:/]|linkedin|github|http|www\./i.test(s) || TITLE_WORDS.test(s)) return null;
+  if (!s || /[\d@:/]|linkedin|github|http|www\./i.test(s) || TITLE_WORDS.test(s) || NOT_A_PLACE.test(s)) return null;
   if (isPlace(s)) return s;
   const pieces = /^\p{Lu}[\p{L}.'’-]+(?: \p{Lu}[\p{L}.'’-]+){0,2} [A-Z]{2,3}$/u.test(s) ? [s] : s.split(/\s*,\s*/); // "Sydney NSW"
   if ((pieces.length < 2 && !/ [A-Z]{2,3}$/.test(s)) || pieces.length > 3 || !pieces.every((p) => REGION.test(p) && p.split(' ').length <= 4)) return null;
@@ -493,7 +589,7 @@ function asLocation(part) {
 /** The town in a postal address: "…, Springfield, IL 62704", "…, 75002 Paris", "1015 CJ Amsterdam", "…, Reading, RG1 5AB", "…, Cork, T23 XY12", "Sydney NSW 2000". */
 function townOf(part) {
   const m = /(?:^|,\s*)(\p{Lu}[\p{L} .'’-]{1,30},\s*[A-Z]{2})\s+\d{5}(?:-\d{4})?$/u.exec(part)
-    || /(?:^|,\s*)(\p{Lu}[\p{L} .'’-]{1,30}? [A-Z]{2,3})\s+\d{4}$/u.exec(part)
+    || /(?:^|,\s*)(\p{Lu}[\p{L} .'’-]{1,30}? (?:NSW|VIC|QLD|TAS|ACT|NT|SA|WA))\s+\d{4}$/u.exec(part) // not "Deloitte UK 2021"
     || /(?:^|,\s*)\d{4,5}\s+(?:[A-Z]{2}\s+)?(\p{Lu}[\p{L} .'’-]{1,30})$/u.exec(part)
     || /(?:^|,\s*)(\p{Lu}[\p{L} .'’-]{1,30}?),?\s+(?:[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}|[A-Z]\d[\dW] ?[A-Z\d]{4})$/u.exec(part);
   return m ? m[1] : null;
@@ -529,7 +625,7 @@ function findLocation(lines, inContact, strong, name, emailKey) {
       const town = townOf(part.trim());
       if (town && !TITLE_WORDS.test(town) && !town.split(/[\s,]+/).some((w) => NEVER_NAME.has(lettersOf(w)))) return town;
       const place = asLocation(part.trim());
-      if (!place || (!strong(i) && !knownPlace(place))) continue;
+      if (!place || ((!strong(i) || i === 0) && !knownPlace(place))) continue; // the first line is the name: "Smith, John"
       if (!knownPlace(place) && agreement(place.split(/[\s,]+/).map(lettersOf), emailKey).n) continue; // "Whitfield, Hannah"
       return place;
     }
@@ -674,6 +770,25 @@ function firstRole(lines, heading) {
   return { title: title.text, company: company?.text };
 }
 
+const RUNS_ON = new RegExp(`(?:-|–|—|to|until|till|bis|au|à|→)\\s*${UNTIL}(?![\\p{L}\\d])|(?:^|[^\\p{L}])(?:since|seit|depuis|desde|ab)\\s+${DATE}`, 'iu');
+const ENDED = /(?:19|20)\d{2}\D{1,12}(?:19|20)\d{2}/;
+/**
+ * For a list of jobs under `heading` whose first dates have an end and a later line runs to the present: the line
+ * above that later one when it holds a job title itself (so firstRole can start there), else -1. Undefined for
+ * the usual newest-first list.
+ */
+function currentWhenOldestFirst(lines, heading) {
+  let first = true;
+  for (let i = heading + 1; i < lines.length && !lines[i].heading; i++) {
+    const { text } = lines[i];
+    if (text.search(DATES) < 0) continue;
+    const runsOn = RUNS_ON.test(text);
+    if (first) { if (runsOn || !ENDED.test(text)) return undefined; first = false; continue; }
+    if (runsOn) return pieces(text, 0).some((p) => p.kind === 'title') ? i - 1 : -1;
+  }
+  return undefined;
+}
+
 /**
  * @param {string} text
  * @param {{lines?: {size?:number,page?:number,footer?:boolean}[], links?: string[], filename?: string}} [hints] what
@@ -707,10 +822,13 @@ export function parseResume(text, hints = {}) {
   const location = findLocation(lines, inContact, strong, out.name, out.email ? wordsOf(out.email.split('@')[0]) : []);
   if (location) out.location = location;
 
-  // Current role: the first entry under an "Experience" heading.
+  // Current role: the first entry under an "Experience" heading. Where the list runs oldest first, the entry that
+  // runs to the present when it stands on one line, and otherwise nothing: the first entry is a job long left.
   for (let i = 0; i < lines.length && !out.current_title; i++) {
     if (!lines[i].heading || lines[i].section !== 'experience') continue;
-    const role = firstRole(lines, i);
+    const current = currentWhenOldestFirst(lines, i);
+    if (current === -1) break;
+    const role = firstRole(lines, current ?? i);
     if (role.title) { out.current_title = role.title; if (role.company) out.current_company = role.company; }
   }
   // Otherwise a headline under the name ("Senior Product Designer at Juniper Row") is a fair guess.
@@ -719,6 +837,7 @@ export function parseResume(text, hints = {}) {
       if (i > name.line && lines[i].heading) break;
       for (const part of lines[i].parts.flatMap((p) => p.split(DASH))) {
         if (part.length > 70 || /[@\d]/.test(part) || !isTitle(part) || plain(part).includes(plain(out.name))) continue;
+        if (/^(?:former(?:ly)?|ex|aspiring|seeking|future|retired|previously)\b/i.test(part)) continue; // what the person was, or hopes to be
         // "Seeking a Sales Manager position" mentions a title; a headline is one, written as a heading.
         if (part.split(' ').some((w) => /^\p{Ll}/u.test(w) && !/^(?:of|and|at|in|for|the|to|de|du|des|la|le|di|y|e|bei|und|chez)$/.test(w))) continue;
         const at = AT.exec(part);
@@ -735,10 +854,12 @@ export function parseResume(text, hints = {}) {
 /** A person's name taken from a file name such as "Raphael Rivero - Resume__112026.pdf", or '' if it does not hold one. */
 export function nameFromFilename(filename) {
   const base = filename.replace(/\.[^.]+$/, '').replace(/_+/g, ' ')
-    .replace(/\b(resume|résumé|cv|curriculum vitae|cover letter|final|updated|latest|new|copy|draft|v\d+)\b/gi, ' ').replace(/[\d()[\]]+/g, ' ');
+    .replace(/\b(resume|résumé|cv|curriculum vitae|lebenslauf|bewerbung|curr[ií]culum|curr[ií]culo|hoja de vida|cover letter|final|updated|latest|new|copy|draft|v\d+)\b/gi, ' ').replace(/[\d()[\]]+/g, ' ');
   const part = base.split(/\s+[-–—|]\s+|\s{2,}/).map((p) => p.replace(/^[\s-]+|[\s-]+$/g, '')).find((p) => {
     const words = p.split(' ');
-    return words.length >= 2 && words.length <= 4 && /^[\p{L}][\p{L} .'’-]+$/u.test(p) && !TITLE_WORDS.test(p) && !words.some((w) => NEVER_NAME.has(lettersOf(w)));
+    // The shape of a name, and none of the words files are called by ("Untitled document", "Black White Minimalist").
+    return words.length >= 2 && words.length <= 4 && /^[\p{L}][\p{L} .'’-]+$/u.test(p) && !TITLE_WORDS.test(p)
+      && words.every((w) => /^\p{Lu}?\p{Ll}[\p{L}'’]*\.?$|^\p{Lu}{2,}$/u.test(w) && !NEVER_NAME.has(lettersOf(w)) && !FILE_WORDS.has(lettersOf(w)) && !LANGUAGES.has(lettersOf(w)));
   });
   if (!part) return '';
   return part === part.toLowerCase() || part === part.toUpperCase() ? titleCase(part) : part;
@@ -746,15 +867,19 @@ export function nameFromFilename(filename) {
 
 /**
  * Read a résumé file and return what could be found, with the reason when little or nothing could be:
- * 'ok', 'no_text' (a scan or image with no selectable text), 'unreadable' (old .doc and similar),
- * 'protected' (password-protected) or 'error'. With the last two comes `error`, what was thrown: the caller can
+ * 'ok', 'no_text' (a PDF that is a scan or image with no selectable text), 'blank' (another kind of file with no
+ * text in it), 'empty' (no bytes at all), 'binary' (not text under a text name), 'unreadable' (old .doc and
+ * similar), 'protected' (password-protected) or 'error'. With the last two comes `error`, what was thrown: the caller can
  * tell a document that will not open from a part of the app that failed to load.
  */
 export async function readResume(file) {
-  let text = '', layout = {}, status = 'ok', error;
+  let text = '', layout = {}, status = 'ok', error, binary = false;
   try {
-    ({ text, layout = {} } = await readFile(file));
-    if (!text.trim()) status = /\.(pdf|docx|rtf|txt)$/i.test(file.name) ? 'no_text' : 'unreadable';
+    if (file.size !== 0) ({ text, layout = {}, binary = false } = await readFile(file));
+    // Why there is nothing to read: the file is empty, is not text at all, is a scan (PDF), or is of a kind this cannot open.
+    if (file.size === 0) status = 'empty';
+    else if (binary) status = 'binary';
+    else if (!text.trim()) status = !/\.(pdf|docx|rtf|txt)$/i.test(file.name) ? 'unreadable' : layout.lines && 'links' in layout ? 'no_text' : 'blank';
   } catch (err) {
     console.warn('The résumé could not be read automatically:', err);
     status = /password/i.test(`${err?.name} ${err?.message}`) ? 'protected' : 'error';

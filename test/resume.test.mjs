@@ -1254,11 +1254,175 @@ test('text files saved by Windows: UTF-16 and the Windows code page are read, no
   assert.deepEqual(all((await readResume(latin)).fields), all({ name: 'Zoë Brontë', email: 'zoe@mail.example', current_title: 'Editor', current_company: 'Café Média' }));
 });
 
+// ---------- somebody else's details, and numbers that are not phones ----------
+
+reads('agency cover sheet: the consultant\'s address and number are not the candidate\'s', `Michael Page
+Candidate Profile
+Ref: MP-203948
+Consultant: Sarah Lee, sarah.lee@michaelpage.example, 020 7946 0000
+
+Candidate: Daniel Okafor
+Current role: Finance Director
+
+Experience
+Finance Director, Varsity Freight
+2020 - Present`,
+{ name: 'Daniel Okafor', current_title: 'Finance Director', current_company: 'Varsity Freight' });
+
+reads('agency cover sheet: "Prepared by" and the contact line under it', `CONFIDENTIAL CANDIDATE PROFILE
+Prepared by Tom Reid, Senior Consultant
+T: 020 7946 0100  E: tom.reid@harboursearch.example
+
+Candidate: JW-1042
+Current role: Operations Director
+
+Career History
+Operations Director, DHL Supply Chain
+2019 - Present`,
+{ current_title: 'Operations Director', current_company: 'DHL Supply Chain' });
+
+for (const heading of ['Referee Details', 'My References', 'Work References', 'Reference Contacts', 'Referees (with permission)', 'REFEREES & CONTACTS', 'Two References']) {
+  reads(`a referee's phone under "${heading}" is not the candidate's`, `Emma Stone
+emma.stone@mail.example
+
+Experience
+Staff Nurse, St Mary's Hospital
+2018 - Present
+
+${heading}
+Dr Alan Grant, Consultant
+alan.grant@hospital.example
+Tel: +44 20 7946 0999`,
+  { name: 'Emma Stone', email: 'emma.stone@mail.example', current_title: 'Staff Nurse', current_company: "St Mary's Hospital" });
+}
+
+reads('a headline that is only a job word does not make the contact line somebody else\'s', `Jane Doe
+Consultant | jane.doe@mail.example | 07700 900123`,
+{ name: 'Jane Doe', email: 'jane.doe@mail.example', phone: '07700 900123', current_title: 'Consultant' });
+
+reads('an apostrophe is part of the address', `Shane O'Neil
+shane.o'neil@mail.example`, { name: "Shane O'Neil", email: "shane.o'neil@mail.example" });
+reads('an address with accented letters is left out, not cut down to another address', `José García
+josé.garcía@mail.example`, {});
+reads('an address with a curly apostrophe is left out', `Shane O’Neil
+shane.o’neil@mail.example`, {});
+
+reads('the first half of a numeric email address is not the phone', `Wang Xiaoming
+1234567890@qq.com | 138 0013 8000
+Beijing, China`, { name: 'Wang Xiaoming', email: '1234567890@qq.com', phone: '138 0013 8000', location: 'Beijing, China' });
+for (const line of ['Social Security: 123-45-6789', 'Matrikelnummer 123456789', 'UTR 12345 67890', 'GitHub stars 123 456 789', 'NI: 12 34 56 78 9']) {
+  reads(`not a phone: ${line}`, `John Carter\n${line}\njohn.carter@mail.example`, { name: 'John Carter', email: 'john.carter@mail.example' });
+}
+for (const number of ['415-555-0142', '98765 43210', '612 345 678', '020 7946 0123', '(217) 555-0142', '4155550142']) {
+  reads(`a phone without a label, in a national form: ${number}`, `John Carter\njohn.carter@mail.example\n${number}`, { name: 'John Carter', email: 'john.carter@mail.example', phone: number });
+}
+reads('which phone it is ("Home:") is not a label for something else', `John Carter\njohn.carter@mail.example\nHome: 020 7946 0123`, { name: 'John Carter', email: 'john.carter@mail.example', phone: '020 7946 0123' });
+
+// ---------- title, name and place: the layouts the reader used to get wrong ----------
+
+reads('jobs listed oldest first: the one that runs to the present', `Olivia Brown
+olivia.brown@mail.example
+
+Experience
+2010 - 2014  Junior Developer, Acme Corp
+2014 - 2018  Developer, Globex Ltd
+2018 - Present  Lead Developer, Initech`,
+{ name: 'Olivia Brown', email: 'olivia.brown@mail.example', current_title: 'Lead Developer', current_company: 'Initech' });
+
+reads('jobs listed oldest first over several lines each: nothing rather than the oldest', `Olivia Brown
+olivia.brown@mail.example
+
+Experience
+Junior Developer
+Acme Corp
+2010 - 2014
+Lead Developer
+Initech
+2018 - Present`,
+{ name: 'Olivia Brown', email: 'olivia.brown@mail.example' });
+
+reads('a society is the organisation, the office held is the title', `Nina Park
+nina.park@mail.example
+
+Experience
+University of Leeds Finance Society
+Treasurer
+2023 - 2024`,
+{ name: 'Nina Park', email: 'nina.park@mail.example', current_title: 'Treasurer', current_company: 'University of Leeds Finance Society' });
+
+reads('a headline about what the person used to be is not their current title', `Nina Park
+Former Director of Marketing at Acme
+nina.park@mail.example`, { name: 'Nina Park', email: 'nina.park@mail.example' });
+reads('nor is what they hope to be', `Nina Park
+Aspiring Product Manager | MBA Candidate
+nina.park@mail.example`, { name: 'Nina Park', email: 'nina.park@mail.example' });
+
+reads('"WORK" is a heading, and an employer with a year is not a town', `Priya Nair
+priya.nair@mail.example | 07700 900111
+WORK
+Deloitte UK 2021
+Senior Consultant
+KPMG India 2018
+Consultant`,
+{ name: 'Priya Nair', email: 'priya.nair@mail.example', phone: '07700 900111', current_title: 'Senior Consultant', current_company: 'Deloitte UK' });
+
+reads('a reversed name on the first line is not a place', `Smith, John · coolguy82@mail.example · 555-201-3344`, { email: 'coolguy82@mail.example', phone: '555-201-3344' });
+reads('nationality and religion are not a place', `Ravi Kumar
+ravi.kumar@mail.example
+
+Personal Details
+Indian, Hindu`, { name: 'Ravi Kumar', email: 'ravi.kumar@mail.example' });
+
+reads('letters after a name are dropped', `Alex Morgan MD\nalex.morgan@mail.example`, { name: 'Alex Morgan', email: 'alex.morgan@mail.example' });
+reads('a name in capitals keeps its Mc', `FIONA MCDONALD\nfiona.mcdonald@mail.example`, { name: 'Fiona McDonald', email: 'fiona.mcdonald@mail.example' });
+reads('one word shared with the file name does not choose the name', `Barclays Wealth
+Application for Relationship Manager
+
+Daniel Okafor
+daniel@mail.example`, { name: 'Daniel Okafor', email: 'daniel@mail.example' }, { filename: 'Barclays_CV.pdf' });
+
+test('file names that are not names give no name', () => {
+  for (const name of ['Untitled document.pdf', 'Scanned Document.pdf', 'Black White Minimalist CV Resume.pdf', 'CV English Version.pdf', 'big-8mb.txt', '履歴書_山田太郎.pdf', 'New York Office.pdf']) assert.equal(nameFromFilename(name), '', name);
+  assert.equal(nameFromFilename('Lebenslauf Max Mustermann.pdf'), 'Max Mustermann');
+});
+
+test('one long unbroken run of digits or letters does not stall the reader', () => {
+  const started = Date.now();
+  assert.deepEqual(parseResume(`Jane Doe\n${'7'.repeat(40000)}\njane.doe@mail.example`), { name: 'Jane Doe', email: 'jane.doe@mail.example' });
+  parseResume(`Jane Doe\n${'a'.repeat(200000)}`);
+  parseResume(`Jane Doe\n${'QUJD'.repeat(25000)}`);
+  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+});
+
+test('a Word file made to be slow or huge is read quickly or refused', async () => {
+  const started = Date.now();
+  // Unclosed tags, 300,000 of them: every "find the closing tag" used to start again from each one.
+  assert.match(await extractResumeText(docx({ body: ['Jane Doe', '<w:tabs>'.repeat(300000)] })), /^Jane Doe/);
+  assert.match(await extractResumeText(docx({ body: ['Jane Doe', '<w:tab '.repeat(200000)] })), /^Jane Doe/);
+  assert.match(await extractResumeText(docx({ body: ['Jane Doe', '<w:hyperlink r:id="rId1">'.repeat(100000)] })), /^Jane Doe/);
+  // A part that unpacks to far more than any document holds is not unpacked at all.
+  await assert.rejects(extractResumeText(docx({ body: ['a'.repeat(9 * 1024 * 1024)] })), /more than can be read/);
+  assert.ok(Date.now() - started < 5000, `took ${Date.now() - started} ms`);
+});
+
+test('a file is read as what its first bytes say it is, whatever its name', async () => {
+  const word = docx({ body: ['Jane Doe', 'jane.doe@mail.example'] });
+  const renamed = new File([await word.arrayBuffer()], 'jane.txt');
+  assert.equal((await extractResumeText(renamed)).trim(), 'Jane Doe\njane.doe@mail.example');
+  assert.deepEqual((await readResume(renamed)).fields, { name: 'Jane Doe', email: 'jane.doe@mail.example' });
+});
+
 test('files that cannot be read say why, and fall back to the file name for the name only', async () => {
   const doc = await readResume(new File([new Uint8Array([0xd0, 0xcf, 0x11, 0xe0])], 'Greta Lindqvist CV.doc'));
   assert.deepEqual(doc, { fields: { name: 'Greta Lindqvist' }, status: 'unreadable', nameFromFile: true });
   const empty = await readResume(new File([''], 'notes.txt'));
-  assert.deepEqual(empty, { fields: {}, status: 'no_text', nameFromFile: false });
+  assert.deepEqual(empty, { fields: {}, status: 'empty', nameFromFile: false });
+  // Another kind of file under a text name is not shown or parsed as text.
+  const picture = await readResume(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 1, 0])], 'notes.txt'));
+  assert.deepEqual(picture, { fields: {}, status: 'binary', nameFromFile: false });
+  assert.equal(await extractResumeText(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0])], 'cv.txt')), '');
+  const blank = await readResume(new File(['  \n '], 'notes.txt'));
+  assert.equal(blank.status, 'blank');
   const broken = await readResume(new File([new Uint8Array(64)], 'Jane Doe.docx'));
   assert.equal(broken.status, 'error');
   assert.deepEqual(broken.fields, { name: 'Jane Doe' });

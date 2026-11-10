@@ -13,6 +13,7 @@ const MILESTONES = {
   booked: { label: 'Interview booked', icon: CalendarCheck, row: 'border-l-sky-500 bg-sky-50/70 hover:bg-sky-50', pill: 'bg-sky-600 text-white' },
   approved: { label: 'Approved for interview', icon: ThumbsUp, row: 'border-l-sky-500 bg-sky-50/70 hover:bg-sky-50', pill: 'bg-sky-600 text-white' },
   offer: { label: 'Offer stage', icon: Handshake, row: 'border-l-amber-500 bg-amber-50/80 hover:bg-amber-50', pill: 'bg-amber-600 text-white' },
+  sent: { label: 'Offer sent', icon: Handshake, row: 'border-l-amber-500 bg-amber-50/80 hover:bg-amber-50', pill: 'bg-amber-600 text-white' },
   accepted: { label: 'Offer accepted', icon: Handshake, row: 'border-l-amber-500 bg-amber-50/80 hover:bg-amber-50', pill: 'bg-amber-600 text-white' },
   hired: { label: 'Hired', icon: Trophy, row: 'border-l-emerald-600 bg-emerald-50/80 hover:bg-emerald-50', pill: 'bg-emerald-700 text-white' },
 };
@@ -28,8 +29,14 @@ function ActivityRow({ activity: a, onOpen }) {
             <m.icon className="size-3" />{m.label}
           </span>
         )}
-        <span className={`block text-sm ${m ? 'text-stone-900' : 'text-stone-800'}`}><span className={m ? 'font-semibold' : 'font-medium'}>{a.candidate_name}</span> · {a.detail}</span>
-        <span className="block truncate text-xs text-stone-500">{a.job_title}{a.user_name ? ` · ${a.user_name}` : ''} · {ago(a.created_at)}</span>
+        {/* At most three lines, and long unbroken text wraps: one long note must not push everything else off the screen. */}
+        <span className={`line-clamp-3 text-sm [overflow-wrap:anywhere] ${m ? 'text-stone-900' : 'text-stone-800'}`}><span className={m ? 'font-semibold' : 'font-medium'}>{a.candidate_name}</span> · {a.detail}</span>
+        {/* The job title gives way first, then (only if it is very long) who did it; when it happened is always shown. */}
+        <span className="flex gap-1 text-xs text-stone-500">
+          <span className="min-w-0 truncate">{a.job_title}</span>
+          {a.user_name && <span className="max-w-[50%] shrink-0 truncate">· {a.user_name}</span>}
+          <span className="shrink-0">· {ago(a.created_at)}</span>
+        </span>
       </button>
     </li>
   );

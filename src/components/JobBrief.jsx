@@ -1,15 +1,26 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Ban, Building2, Check, Copy, ExternalLink, MapPin, NotebookPen, Pencil, Search, Sparkles } from 'lucide-react';
 import { api, money, salaryRange, WORK_MODES, EMPLOYMENT } from '../lib.js';
 import { useApp } from '../state.jsx';
-import { Badge, Button, Card, Empty, Field, Modal, Textarea, useAction, useToast } from '../ui.jsx';
+import { Badge, Button, Card, Empty, Field, Loading, Modal, Textarea, useAction, useToast } from '../ui.jsx';
 import JobAutofill from './JobAutofill.jsx';
 
 // The recruiter brief for a job: everything someone sourcing for the role needs. Agency only.
 
 const lines = (list) => (list || []).join('\n');
-const toList = (value) => value.split('\n').map((l) => l.replace(/^[\s•*-]+/, '').trim()).filter(Boolean);
-const quote = (term) => (/\s/.test(term) ? `"${term}"` : term);
+// One item per line, without the bullet, number or tick box a pasted list brings with it. A dash, star or number
+// is only a marker when a space follows it, so "-5% travel" and "*nix" keep their first character; "o" (Word's
+// second-level bullet) and "a." only when every line starts that way.
+const SYMBOL = /^\s*(?:[•●▪■◦‣⁃∙·☐☑\uF0B7\uF0A7\uF0D8]\s*|(?:[*>–—-]|\[[ xX]?\]|\(?\d{1,2}[.)])\s+)/;
+const LETTERED = /^\s*(?:o|\(?[a-zA-Z][.)])\s+(?=\S)/;
+function toList(value) {
+  const rows = value.split('\n').filter((l) => l.trim());
+  const lettered = rows.length > 1 && rows.every((l) => LETTERED.test(l));
+  return rows.map((l) => l.replace(lettered ? LETTERED : SYMBOL, '').trim()).filter(Boolean);
+}
+// A term of several words is searched as a phrase. Quotation marks already typed round or inside it are dropped
+// first: doubled or stray ones break the whole string.
+const quote = (term) => { const bare = term.replace(/["“”]/g, '').trim(); return /\s/.test(bare) ? `"${bare}"` : bare; };
 
 /** A search string built from the titles and keywords, used when the recruiter has not written their own. */
 function suggestedSearch(brief) {
@@ -28,17 +39,19 @@ function Section({ title, icon: Icon, children, className }) {
     </Card>
   );
 }
-const Prose = ({ children }) => <p className="max-w-prose text-sm leading-relaxed whitespace-pre-wrap text-stone-700">{children}</p>;
+// Long unbroken text (a pasted link, say) wraps inside its box instead of running out of the card and the page.
+const WRAP = '[overflow-wrap:anywhere]';
+const Prose = ({ children }) => <p className={`max-w-prose text-sm leading-relaxed whitespace-pre-wrap text-stone-700 ${WRAP}`}>{children}</p>;
 function Bullets({ items, icon: Icon = Check, tone = 'text-brand-600' }) {
   return (
     <ul className="space-y-2">
       {items.map((item, i) => (
-        <li key={i} className="flex gap-2.5 text-sm leading-relaxed text-stone-700"><Icon className={`mt-0.5 size-4 shrink-0 ${tone}`} />{item}</li>
+        <li key={i} className="flex gap-2.5 text-sm leading-relaxed text-stone-700"><Icon className={`mt-0.5 size-4 shrink-0 ${tone}`} /><span className={`min-w-0 ${WRAP}`}>{item}</span></li>
       ))}
     </ul>
   );
 }
-const Chips = ({ items }) => <div className="flex flex-wrap gap-1.5">{items.map((item, i) => <Badge key={i} className="!text-[13px]">{item}</Badge>)}</div>;
+const Chips = ({ items }) => <div className="flex flex-wrap gap-1.5">{items.map((item, i) => <Badge key={i} className={`max-w-full !rounded-xl !text-[13px] !whitespace-normal ${WRAP}`}>{item}</Badge>)}</div>;
 const Label = ({ children }) => <div className="mb-1.5 text-xs font-medium tracking-wide text-stone-500 uppercase">{children}</div>;
 
 export default function JobBrief({ job, stages }) {
@@ -134,7 +147,7 @@ export default function JobBrief({ job, stages }) {
 
         {has('screening_questions') && (
           <Section title="Questions for the first call">
-            <ol className="list-decimal space-y-2 pl-5 text-sm leading-relaxed text-stone-700">{brief.screening_questions.map((qn, i) => <li key={i}>{qn}</li>)}</ol>
+            <ol className={`list-decimal space-y-2 pl-5 text-sm leading-relaxed text-stone-700 ${WRAP}`}>{brief.screening_questions.map((qn, i) => <li key={i}>{qn}</li>)}</ol>
           </Section>
         )}
       </div>
@@ -143,8 +156,8 @@ export default function JobBrief({ job, stages }) {
         <Section title="Pay">
           <dl className="space-y-3 text-sm">
             <div><dt className="text-[13px] text-stone-500">Salary</dt><dd className="text-lg font-semibold tracking-tight text-stone-900">{range || 'Not set'}</dd></div>
-            {has('pay_notes') && <div><dt className="text-[13px] text-stone-500">Bonus, equity and benefits</dt><dd className="leading-relaxed whitespace-pre-wrap text-stone-700">{brief.pay_notes}</dd></div>}
-            {has('pay_flex') && <div><dt className="text-[13px] text-stone-500">Room to move</dt><dd className="leading-relaxed whitespace-pre-wrap text-stone-700">{brief.pay_flex}</dd></div>}
+            {has('pay_notes') && <div><dt className="text-[13px] text-stone-500">Bonus, equity and benefits</dt><dd className={`leading-relaxed whitespace-pre-wrap text-stone-700 ${WRAP}`}>{brief.pay_notes}</dd></div>}
+            {has('pay_flex') && <div><dt className="text-[13px] text-stone-500">Room to move</dt><dd className={`leading-relaxed whitespace-pre-wrap text-stone-700 ${WRAP}`}>{brief.pay_flex}</dd></div>}
             {fee && <div className="border-t border-line pt-3"><dt className="text-[13px] text-stone-500">Your fee at {job.fee_percent}%</dt><dd className="font-medium text-stone-900">{fee}</dd></div>}
           </dl>
         </Section>
@@ -162,7 +175,7 @@ export default function JobBrief({ job, stages }) {
 
         <Section title="Interview process">
           <ol className="space-y-1 text-sm text-stone-700">{stages.map((s, i) => <li key={s.id}><span className="tabular mr-2 text-stone-400">{i + 1}</span>{s.name}</li>)}</ol>
-          {has('process_notes') && <p className="mt-3 border-t border-line pt-3 text-sm leading-relaxed whitespace-pre-wrap text-stone-700">{brief.process_notes}</p>}
+          {has('process_notes') && <p className={`mt-3 border-t border-line pt-3 text-sm leading-relaxed whitespace-pre-wrap text-stone-700 ${WRAP}`}>{brief.process_notes}</p>}
         </Section>
       </div>
 
@@ -174,7 +187,23 @@ export default function JobBrief({ job, stages }) {
 const LISTS = ['must_haves', 'nice_to_haves', 'not_a_fit', 'target_companies', 'where_to_look', 'search_titles', 'search_keywords', 'selling_points', 'screening_questions'];
 const TEXTS = ['about', 'locations', 'search_string', 'pay_notes', 'pay_flex', 'process_notes'];
 
+const LABELS = { about: 'The role, the team and why it is open', ideal_profile: 'Who we are looking for', must_haves: 'Must-haves', nice_to_haves: 'Nice to have', not_a_fit: 'Not a fit',
+  target_companies: 'Companies to look in', where_to_look: 'Places to find them', locations: 'Where they can be based', search_titles: 'Job titles', search_keywords: 'Keywords',
+  search_string: 'Search string', pay_notes: 'Bonus, equity and benefits', pay_flex: 'Room to move', selling_points: 'How to sell it', screening_questions: 'Questions for the first call', process_notes: 'Process notes' };
+
+/** The form opens on the brief as it is saved now: the page behind it may have been open since before a colleague changed it. */
 function BriefForm({ job, onClose }) {
+  const [current, setCurrent] = useState(null);
+  useEffect(() => {
+    let live = true;
+    api.get(`/jobs/${job.id}`).then((data) => live && setCurrent(data.job)).catch(() => live && setCurrent(job));
+    return () => { live = false; };
+  }, [job.id]);
+  if (!current) return <Modal title="Recruiter brief" size="lg" onClose={onClose}><Loading /></Modal>;
+  return <BriefEditor job={current} onClose={onClose} />;
+}
+
+function BriefEditor({ job, onClose }) {
   const { bump } = useApp();
   const toast = useToast();
   const brief = job.brief || {};
@@ -183,9 +212,13 @@ function BriefForm({ job, onClose }) {
     ...Object.fromEntries(TEXTS.map((k) => [k, brief[k] || ''])),
     ...Object.fromEntries(LISTS.map((k) => [k, lines(brief[k])])),
   }));
+  const opened = useRef(form);
+  const latest = useRef(form);
+  latest.current = form;
   const bind = (key) => ({ value: form[key], onChange: (e) => setForm((f) => ({ ...f, [key]: e.target.value })) });
   const [save, busy] = useAction(async () => {
     await api.put(`/jobs/${job.id}/brief`, {
+      version: job.brief_version, // refused if someone else has saved the brief since this form opened
       ideal_profile: form.ideal_profile,
       brief: { ...Object.fromEntries(TEXTS.map((k) => [k, form[k]])), ...Object.fromEntries(LISTS.map((k) => [k, toList(form[k])])) },
     });
@@ -193,22 +226,42 @@ function BriefForm({ job, onClose }) {
     bump();
     onClose();
   });
+  // Escape, a click outside and Cancel all close the form; with sixteen boxes of typing in it, they ask first.
+  const close = () => {
+    const changed = Object.keys(form).some((key) => form[key] !== opened.current[key]);
+    if (!changed || window.confirm('Close without saving? What you have typed in the brief will be lost.')) onClose();
+  };
   const list = (key, label, placeholder, rows = 4) => (
     <Field label={label} hint="One per line."><Textarea rows={rows} {...bind(key)} placeholder={placeholder} /></Field>
   );
   const heading = (title) => <h3 className="border-t border-line pt-4 text-sm font-semibold text-stone-900 first:border-0 first:pt-0">{title}</h3>;
-  // A draft only fills sections that are still empty, so nothing already written is replaced.
-  const applyDraft = (result) => setForm((f) => {
-    const next = { ...f };
-    for (const key of TEXTS) if (!f[key].trim() && result.brief[key]) next[key] = result.brief[key];
-    for (const key of LISTS) if (!f[key].trim() && result.brief[key]?.length) next[key] = lines(result.brief[key]);
-    if (!f.ideal_profile.trim() && result.ideal_profile) next.ideal_profile = result.ideal_profile;
-    return next;
-  });
+  // A draft only fills sections that are still empty, so nothing already written is replaced. The panel is told
+  // what that came to, so it does not say notes were kept when the section they would go in already had text.
+  const applyDraft = (result) => {
+    const now = latest.current, filled = [], skipped = [];
+    const sort = (key, has) => { if (has) (now[key].trim() ? skipped : filled).push(key); };
+    for (const key of TEXTS) sort(key, Boolean(result.brief[key]));
+    for (const key of LISTS) sort(key, Boolean(result.brief[key]?.length));
+    sort('ideal_profile', Boolean(result.ideal_profile));
+    setForm((f) => {
+      const next = { ...f };
+      for (const key of TEXTS) if (!f[key].trim() && result.brief[key]) next[key] = result.brief[key];
+      for (const key of LISTS) if (!f[key].trim() && result.brief[key]?.length) next[key] = lines(result.brief[key]);
+      if (!f.ideal_profile.trim() && result.ideal_profile) next.ideal_profile = result.ideal_profile;
+      return next;
+    });
+    const names = (keys) => keys.map((key) => `“${LABELS[key]}”`).join(', ');
+    return {
+      notesUsed: filled.includes('about'),
+      note: [filled.length ? `Filled in ${names(filled)}.` : 'Nothing was added to the brief.',
+        skipped.length ? `Left alone because ${skipped.length === 1 ? 'it already has' : 'they already have'} text: ${names(skipped)}.` : '',
+        result.notes && skipped.includes('about') ? 'So the intake notes were not added: paste them into that box yourself if you want them kept.' : ''].filter(Boolean).join(' '),
+    };
+  };
 
   return (
-    <Modal title="Recruiter brief" subtitle={`${job.title} · ${job.client_name}. Only your agency sees this.`} size="lg" onClose={onClose} onSubmit={save}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Save brief</Button></>}>
+    <Modal title="Recruiter brief" subtitle={`${job.title} · ${job.client_name}. Only your agency sees this.`} size="lg" onClose={close} onSubmit={save}
+      footer={<><Button onClick={close}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Save brief</Button></>}>
       <JobAutofill collapsible what="the brief" onResult={applyDraft} />
       {heading('About the role')}
       <Field label="The role, the team and why it is open"><Textarea rows={4} {...bind('about')} placeholder="What the person will own, who they report to, how big the team is, why the role exists now." /></Field>

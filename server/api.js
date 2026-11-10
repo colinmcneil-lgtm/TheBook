@@ -137,6 +137,7 @@ const upload = multer({
   }),
   // Every limit is explicit: multer's defaults allow unlimited text fields, which would let one request exhaust memory.
   limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 30, parts: 32, fieldSize: 200 * 1024, fieldNameSize: 100 },
+  defParamCharset: 'utf8', // browsers send file names in UTF-8; read as Latin-1, "résumé.pdf" is stored as "rÃ©sumÃ©.pdf"
   fileFilter: (req, file, cb) =>
     ALLOWED_RESUME.includes(path.extname(file.originalname).toLowerCase())
       ? cb(null, true)
@@ -154,6 +155,7 @@ const candidateUpload = multer({
     filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString('hex') + path.extname(file.originalname).toLowerCase()),
   }),
   limits: { fileSize: 8 * 1024 * 1024, files: 2, fields: 30, parts: 34, fieldSize: 200 * 1024, fieldNameSize: 100 },
+  defParamCharset: 'utf8',
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (file.fieldname === 'photo') return Object.hasOwn(PHOTO_TYPES, ext) ? cb(null, true) : cb(new HttpError(400, 'Photos need to be JPEG, PNG or WebP images.'));
@@ -161,19 +163,49 @@ const candidateUpload = multer({
   },
 }).fields([{ name: 'resume', maxCount: 1 }, { name: 'photo', maxCount: 1 }]);
 
-/** The uploaded photo's file name if it really is an image of the type its name says and not too large; otherwise it is deleted. */
+const MAX_PHOTO_PIXELS = 40_000_000; // far beyond any portrait; a picture larger than this is only there to use up memory
+/**
+ * The width and height an image file states, read from its own structure (JPEG frame header, PNG IHDR, WebP
+ * VP8/VP8L/VP8X), or null when it has none: a file that only starts with an image's first bytes is not an image.
+ */
+function imageSize(buf) {
+  if (buf.length >= 24 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) && buf.toString('latin1', 12, 16) === 'IHDR') {
+    return { type: 'image/png', width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  if (buf.length >= 30 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') {
+    const chunk = buf.toString('latin1', 12, 16);
+    if (chunk === 'VP8X') return { type: 'image/webp', width: 1 + buf.readUIntLE(24, 3), height: 1 + buf.readUIntLE(27, 3) };
+    if (chunk === 'VP8L' && buf[20] === 0x2f) { const bits = buf.readUInt32LE(21); return { type: 'image/webp', width: 1 + (bits & 0x3fff), height: 1 + ((bits >> 14) & 0x3fff) }; }
+    if (chunk === 'VP8 ' && buf[23] === 0x9d && buf[24] === 0x01 && buf[25] === 0x2a) return { type: 'image/webp', width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
+    return null;
+  }
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    // Walk the segments to the frame header (SOF0 to SOF15, apart from the three markers in that range that are tables).
+    for (let at = 2; at + 9 < buf.length;) {
+      if (buf[at] !== 0xff) return null;
+      const marker = buf[at + 1];
+      if (marker === 0xff) { at++; continue; } // padding
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return { type: 'image/jpeg', width: buf.readUInt16BE(at + 7), height: buf.readUInt16BE(at + 5) };
+      if (marker === 0xd9 || marker === 0xda) return null; // the picture data starts, and no frame header came first
+      at += 2 + ((marker >= 0xd0 && marker <= 0xd7) || marker === 0x01 ? 0 : buf.readUInt16BE(at + 2));
+    }
+  }
+  return null;
+}
+
+/** The uploaded photo's file name if it really is an image of the type its name says, of a sane size in bytes and pixels; otherwise it is deleted. */
 function acceptPhoto(file) {
   if (!file) return null;
   let ok = false;
   try {
-    const head = Buffer.alloc(12);
+    // The frame header of a JPEG follows its metadata, which cameras and phones can make long.
+    const head = Buffer.alloc(Math.min(file.size, 512 * 1024));
     const fd = fs.openSync(file.path, 'r');
-    fs.readSync(fd, head, 0, 12, 0);
+    fs.readSync(fd, head, 0, head.length, 0);
     fs.closeSync(fd);
-    const type = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff ? 'image/jpeg'
-      : head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? 'image/png'
-      : head.subarray(0, 4).toString('latin1') === 'RIFF' && head.subarray(8, 12).toString('latin1') === 'WEBP' ? 'image/webp' : null;
-    ok = type === PHOTO_TYPES[path.extname(file.filename)] && file.size <= MAX_PHOTO;
+    const image = imageSize(head);
+    ok = Boolean(image) && image.type === PHOTO_TYPES[path.extname(file.filename)] && file.size <= MAX_PHOTO
+      && image.width > 0 && image.height > 0 && image.width * image.height <= MAX_PHOTO_PIXELS;
   } catch { ok = false; }
   if (!ok) removeUpload(file.filename);
   return ok ? file.filename : null;
@@ -727,22 +759,42 @@ const jobSelect = `
     (SELECT COUNT(*) FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.job_id = j.id AND a.status = 'active' AND s.kind = 'offer') AS offers,
     (SELECT COUNT(*) FROM applications a WHERE a.job_id = j.id AND a.status = 'hired') AS hires
   FROM jobs j JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = j.hiring_manager_id LEFT JOIN users cu ON cu.id = j.created_by`;
+/** Changes whenever the brief or the ideal profile is saved, so a form opened on an older copy can be refused instead of overwriting the newer one. */
+const briefVersion = (j) => crypto.createHash('sha1').update(`${j.brief ?? ''}\n${j.ideal_profile ?? ''}`).digest('hex').slice(0, 16);
 /** Parse the JSON columns and drop the agency-only internal brief for client users. */
 function hydrateJob(j, user) {
   const { ideal_profile, brief, fee_percent, ...rest } = j; // agency-only: the brief, and the fee the client pays
-  return { ...rest, ...(isAgency(user) ? { ideal_profile, brief: json(brief, {}), fee_percent } : {}), questions: json(j.questions, []), criteria: json(j.criteria, []) };
+  return { ...rest, ...(isAgency(user) ? { ideal_profile, brief: json(brief, {}), brief_version: briefVersion(j), fee_percent } : {}), questions: json(j.questions, []), criteria: json(j.criteria, []) };
 }
 
 // The recruiter brief: free-text sections and one-item-per-line lists. Only these keys are stored.
 const BRIEF_TEXT = ['about', 'locations', 'search_string', 'pay_notes', 'pay_flex', 'process_notes'];
 const BRIEF_LISTS = ['must_haves', 'nice_to_haves', 'not_a_fit', 'target_companies', 'where_to_look', 'search_titles', 'search_keywords', 'selling_points', 'screening_questions'];
-function briefFields(input) {
+const BRIEF_MAX = { text: 6000, item: 300, items: 60 };
+// What the brief form calls each section, for telling the person which one is too long.
+const BRIEF_NAMES = { about: 'The role, the team and why it is open', locations: 'Where they can be based', search_string: 'Search string', pay_notes: 'Bonus, equity and benefits', pay_flex: 'Room to move',
+  process_notes: 'Process notes', must_haves: 'Must-haves', nice_to_haves: 'Nice to have', not_a_fit: 'Not a fit', target_companies: 'Companies to look in', where_to_look: 'Places to find them',
+  search_titles: 'Job titles', search_keywords: 'Keywords', selling_points: 'How to sell it', screening_questions: 'Questions for the first call' };
+const tooLong = (name, what, length, max) => bad(`“${name}” ${what} (${length.toLocaleString('en-GB')}; the limit is ${max.toLocaleString('en-GB')}). Shorten it and save again: nothing has been saved.`);
+/**
+ * The brief as stored. A draft from autofill is cut to the limits. With `strict`, for what a person typed into the
+ * brief form, anything over a limit is refused with the section named: saving it short without saying so loses the
+ * end of a pasted transcript or company list unnoticed.
+ */
+function briefFields(input, strict = false) {
   const b = input && typeof input === 'object' ? input : {};
   const out = {};
-  for (const key of BRIEF_TEXT) { const value = text(b[key], 6000); if (value) out[key] = value; }
+  for (const key of BRIEF_TEXT) {
+    const value = text(b[key], strict ? Infinity : BRIEF_MAX.text);
+    if (value && value.length > BRIEF_MAX.text) tooLong(BRIEF_NAMES[key], 'is too long to save, in characters', value.length, BRIEF_MAX.text);
+    if (value) out[key] = value;
+  }
   for (const key of BRIEF_LISTS) {
-    const items = (Array.isArray(b[key]) ? b[key] : []).map((item) => clean(item, 300)).filter(Boolean).slice(0, 60);
-    if (items.length) out[key] = items;
+    const items = (Array.isArray(b[key]) ? b[key] : []).map((item) => clean(item, strict ? Infinity : BRIEF_MAX.item)).filter(Boolean);
+    if (strict && items.length > BRIEF_MAX.items) tooLong(BRIEF_NAMES[key], 'has too many lines', items.length, BRIEF_MAX.items);
+    const long = strict && items.find((item) => item.length > BRIEF_MAX.item);
+    if (long) tooLong(BRIEF_NAMES[key], `has a line that is too long, in characters (“${long.slice(0, 40)}…”)`, long.length, BRIEF_MAX.item);
+    if (items.length) out[key] = items.slice(0, BRIEF_MAX.items);
   }
   return out;
 }
@@ -830,7 +882,9 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
          description = ?, ideal_profile = ?, status = ?, hiring_manager_id = ?, openings = ?, questions = ?, criteria = ?,
          opened_at = ?, closed_at = ? WHERE id = ?`,
       f.title, f.department, f.location, f.work_mode, f.employment_type, f.salary_min, f.salary_max, f.salary_public, f.description,
-      b.ideal_profile !== undefined ? f.ideal_profile : job.ideal_profile, // the brief is edited on its own page; leave it alone unless sent
+      // Part of the brief, which is edited on its own page and belongs to whoever created the job: left alone
+      // unless it is sent by them or by an admin.
+      b.ideal_profile !== undefined && (req.user.role === 'admin' || job.created_by === req.user.id) ? f.ideal_profile : job.ideal_profile,
       f.status, f.hiring_manager_id, f.openings, f.questions, f.criteria,
       job.opened_at ?? (f.status === 'open' ? t : null), f.status === 'closed' ? job.closed_at ?? t : null, job.id);
 
@@ -866,9 +920,19 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
 api.put('/jobs/:id/brief', agencyOnly, (req, res) => {
   const job = loadJob(req.params.id, req.user);
   if (req.user.role !== 'admin' && job.created_by !== req.user.id) bad('Only the person who created this job, or an admin, can edit its brief.', 403);
-  const b = req.body || {};
+  const b = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+  // The form sends the version of the brief it was opened on. If the brief has been saved since, this save would
+  // undo that one without either person knowing.
+  if (b.version !== undefined && b.version !== briefVersion(job)) {
+    bad('This brief was changed by someone else after you opened it, so your version was not saved. Copy what you added, close this form and open it again to see theirs.', 409);
+  }
+  // Each of the two is replaced only when it is sent, and the brief only by a set of sections: a request without
+  // one (or with something else in its place) must not empty what is stored.
+  if (b.brief !== undefined && (b.brief === null || typeof b.brief !== 'object' || Array.isArray(b.brief))) bad('The brief was not sent in a form that can be saved.');
+  const profile = typeof b.ideal_profile === 'string' ? b.ideal_profile.replace(/\r\n?/g, '\n').trim() : '';
+  if (profile.length > BRIEF_MAX.text) tooLong('Who we are looking for', 'is too long to save, in characters', profile.length, BRIEF_MAX.text);
   q.run('UPDATE jobs SET brief = ?, ideal_profile = ? WHERE id = ?',
-    JSON.stringify(briefFields(b.brief)), b.ideal_profile !== undefined ? text(b.ideal_profile, 6000) : job.ideal_profile, job.id);
+    b.brief !== undefined ? JSON.stringify(briefFields(b.brief, true)) : job.brief, b.ideal_profile !== undefined ? profile || null : job.ideal_profile, job.id);
   res.json({ ok: true });
 });
 
@@ -951,18 +1015,24 @@ const mailVars = (a, user) => ({
   job_title: a.job_title, company: a.client_name, sender_name: user.name,
 });
 
-function moveToStage(app, stageId, user) {
+/** The activity type for arriving in a stage. The kind of stage is part of it, so the dashboard can pick out interview and offer moves. */
+const arrivalType = (stage) => (stage.kind === 'hired' ? 'hired' : stage.kind === 'interview' ? 'stage_interview' : stage.kind === 'offer' ? 'stage_offer' : 'stage');
+
+/** `quiet` leaves the activity line to the caller, who is writing one of its own about the same event. */
+function moveToStage(app, stageId, user, { quiet = false } = {}) {
   const stage = q.get('SELECT * FROM stages WHERE id = ? AND job_id = ?', int(stageId), app.job_id);
   if (!stage) bad('That stage does not belong to this job.');
   if (stage.id === app.stage_id && (app.status === 'active' || app.status === 'hired')) return stage;
+  const from = q.get('SELECT position FROM stages WHERE id = ?', app.stage_id);
   const t = now();
   const hired = stage.kind === 'hired';
   q.run(`UPDATE applications SET stage_id = ?, stage_entered_at = ?, updated_at = ?, status = ?, hired_at = ?, reject_reason = NULL WHERE id = ?`,
     stage.id, t, t, hired ? 'hired' : 'active', hired ? t : null, app.id);
   q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', app.id, stage.id, t);
-  // The kind of stage is part of the activity type, so the dashboard can pick out interview and offer moves.
-  const moveType = hired ? 'hired' : stage.kind === 'interview' ? 'stage_interview' : stage.kind === 'offer' ? 'stage_offer' : 'stage';
-  logActivity(app.id, user.id, moveType, hired ? 'Marked as hired' : `Moved to ${stage.name}`);
+  // A move to an earlier stage (a card dropped in the wrong column and put back, a hire that fell through) is not
+  // progress, so it gets a type of its own that the dashboard does not highlight.
+  const back = from && stage.position < from.position;
+  if (!quiet) logActivity(app.id, user.id, back ? 'stage_back' : arrivalType(stage), back ? `Moved back to ${stage.name}` : hired ? 'Marked as hired' : `Moved to ${stage.name}`);
   // An applicant nobody owns yet becomes the responsibility of the recruiter who first takes them forward.
   if (!app.owner_id && isAgency(user) && stage.kind !== 'applied') q.run('UPDATE applications SET owner_id = ? WHERE id = ? AND owner_id IS NULL', user.id, app.id);
   return stage;
@@ -978,6 +1048,7 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
   let stored = false;
   req.file = req.files?.resume?.[0];
   let photo = acceptPhoto(req.files?.photo?.[0]);
+  const photoRejected = Boolean(req.files?.photo?.[0]) && !photo; // the person is still added; the answer says the photo was not kept
   try {
     const b = req.body || {};
     const job = q.get('SELECT * FROM jobs WHERE id = ?', int(b.job_id));
@@ -1033,6 +1104,8 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
         cand.id, job.id, stage.id, hired ? 'hired' : 'active', source, text(b.cover_note, 6000), req.file?.filename ?? null, clean(req.file?.originalname, 200), t, t, t, hired ? t : null, req.user.id);
       q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
       logActivity(appId, req.user.id, 'added', `Added to the pipeline (${SOURCE_LABELS[source].toLowerCase()})`);
+      // Added straight into an interview stage, Offer or Hired: that is the same news as being moved there.
+      if (stage.kind !== 'applied') logActivity(appId, req.user.id, arrivalType(stage), hired ? 'Marked as hired' : `Started at ${stage.name}`);
       for (const remark of remarks) logActivity(appId, req.user.id, 'added', remark);
       const note = text(b.note, 10000);
       if (note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, ?, ?)', appId, req.user.id, note, b.note_private === 'true' || b.note_private === true ? 1 : 0, t);
@@ -1049,7 +1122,7 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
     photo = null; // it belongs to the record now
     removeUpload(result.replaced);
     delete result.replaced;
-    res.json(result);
+    res.json(photoRejected ? { ...result, photo_rejected: true } : result);
   } finally {
     if (!stored) removeUpload(req.file?.filename);
     removeUpload(photo); // only still set when it never reached a record
@@ -1224,12 +1297,17 @@ api.post('/applications/:id/review', (req, res) => {
     const t = now();
     q.run('UPDATE applications SET review_status = ?, review_note = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?',
       approve ? 'approved' : 'declined', note, req.user.id, t, t, a.id);
-    logActivity(a.id, req.user.id, 'review', approve ? 'Approved for interview' : `Declined at review: ${note}`);
     if (approve) {
       const current = q.get('SELECT * FROM stages WHERE id = ?', a.stage_id);
       const next = q.get(`SELECT * FROM stages WHERE job_id = ? AND position > ? AND kind = 'interview' ORDER BY position LIMIT 1`, a.job_id, current.position);
-      if (next && current.kind !== 'offer' && current.kind !== 'hired') moveToStage(a, next.id, req.user);
+      const moves = next && current.kind !== 'offer' && current.kind !== 'hired';
+      // One click, one line: the approval says where the candidate went.
+      logActivity(a.id, req.user.id, 'review', moves ? `Approved for interview and moved to ${next.name}` : 'Approved for interview');
+      if (moves) moveToStage(a, next.id, req.user, { quiet: true });
     } else {
+      // The whole note is on the candidate; the activity line carries its opening.
+      const line = note.replace(/\s+/g, ' ');
+      logActivity(a.id, req.user.id, 'review', `Declined at review: ${line.length > 200 ? `${line.slice(0, 200).trimEnd()}…` : line}`);
       q.run(`UPDATE applications SET status = 'rejected', reject_reason = 'Declined by hiring team at review' WHERE id = ?`, a.id);
       cancelUpcomingInterviews(a.id, req.user.id);
     }
@@ -1286,8 +1364,10 @@ api.get('/applications/:id/resume', (req, res) => {
   const a = loadApp(req.params.id, req.user);
   if (!a.resume_file) bad('No résumé on file.', 404);
   const safeName = (a.resume_name || 'resume').replace(/[^\w.\- ]+/g, '_');
-  // Always a download, never rendered inside this site: the file came from an anonymous upload.
-  res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+  // Always a download, never rendered inside this site: the file came from an anonymous upload. The name is given
+  // twice: plain letters for old software, and in full (accents, other alphabets) for every current browser.
+  const fullName = encodeURIComponent((a.resume_name || 'resume').replace(/[\u0000-\u001f\u007f\\/]+/g, '_')).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  res.setHeader('Content-Disposition', `attachment; filename="${safeName}"; filename*=UTF-8''${fullName}`);
   // Sent by name from the uploads folder, so a data folder under a hidden folder (~/.thebook, say) is served like any other.
   res.sendFile(path.basename(a.resume_file), { root: UPLOAD_DIR, dotfiles: 'allow' }, (err) => {
     if (err && !res.headersSent) res.status(404).json({ error: 'The résumé file is missing.' });
@@ -1333,9 +1413,10 @@ api.delete('/candidates/:id', agencyOnly, (req, res) => {
 api.get('/candidates/:id/photo', (req, res) => {
   const cand = q.get('SELECT client_id, photo_file FROM candidates WHERE id = ?', int(req.params.id));
   if (!cand || !cand.photo_file || !canSee(req.user, cand.client_id) || !seesPhotos(req.user)) bad('Not found', 404);
-  res.setHeader('Content-Type', PHOTO_TYPES[path.extname(cand.photo_file)] || 'application/octet-stream');
-  res.setHeader('Cache-Control', 'private, max-age=604800'); // the address changes with the photo, so this copy never goes stale
-  res.sendFile(path.basename(cand.photo_file), { root: UPLOAD_DIR, dotfiles: 'allow' }, (err) => {
+  // The address changes with the photo, so a copy of the picture never goes stale. Only the picture itself is
+  // given that long life: "the file is missing" must not be remembered by the browser for a week.
+  const headers = { 'Content-Type': PHOTO_TYPES[path.extname(cand.photo_file)] || 'application/octet-stream', 'Cache-Control': 'private, max-age=604800' };
+  res.sendFile(path.basename(cand.photo_file), { root: UPLOAD_DIR, dotfiles: 'allow', headers, cacheControl: false }, (err) => {
     if (err && !res.headersSent) res.status(404).json({ error: 'Not found' });
   });
 });
@@ -1448,7 +1529,7 @@ api.post('/interviews', async (req, res) => {
       `INSERT INTO interviews (application_id, title, kind, starts_at, duration_min, location, notes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       a.id, title, kind, starts.toISOString(), Math.min(480, Math.max(10, int(b.duration_min) ?? 45)), clean(b.location, 300), text(b.notes, 4000), req.user.id, now());
     setPanel(iid, a.client_id, Array.isArray(b.panel) ? b.panel.slice(0, 20) : []);
-    logActivity(a.id, req.user.id, 'interview', `Scheduled ${title}`);
+    logActivity(a.id, req.user.id, 'interview_booked', `Scheduled ${title}`); // its own type: a title can start with "Scheduled" too
     return iid;
   });
   if (b.notify && a.candidate_email) await sendTemplate('interview_invite', {
@@ -1469,10 +1550,11 @@ api.patch('/interviews/:id', (req, res) => {
     if (b.starts_at) {
       const starts = new Date(b.starts_at);
       if (Number.isNaN(starts.getTime())) bad('That start time is not valid.');
+      const title = clean(b.title, 160) ?? i.title;
       q.run('UPDATE interviews SET title = ?, kind = ?, starts_at = ?, duration_min = ?, location = ?, notes = ? WHERE id = ?',
-        clean(b.title, 160) ?? i.title, isStr(b.kind) && Object.hasOwn(KIND_LABELS, b.kind) ? b.kind : i.kind, starts.toISOString(),
+        title, isStr(b.kind) && Object.hasOwn(KIND_LABELS, b.kind) ? b.kind : i.kind, starts.toISOString(),
         Math.min(480, Math.max(10, int(b.duration_min) ?? i.duration_min)), clean(b.location, 300), text(b.notes, 4000), i.id);
-      if (starts.toISOString() !== i.starts_at) logActivity(i.application_id, req.user.id, 'interview', `Rescheduled ${i.title}`);
+      if (starts.toISOString() !== i.starts_at) logActivity(i.application_id, req.user.id, 'interview', `Rescheduled ${title}`);
     }
     if (Array.isArray(b.panel)) setPanel(i.id, i.client_id, b.panel.slice(0, 20));
   });
@@ -1536,15 +1618,15 @@ api.get('/dashboard', (req, res) => {
     .map(({ description, ideal_profile, brief, fee_percent, questions, criteria, ...j }) => j);
   const recent = q.all(
     `SELECT ac.id, ac.type, ac.detail, ac.created_at, ac.application_id, u.name AS user_name, c.name AS candidate_name, j.title AS job_title, cl.name AS client_name,
-       -- The moments worth shouting about: into an interview stage, an interview booked, approved by the hiring team, offer, hire.
-       -- Moves logged before the stage kind was recorded are recognised by the stage's name.
+       -- The moments worth shouting about: into an interview stage, an interview booked, approved by the hiring team,
+       -- an offer made or accepted, a hire. Each is told by its type (older rows are given theirs when the database opens).
        CASE
          WHEN ac.type = 'hired' THEN 'hired'
          WHEN ac.type = 'stage_interview' THEN 'interview'
          WHEN ac.type = 'stage_offer' THEN 'offer'
-         WHEN ac.type = 'stage' THEN (SELECT CASE s.kind WHEN 'interview' THEN 'interview' WHEN 'offer' THEN 'offer' END FROM stages s WHERE s.job_id = j.id AND 'Moved to ' || s.name = ac.detail LIMIT 1)
-         WHEN ac.type = 'interview' AND ac.detail LIKE 'Scheduled %' THEN 'booked'
+         WHEN ac.type = 'interview_booked' THEN 'booked'
          WHEN ac.type = 'review' AND ac.detail LIKE 'Approved%' THEN 'approved'
+         WHEN ac.type = 'offer' AND ac.detail = 'Offer sent' THEN 'sent'
          WHEN ac.type = 'offer' AND ac.detail = 'Offer accepted' THEN 'accepted'
        END AS milestone
      FROM activities ac JOIN applications a ON a.id = ac.application_id JOIN candidates c ON c.id = a.candidate_id

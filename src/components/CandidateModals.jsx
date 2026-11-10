@@ -317,6 +317,9 @@ function resumeNote({ labels, status, nameFromFile }) {
   const fromName = nameFromFile ? ' The name was taken from the file name.' : '';
   const why = {
     no_text: 'This file has no selectable text (it is a scan or an image saved as a PDF), so it could not be read.',
+    blank: 'No text was found in this file.',
+    empty: 'This file is empty.',
+    binary: 'This file is not text (it may be another kind of file saved under this name), so it could not be read.',
     unreadable: 'This type of file cannot be read automatically. PDF and .docx files can.',
     protected: 'This PDF is password-protected, so it could not be read.',
     error: 'This file could not be opened for reading.',
@@ -367,6 +370,8 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
   const takeFile = async (picked) => {
     if (!picked) return;
     if (!/\.(pdf|docx?|rtf|txt)$/i.test(picked.name)) return toast('Résumés need to be PDF, Word, RTF or text files.', 'error');
+    // Said now, not when the whole form is sent and refused.
+    if (picked.size > 8 * 1024 * 1024) return toast('That file is larger than 8 MB, so it was not attached. Choose a smaller copy, or add the candidate without a résumé.', 'error');
     const turn = ++reads.current;
     setFile(picked);
     setFilled(null);
@@ -399,6 +404,14 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
     fromResume.current = kept;
     setForm((f) => ({ ...f, ...changes }));
     setFilled({ labels, status: result.status, nameFromFile: result.nameFromFile && 'name' in kept });
+    setReading(false);
+  };
+
+  // Takes the file off the form. What it filled in stays, as typed details would.
+  const removeFile = () => {
+    reads.current++; // a read still in progress is for a file that is no longer attached
+    setFile(null);
+    setFilled(null);
     setReading(false);
   };
 
@@ -435,7 +448,8 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
             {reading ? 'Reading the résumé…' : filled ? resumeNote(filled) : 'The details below are filled in from it. PDF, Word, RTF or text, up to 8 MB.'}
           </span>
         </span>
-        <input type="file" accept=".pdf,.doc,.docx,.rtf,.txt" className="sr-only" aria-label="Résumé" onChange={(e) => takeFile(e.target.files[0])} />
+        {file && <button type="button" onClick={(e) => { e.preventDefault(); removeFile(); }} className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-stone-600 hover:bg-stone-200 hover:text-stone-900">Remove</button>}
+        <input type="file" accept=".pdf,.doc,.docx,.rtf,.txt" className="sr-only" aria-label="Résumé" onChange={(e) => { takeFile(e.target.files[0]); e.target.value = ''; }} />
       </label>
       {filled?.status === 'updated' && <UpdateNotice>Refreshing clears this form. To carry on without refreshing, fill in the details by hand; the file stays attached.</UpdateNotice>}
       <div className="grid gap-4 sm:grid-cols-2">

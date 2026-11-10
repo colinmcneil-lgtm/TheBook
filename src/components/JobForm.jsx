@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { api, url, WORK_MODES, EMPLOYMENT } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
@@ -10,6 +10,10 @@ const BRIEF_LABELS = { must_haves: ['must-have', 'must-haves'], nice_to_haves: [
   search_keywords: ['keyword', 'keywords'], selling_points: ['selling point', 'selling points'], screening_questions: ['first-call question', 'first-call questions'] };
 
 const DEFAULT_STAGES = ['Recruiter screen', 'Hiring manager interview', 'Final interview'];
+// The fields autofill can fill, with what an untouched new-job form holds in each and what to call it.
+const DRAFTED = { title: ['', 'job title'], department: ['', 'department'], location: ['', 'location'], work_mode: ['hybrid', 'working pattern'], employment_type: ['full_time', 'contract'],
+  salary_min: ['', 'salary from'], salary_max: ['', 'salary to'], openings: [1, 'openings'], description: ['', 'job advert'] };
+const stageNames = (list) => list.map((s) => s.name.trim()).join('\n');
 const DEFAULT_CRITERIA = ['Role-specific skills', 'Problem solving', 'Communication', 'Values and motivation'];
 
 function Section({ title, hint, children }) {
@@ -39,19 +43,32 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
   }));
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
   const [draft, setDraft] = useState(null); // the last autofill result, for the notes shown about it
-  // Autofill replaces the fields it found something for and leaves the rest as they are.
+  const latest = useRef(form);
+  latest.current = form;
+  const fromDraft = useRef({}); // what the last draft put into each field, to tell it apart from what was typed
+  // Autofill fills the fields that are still as the form (or an earlier draft) left them. Anything typed or changed
+  // by hand stays, including while the draft was being made; and a field an earlier draft filled that this one has
+  // nothing for goes back to empty, so the form is never a mix of two documents.
   const applyDraft = (result) => {
-    const j = result.job;
-    setForm((f) => ({
-      ...f,
-      title: j.title || f.title, department: j.department || f.department, location: j.location || f.location,
-      work_mode: j.work_mode || f.work_mode, employment_type: j.employment_type || f.employment_type,
-      salary_min: j.salary_min ?? f.salary_min, salary_max: j.salary_max ?? f.salary_max, openings: j.openings ?? f.openings,
-      description: j.description || f.description,
-      interview_stages: j.interview_stages.length ? j.interview_stages.map((name) => ({ name })) : f.interview_stages,
-      brief: result.brief, ideal_profile: result.ideal_profile || undefined,
-    }));
+    const j = result.job, now = latest.current;
+    const changes = {}, filled = {}, kept = [];
+    const settle = (key, current, empty, found, label) => {
+      const untouched = current === String(empty) || (key in fromDraft.current && current === String(fromDraft.current[key]));
+      const has = found != null && found !== '';
+      if (untouched) { changes[key] = has ? found : empty; if (has) filled[key] = found; }
+      else if (has && String(found) !== current) kept.push(label);
+    };
+    for (const [key, [empty, label]] of Object.entries(DRAFTED)) settle(key, String(now[key] ?? '').trim(), empty, j[key], label);
+    const stages = j.interview_stages.join('\n');
+    const stagesNow = stageNames(now.interview_stages);
+    if (stagesNow === DEFAULT_STAGES.join('\n') || stagesNow === fromDraft.current.interview_stages) {
+      changes.interview_stages = (stages ? j.interview_stages : DEFAULT_STAGES).map((name) => ({ name }));
+      if (stages) filled.interview_stages = stages;
+    } else if (stages && stages !== stagesNow) kept.push('interview stages');
+    fromDraft.current = filled;
+    setForm((f) => ({ ...f, ...changes, brief: result.brief, ideal_profile: result.ideal_profile || undefined }));
     setDraft(result);
+    return { note: kept.length ? `Left as you had ${kept.length === 1 ? 'it' : 'them'}: ${kept.join(', ')}.` : '' };
   };
   const briefParts = draft ? Object.entries(BRIEF_LABELS).filter(([key]) => draft.brief[key]?.length).map(([key, [one, many]]) => `${draft.brief[key].length} ${draft.brief[key].length === 1 ? one : many}`) : [];
   const bind = (key) => ({ value: form[key] ?? '', onChange: (e) => set(key, e.target.value) });
@@ -61,7 +78,11 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
   const client = clients.find((c) => c.id === Number(form.client_id));
 
   const [save, busy] = useAction(async () => {
-    const id = job ? (await api.put(`/jobs/${job.id}`, form), job.id) : (await api.post('/jobs', form)).id;
+    const body = { ...form };
+    // The plain reader's one "job title to search" is the title it read. If the title was corrected here, the brief follows it.
+    const title = form.title.trim().replace(/\s*\(.*\)$/, '');
+    if (draft?.source === 'basic' && form.brief?.search_titles?.length === 1 && title) body.brief = { ...form.brief, search_titles: [title] };
+    const id = job ? (await api.put(`/jobs/${job.id}`, body), job.id) : (await api.post('/jobs', body)).id;
     toast(job ? 'Job saved' : form.status === 'open' ? 'Job created and published. Add the recruiter brief next.' : 'Job saved as a draft. Add the recruiter brief next.');
     bump();
     onClose();

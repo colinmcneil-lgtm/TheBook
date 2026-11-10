@@ -1,12 +1,13 @@
-// Copies the fonts and character maps the PDF viewer needs into public/pdfjs, so they are served from this site
-// (the content security policy does not allow loading them from anywhere else). Runs before every build.
+// Copies the fonts, character maps and image decoders the PDF viewer needs into public/pdfjs, so they are served from
+// this site (the content security policy does not allow loading them from anywhere else). Runs before every build.
+// The decoders ("wasm") are what draw scanned pages stored as fax-coded, JBIG2 or JPEG 2000 images.
 import fs from 'node:fs';
 import path from 'node:path';
 
 const from = path.resolve('node_modules/pdfjs-dist');
 const to = path.resolve('public/pdfjs');
-for (const dir of ['standard_fonts', 'cmaps']) {
+for (const dir of ['standard_fonts', 'cmaps', 'wasm']) {
   fs.rmSync(path.join(to, dir), { recursive: true, force: true });
   fs.cpSync(path.join(from, dir), path.join(to, dir), { recursive: true });
 }
-console.log('Copied PDF viewer fonts and character maps into public/pdfjs');
+console.log('Copied PDF viewer fonts, character maps and image decoders into public/pdfjs');

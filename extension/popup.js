@@ -117,7 +117,9 @@ async function readPage() {
   const filled = (r) => READ.filter((k) => r[k]).length;
   const best = read.map((f) => f.result).reduce((a, b) => (filled(b) > filled(a) ? b : a), top);
   const page = { ...top };
-  for (const k of [...READ, 'photo']) page[k] = [best, ...read.map((f) => f.result)].map((r) => r[k]).find((v) => typeof v === 'string' && v) || '';
+  for (const k of READ) page[k] = [best, ...read.map((f) => f.result)].map((r) => r[k]).find((v) => typeof v === 'string' && v) || '';
+  // The photo comes only from the frame the profile was read from: a picture in another frame (a chat box, say) is somebody else.
+  page.photo = typeof best.photo === 'string' ? best.photo : '';
   page.tabId = tabId;
   return page;
 }
@@ -128,13 +130,17 @@ async function readPage() {
 const PHOTO_SIZE = 320;
 const MAX_PICTURE = 6 * 1024 * 1024;
 
+/**
+ * { blob } when the picture was fetched and can be used. Otherwise { reached }: true when the picture's site did
+ * answer (the picture is missing, is not an image or is too large), false when Chrome would not let it be read.
+ */
 async function fetchPicture({ url, tabId }) {
   const usable = (blob) => blob && blob.type.startsWith('image/') && blob.size <= MAX_PICTURE;
   // From here: works when the picture's site lets anyone read it, or once Chrome has been allowed to reach that site.
   try {
     const res = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer' });
     const blob = res.ok ? await res.blob() : null;
-    if (usable(blob)) return blob;
+    return usable(blob) ? { blob } : { reached: true };
   } catch { /* try from the page instead */ }
   // From the page the recruiter is on, which the picture's site may allow when it does not allow everyone.
   try {
@@ -145,7 +151,7 @@ async function fetchPicture({ url, tabId }) {
         try {
           const res = await fetch(address, { credentials: 'omit' });
           const blob = res.ok ? await res.blob() : null;
-          if (!blob || !blob.type.startsWith('image/') || blob.size > max) return '';
+          if (!blob || !blob.type.startsWith('image/') || blob.size > max) return 'unusable';
           return await new Promise((resolve) => {
             const reader = new FileReader();
             reader.onload = () => resolve(String(reader.result));
@@ -156,12 +162,13 @@ async function fetchPicture({ url, tabId }) {
       },
     });
     const data = frame && frame.result;
+    if (data === 'unusable') return { reached: true };
     if (typeof data === 'string' && data.startsWith('data:image/')) {
       const blob = await (await fetch(data)).blob();
-      if (usable(blob)) return blob;
+      return usable(blob) ? { blob } : { reached: true };
     }
   } catch { /* the page could not be asked */ }
-  return null;
+  return { reached: false };
 }
 
 /** A square JPEG cut from the middle of the picture. */
@@ -186,10 +193,11 @@ async function loadPhoto() {
   row.hidden = true;
   $('allow-photo').hidden = true;
   if (!photoFrom) return;
-  let blob = null;
+  let blob = null, reached = false;
   try {
     const fetched = await fetchPicture(photoFrom);
-    if (fetched) blob = await squarePicture(fetched);
+    reached = Boolean(fetched.blob || fetched.reached);
+    if (fetched.blob) blob = await squarePicture(fetched.blob);
   } catch { blob = null; }
   if (blob) {
     photo = { blob, preview: URL.createObjectURL(blob) };
@@ -200,6 +208,8 @@ async function loadPhoto() {
     row.hidden = false;
     return;
   }
+  // The picture was read and is not a usable photo (missing, tiny, not an image): permission would change nothing.
+  if (reached) return;
   // Chrome would not hand the picture over. It will once the recruiter allows the site the picture is kept on.
   let origin = '';
   try { origin = new URL(photoFrom.url).origin; } catch { return; }
@@ -368,7 +378,7 @@ $('add-form').addEventListener('submit', async (e) => {
     // When the person was already in the workspace the job goes onto their record, under the name stored there.
     const stored = (typeof result.name === 'string' && result.name) || known.find((k) => k.client_name === job.client_name)?.name || typed;
     $('done-title').textContent = result.known ? `Added to ${stored}'s existing record` : `${typed} added`;
-    $('done-text').textContent = `${job.title} · ${job.client_name} · ${$('f-stage').selectedOptions[0]?.textContent || 'Applied'}`;
+    $('done-text').textContent = `${job.title} · ${job.client_name} · ${$('f-stage').selectedOptions[0]?.textContent || 'Applied'}${result.photo_rejected ? '. Their photo could not be kept, so none was saved' : ''}`;
     $('open-candidate').onclick = () => chrome.tabs.create({ url: `${base}/jobs/${jobId}?c=${Number(result.id)}` });
     show('done');
   } catch (err) {

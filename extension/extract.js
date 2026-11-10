@@ -149,15 +149,28 @@
       if (agrees) out.company ||= h.company;
     }
 
+    // No name in a heading: the page's title has it.
+    if (!out.name && !framed) {
+      const og = document.querySelector('meta[property="og:title"]')?.content || document.title;
+      out.name = og.replace(/^\(\d+\)\s*/, '').split(/\s+[|–—-]\s+/)[0].trim();
+    }
+
     // Their photo: the picture in the top card. LinkedIn's own picture addresses say what they are, which keeps out
-    // the cover image, company logos and the faces of mutual connections (those come after the name; the person's
-    // own picture comes before it or is labelled with their name). The grey placeholder is not a photo.
+    // the cover image and company logos. The faces of other members (mutual connections, the recruiter's own picture
+    // in the page menu) have the same kind of address, so position and label decide: the person's own picture comes
+    // before their name; failing that, it is one labelled with exactly their name. A label that merely contains the
+    // name is someone else ("Diana Lima" for "Ana Li"). Without a name in a heading there is nothing to place a
+    // picture by, so only one labelled with the name is taken. The grey placeholder is not a photo.
     const mine = /profile-(displayphoto|framedphoto)/i;
+    // A picture not yet loaded shows a placeholder and keeps its real address aside.
+    const sourceOf = (img) => [img.currentSrc, img.src, img.getAttribute('data-delayed-url')].find((src) => src && mine.test(src)) || '';
+    const named = (img) => { const alt = plain(img.alt), name = plain(out.name); return Boolean(name) && (alt === name || alt.startsWith(`${name},`)); };
     const pictures = [...((h1 && h1.closest('section')) || main).querySelectorAll('img')]
-      .map((img) => ({ img, src: img.currentSrc || img.src || img.getAttribute('data-delayed-url') || '' }))
-      .filter((p) => mine.test(p.src));
-    const picture = pictures.find((p) => out.name && plain(p.img.alt).includes(plain(out.name)))
-      || pictures.find((p) => !h1 || (h1.compareDocumentPosition(p.img) & Node.DOCUMENT_POSITION_PRECEDING));
+      .filter((img) => !img.closest('nav, header, [role="navigation"], [role="banner"]'))
+      .map((img) => ({ img, src: sourceOf(img) }))
+      .filter((p) => p.src);
+    const before = h1 ? pictures.filter((p) => h1.compareDocumentPosition(p.img) & Node.DOCUMENT_POSITION_PRECEDING) : [];
+    const picture = before.find((p) => named(p.img)) || before[0] || pictures.find((p) => named(p.img));
     out.photo = (picture && picture.src) || (mine.test(data.photo || '') ? data.photo : '');
 
     // Contact details only from the person's own "Contact info" panel, when the recruiter has it open.
@@ -171,10 +184,6 @@
       const labelled = [...panel.querySelectorAll('section, li')].find((el) => /^(phone|mobile)$/i.test(text(el.querySelector('h3, h2, dt'))));
       const number = tel ? address(tel) : (/\+?\d[\d\s().-]{5,22}\d/.exec(text(labelled).replace(/^(phone|mobile)/i, '')) || [''])[0];
       if (isPhone(number)) out.phone = number;
-    }
-    if (!out.name && !framed) {
-      const og = document.querySelector('meta[property="og:title"]')?.content || document.title;
-      out.name = og.replace(/^\(\d+\)\s*/, '').split(/\s+[|–—-]\s+/)[0].trim();
     }
   } else if (out.kind === 'seat') {
     // Recruiter and Sales Navigator pages have no address that identifies the member, so the link is left for the
@@ -192,9 +201,14 @@
       const og = document.querySelector('meta[property="og:title"]')?.content || document.title;
       out.name = og.split(/\s+[|–—-]\s+/)[0].trim();
     }
-    // A photo only when the page marks one as the person's (GitHub and personal sites do).
+    // A photo only when the page marks one as the person's (GitHub and personal sites do): a marked portrait in the
+    // same card as their name, or labelled with exactly their name. A colleague's card further down has neither.
+    const same = (value) => Boolean(out.name) && plain(value) === plain(out.name);
+    const cards = [...document.querySelectorAll('[itemprop="name"], .p-name, .vcard-fullname, .fn, h1')].filter((el) => same(text(el)))
+      .map((el) => el.closest('.h-card, .vcard, [itemscope]')).filter((card) => card && card !== document.body && card !== document.documentElement);
     const portrait = [...document.querySelectorAll('img[itemprop="image"], img.u-photo, .h-card img.avatar, .vcard img.avatar')]
-      .find((img) => !img.closest('nav, header, footer, aside'));
+      .filter((img) => !img.closest('nav, header, footer, aside'))
+      .find((img) => cards.some((card) => card.contains(img)) || same(img.alt));
     out.photo = data.photo || (portrait && (portrait.currentSrc || portrait.src)) || '';
     // A page may name its preferred address, but only on its own site: it cannot point at somebody else's profile.
     out.url = page.href;

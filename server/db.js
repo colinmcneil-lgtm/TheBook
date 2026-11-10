@@ -331,6 +331,31 @@ if (!db.prepare(`SELECT 1 AS x FROM settings WHERE key = 'links_normalised'`).ge
   }
 }
 
+// The dashboard picks out milestones by the type of an activity line. Lines written by an earlier version said less:
+// every stage move was 'stage' (told apart by the stage's name, which stopped working when a stage was renamed) and
+// a booked interview was an 'interview' line starting "Scheduled" (as did the cancelling of one titled "Scheduled…").
+// They are given the newer types once: a move by the name of the stage or, where the stage has been renamed since,
+// by the stage the candidate entered nearest that moment.
+if (!db.prepare(`SELECT 1 AS x FROM settings WHERE key = 'activity_types_v2'`).get()) {
+  db.exec('BEGIN');
+  try {
+    db.exec(`UPDATE activities SET type = 'interview_booked' WHERE type = 'interview' AND detail LIKE 'Scheduled %' AND detail NOT LIKE '% marked %'`);
+    db.exec(`UPDATE activities SET type = COALESCE(
+        (SELECT CASE s.kind WHEN 'interview' THEN 'stage_interview' WHEN 'offer' THEN 'stage_offer' END FROM applications a JOIN stages s ON s.job_id = a.job_id
+          WHERE a.id = activities.application_id AND 'Moved to ' || s.name = activities.detail AND s.kind IN ('interview', 'offer') LIMIT 1),
+        (SELECT CASE s.kind WHEN 'interview' THEN 'stage_interview' WHEN 'offer' THEN 'stage_offer' END FROM stage_history h JOIN stages s ON s.id = h.stage_id
+          WHERE h.application_id = activities.application_id AND ABS(julianday(h.entered_at) - julianday(activities.created_at)) < 0.5
+          ORDER BY ABS(julianday(h.entered_at) - julianday(activities.created_at)) LIMIT 1),
+        type)
+      WHERE type = 'stage'`);
+    db.prepare(`INSERT INTO settings (key, value) VALUES ('activity_types_v2', '1')`).run();
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_jobs_client ON jobs(client_id);
 CREATE INDEX IF NOT EXISTS idx_apps_job ON applications(job_id);
@@ -339,6 +364,7 @@ CREATE INDEX IF NOT EXISTS idx_apps_stage ON applications(stage_id);
 CREATE INDEX IF NOT EXISTS idx_hist_app ON stage_history(application_id);
 CREATE INDEX IF NOT EXISTS idx_interviews_app ON interviews(application_id);
 CREATE INDEX IF NOT EXISTS idx_activities_app ON activities(application_id);
+CREATE INDEX IF NOT EXISTS idx_activities_recent ON activities(created_at, id);
 CREATE INDEX IF NOT EXISTS idx_calls_candidate ON calls(candidate_id);
 CREATE INDEX IF NOT EXISTS idx_calls_application ON calls(application_id);
 CREATE INDEX IF NOT EXISTS idx_calls_created_by ON calls(created_by);`);

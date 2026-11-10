@@ -270,7 +270,7 @@ tx(() => {
         source === 'careers_page' ? 'Applied via careers page' : 'Added to the pipeline', appliedAt);
       for (let i = 0; i <= depth; i++) {
         q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stages[i].id, enteredAt(i));
-        if (i > 0) act(appId, pick([alex, priya]), i === hiredStage ? 'hired' : 'stage', i === hiredStage ? 'Marked as hired' : `Moved to ${stages[i].name}`, enteredAt(i));
+        if (i > 0) act(appId, pick([alex, priya]), i === hiredStage ? 'hired' : stages[i].kind === 'offer' ? 'stage_offer' : 'stage_interview', i === hiredStage ? 'Marked as hired' : `Moved to ${stages[i].name}`, enteredAt(i));
       }
       if (rejected) act(appId, priya, 'rejected', `Rejected: ${q.get('SELECT reject_reason r FROM applications WHERE id = ?', appId).r}`, enteredAt(depth + 0.5));
 
@@ -288,7 +288,7 @@ tx(() => {
           appId, stages[i].name, kind, startsAt, kind === 'phone' ? 30 : 60,
           kind === 'onsite' ? 'Client office, reception on arrival' : kind === 'phone' ? 'Recruiter will call the candidate' : 'https://meet.example/embed-room',
           upcoming ? 'scheduled' : 'completed', priya, enteredAt(i));
-        act(appId, priya, 'interview', `Scheduled ${stages[i].name}`, enteredAt(i));
+        act(appId, priya, 'interview_booked', `Scheduled ${stages[i].name}`, enteredAt(i));
         for (const uid of panel) {
           q.run('INSERT INTO interview_panel (interview_id, user_id) VALUES (?, ?)', iid, uid);
           if (upcoming) continue;

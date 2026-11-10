@@ -653,7 +653,9 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
 - **Connect AI drafting (optional)** by setting `ANTHROPIC_API_KEY` (create one at console.anthropic.com). Job autofill
   then sends the job description and intake notes a recruiter provides to Anthropic's API to draft the job and brief,
   billed to that account per use. It uses `claude-opus-5-5`; set `AUTOFILL_MODEL` to use a different Claude model.
-  Without a key, autofill still works in its basic form and nothing is sent anywhere. The same key lets the Oracle
+  A draft that has not come back after two and a half minutes is given up on and the basics are filled in instead
+  (`AUTOFILL_AI_TIMEOUT_MS` changes how long). Without a key, autofill still works in its basic form and nothing is
+  sent anywhere. The same key lets the Oracle
   write call notes and submission drafts.
 - **Connect call transcription (optional)** by setting `DEEPGRAM_API_KEY`. See [The Oracle](#the-oracle) for what is
   sent, what it costs and what happens without it.
@@ -728,7 +730,8 @@ they made at that client, their résumé files, and their recorded calls with th
 - Joining a video call to record it. The Oracle records in the recruiter's browser, or takes an uploaded recording.
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
 - Automated tests that drive the screens in a browser as part of `npm test`. `npm test` covers the résumé reader,
-  job autofill, the Oracle's server side, the Oracle's uploader, phone calls against a stand-in for Twilio, and the
+  job autofill (the plain reader, and the route against a stand-in for the AI service), the recruiter brief, the activity
+  feed's milestones, résumé and photo files, the Oracle's server side, the Oracle's uploader, phone calls against a stand-in for Twilio, and the
   calendar against calendar files. The Oracle's screens were driven end to end in Chrome with a simulated microphone
   while it was built (record, reload and server restart mid-call, a lost connection, two people on one computer,
   transcript, notes, add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude. The

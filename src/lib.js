@@ -136,7 +136,10 @@ export async function squarePhoto(file, size = 400) {
   const side = Math.min(bitmap.width, bitmap.height);
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = Math.min(size, side);
-  canvas.getContext('2d').drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff'; // JPEG has no transparency: without this a cut-out portrait gets a black background
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
   bitmap.close?.();
   return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('That image could not be read.'))), 'image/jpeg', 0.88));
 }
