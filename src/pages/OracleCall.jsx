@@ -374,12 +374,10 @@ export default function OracleCall() {
   const toast = useToast();
   const recorder = useRecorder();
   const { data: status } = useApi('/oracle/status');
-  const [notesDue, setNotesDue] = useState(0); // after a transcript arrives the server writes the notes; look out for them until this time
   const opened = useRef(Date.now());
-  // Check again while the call is being transcribed, while the notes that follow a new transcript are due, and for a
-  // few seconds after opening a call that was only just saved (transcribing may be about to start).
-  const live = useLive(`/oracle/calls/${id}`, (d) => d.call.status === 'transcribing'
-    || (d.call.status === 'ready' && !d.call.notes && Date.now() < notesDue)
+  // Check again while the call is being transcribed, while the server is writing the notes that follow a new
+  // transcript, and for a few seconds after opening a call that was only just saved (transcribing may be about to start).
+  const live = useLive(`/oracle/calls/${id}`, (d) => d.call.status === 'transcribing' || d.call.notes_pending
     || (d.call.status === 'uploaded' && d.call.has_audio && status?.transcription && Date.now() - opened.current < 15_000), 3000);
   const { data, error, reload, set } = live;
   const audio = useRef(null);
@@ -387,14 +385,9 @@ export default function OracleCall() {
   const [attaching, setAttaching] = useState(false);
   const [tab, setTab] = useState('notes');
 
-  const lastStatus = useRef(null);
-  useEffect(() => {
-    const now = data?.call.status;
-    if (lastStatus.current === 'transcribing' && now === 'ready' && status?.ai) setNotesDue(Date.now() + 90_000);
-    lastStatus.current = now;
-  }, [data, status]);
-  // This page may be showing the call that is being recorded right now: refresh when the recording stops.
-  useEffect(() => { reload(); }, [recorder.live]);
+  // This page may be showing the call that is being recorded right now, or one that was cut off and has just been
+  // saved: refresh when the recording stops and when a cut-off recording has been recovered.
+  useEffect(() => { reload(); }, [recorder.live, recorder.recovered]);
 
   const onPatch = async (changes) => set(await api.patch(`/oracle/calls/${id}`, changes));
   const [remove, removing] = useAction(async () => {
@@ -419,7 +412,7 @@ export default function OracleCall() {
     setActiveTurn(audio.current?.paused && t === 0 ? -1 : at);
   };
   const beingRecordedHere = call.status === 'recording' && recorder.session?.callId === call.id;
-  const awaitedNotes = call.status === 'ready' && !call.notes && Date.now() < notesDue;
+  const awaitedNotes = Boolean(call.notes_pending) && !call.notes;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-8 sm:py-8">

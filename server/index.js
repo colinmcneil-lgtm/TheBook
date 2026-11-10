@@ -38,9 +38,10 @@ app.use((req, res, next) => {
   if (req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https') res.setHeader('Strict-Transport-Security', 'max-age=15552000');
   if (isProd) {
     // The dev server needs inline scripts and a websocket for hot reload, so the policy is production-only.
-    // media-src: recorded calls are played from this server, and a recording can be listened to in the page (blob:) before it is sent.
+    // media-src: recorded calls are played from this server only. Nothing in the app plays audio from anywhere else,
+    // so nothing wider is allowed (add blob: here if a page ever plays a recording back before it has been sent).
     res.setHeader('Content-Security-Policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
   }
   next();
 });

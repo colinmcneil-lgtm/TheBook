@@ -58,14 +58,16 @@ const close = (server) => new Promise((resolve) => { server.closeAllConnections?
  *   busy        429 every time                 busy-once 429 once, then good     corrupt  400, audio unreadable
  *   gateway     504 with a web page as body    slow     never answers            silent   200 with no speech
  *   nodiarize   200 with no speaker numbers    newshape 400 in the newer error shape      text  500 as plain text
+ * Setting `delay` (milliseconds) makes every answer take that long, as the real service does.
  */
 export async function deepgramStandIn(port = PORTS.deepgram) {
-  const state = { requests: [], mode: null, hanging: [] };
+  const state = { requests: [], mode: null, delay: 0, hanging: [] };
   let busyOnceSeen = false;
   const server = http.createServer((req, res) => {
     const chunks = [];
     req.on('data', (chunk) => chunks.push(chunk));
-    req.on('end', () => {
+    req.on('end', async () => {
+      if (state.delay) await sleep(state.delay);
       const body = Buffer.concat(chunks);
       const url = new URL(req.url, 'http://x');
       const query = Object.fromEntries(url.searchParams);
@@ -109,7 +111,7 @@ export async function deepgramStandIn(port = PORTS.deepgram) {
   await listen(server, port);
   return Object.assign(state, {
     url: `http://127.0.0.1:${port}/v1/listen`,
-    reset: () => { state.requests.length = 0; state.mode = null; busyOnceSeen = false; },
+    reset: () => { state.requests.length = 0; state.mode = null; state.delay = 0; busyOnceSeen = false; },
     stop: () => { state.hanging.forEach((res) => res.destroy()); return close(server); },
   });
 }
@@ -130,13 +132,15 @@ export const SUBMISSION_DRAFT = { submission: 'I spoke to this candidate on Mond
  * Stand-in for the Anthropic Messages API. It tells the two Oracle requests apart by the answer shape each asks
  * for, and replies according to the API key, or `mode` when a test sets it:
  *   good  a valid answer      bad  401, key rejected      busy  429 every time      refuse  the model declines
+ * Setting `delay` (milliseconds) makes every answer take that long, as the real service does.
  */
 export async function anthropicStandIn(port = PORTS.anthropic) {
-  const state = { requests: [], mode: null };
+  const state = { requests: [], mode: null, delay: 0 };
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk) => { raw += chunk; });
-    req.on('end', () => {
+    req.on('end', async () => {
+      if (state.delay) await sleep(state.delay);
       const key = req.headers['x-api-key'] || String(req.headers.authorization || '').replace(/^Bearer /, '');
       const body = raw ? JSON.parse(raw) : null;
       const mode = state.mode || key;
@@ -154,7 +158,7 @@ export async function anthropicStandIn(port = PORTS.anthropic) {
   await listen(server, port);
   return Object.assign(state, {
     url: `http://127.0.0.1:${port}`,
-    reset: () => { state.requests.length = 0; state.mode = null; },
+    reset: () => { state.requests.length = 0; state.mode = null; state.delay = 0; },
     stop: () => close(server),
   });
 }

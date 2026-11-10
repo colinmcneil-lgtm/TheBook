@@ -39,11 +39,14 @@ function CandidateView({ data, onClose }) {
     toast(to.kind === 'hired' ? `${firstName(candidate.name)} marked as hired` : `Moved to ${to.name}`);
     bump();
   });
+  // Recorded calls (The Oracle) belong to the agency: the hiring team never sees that they exist.
+  const { data: calls, error: callsError } = useApi(isAgency ? url('/oracle/calls', { candidate_id: candidate.id }) : null);
+
   const [restore] = useAction(async () => { await api.post(`/applications/${app.id}/restore`); bump(); });
   const [withdraw] = useAction(async () => { await api.post(`/applications/${app.id}/withdraw`); toast('Marked as withdrawn'); bump(); });
   const [erase] = useAction(async () => {
     const others = data.others.length ? ` This also removes their ${data.others.length === 1 ? 'application' : 'applications'} for ${data.others.map((o) => o.job_title).join(', ')}.` : '';
-    if (!window.confirm(`Permanently delete everything held on ${candidate.name} at ${client.name}: contact details, notes, scorecards, interviews, emails and résumé?${others} This cannot be undone.`)) return;
+    if (!window.confirm(`Permanently delete everything held on ${candidate.name} at ${client.name}: contact details, notes, scorecards, interviews, emails, résumé and recorded calls?${others} This cannot be undone.`)) return;
     await api.del(`/candidates/${candidate.id}`);
     toast(`All data on ${candidate.name} deleted`);
     onClose();
@@ -51,7 +54,7 @@ function CandidateView({ data, onClose }) {
   });
 
   const [removeFromJob] = useAction(async () => {
-    if (!window.confirm(`Remove ${candidate.name} from ${job.title}? Their notes, scorecards and interviews for this job are deleted.${data.others.length ? ' Their other applications are kept.' : ' This is their only application, so their record is removed too.'}`)) return;
+    if (!window.confirm(`Remove ${candidate.name} from ${job.title}? Their notes, scorecards and interviews for this job are deleted.${data.others.length ? ' Their other applications are kept.' : ` This is their only application, so their record is removed too${calls?.length ? ', along with the calls recorded with them' : ''}.`}`)) return;
     await api.del(`/applications/${app.id}`);
     toast(`Removed from ${job.title}`);
     onClose();
@@ -66,9 +69,6 @@ function CandidateView({ data, onClose }) {
     toast('Records merged');
     bump();
   });
-
-  // Recorded calls (The Oracle) belong to the agency: the hiring team never sees that they exist.
-  const { data: calls, error: callsError } = useApi(isAgency ? url('/oracle/calls', { candidate_id: candidate.id }) : null);
 
   const scorecardsDue = data.interviews.filter((i) => i.status !== 'cancelled' && new Date(i.starts_at) < new Date() && i.panel.some((p) => p.id === user.id) && !i.scorecards.some((s) => s.user_id === user.id));
 
@@ -477,7 +477,7 @@ function CallsTab({ data, calls, error }) {
                 <CallStatus status={c.status} />
               </span>
               <span className="block truncate text-[13px] text-stone-500">
-                Recorded by {c.created_by_name || 'someone who has left'}{c.application_id !== app.id && c.job_title ? ` · about ${c.job_title}` : ''}
+                {c.source === 'uploaded' ? 'Uploaded' : 'Recorded'} by {c.created_by_name || 'someone who has left'}{c.application_id !== app.id && c.job_title ? ` · about ${c.job_title}` : ''}
               </span>
             </span>
             <span className="tabular text-right text-[13px] text-stone-600">{fmtDateTime(c.created_at)}{c.duration_ms ? ` · ${fmtLength(c.duration_ms)}` : ''}</span>

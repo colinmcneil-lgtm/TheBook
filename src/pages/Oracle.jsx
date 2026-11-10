@@ -4,7 +4,7 @@ import { AudioLines, FileAudio, Mic, MonitorSpeaker, Pause, Play, Square, Upload
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, url, fmtDateTime, photoUrl } from '../lib.js';
 import { Avatar, Button, Card, CardHeader, Checkbox, Empty, Field, Input, Modal, Page, useAction, useToast, cx } from '../ui.jsx';
-import { CONSENT_WORDING, Elapsed, LevelMeter, MicBadge, sessionLabel, useRecorder } from '../oracle/RecorderProvider.jsx';
+import { CONSENT_WORDING, Elapsed, LevelMeter, MicBadge, limitWords, sessionLabel, useRecorder } from '../oracle/RecorderProvider.jsx';
 import { CallRecorder } from '../oracle/recorder.js';
 import { AttachModal, CallStatus, CandidatePicker, Notice, callName, fmtLength, pickOf, useLive } from '../oracle/bits.jsx';
 
@@ -83,23 +83,19 @@ function RecordForm({ picked, setPicked }) {
   );
 }
 
-/** Warns when a long call is close to the longest recording the server keeps (when the server says what that is). */
-function NearLimit({ minutes }) {
-  const { elapsed } = useRecorder();
-  const [left, setLeft] = useState(null);
-  useEffect(() => {
-    if (!minutes) return undefined;
-    const check = () => setLeft(minutes - elapsed() / 60000);
-    check();
-    const timer = setInterval(check, 20_000);
-    return () => clearInterval(timer);
-  }, [minutes]);
-  if (!minutes || left === null || left > 10) return null;
-  const longest = minutes % 60 === 0 ? `${minutes / 60} hours` : `${minutes} minutes`;
-  return <Notice tone="warn">A call can be recorded for up to {longest}, and this one has about {Math.max(1, Math.round(left))} minutes left. To carry on after that, stop and save this recording, then start a new one.</Notice>;
+/** Warns when a long call is close to the longest a call can be recorded. The recorder stops and saves it at that point. */
+function NearLimit() {
+  const { limitMinutes, minutesLeft } = useRecorder();
+  if (minutesLeft === null) return null;
+  const left = Math.max(1, Math.round(minutesLeft));
+  return (
+    <Notice tone="warn">
+      A call can be recorded for up to {limitWords(limitMinutes)}, and this one has about {left} {left === 1 ? 'minute' : 'minutes'} left. It is then stopped and saved for you. To carry on, start a new recording.
+    </Notice>
+  );
 }
 
-function RecordingPanel({ maxMinutes }) {
+function RecordingPanel() {
   const { state, session, waiting, callAudio, note, pause, resume, stop, addCallAudio } = useRecorder();
   const [share, sharing] = useAction(addCallAudio);
   const paused = state === 'paused';
@@ -126,7 +122,7 @@ function RecordingPanel({ maxMinutes }) {
         </Notice>
       )}
       {note && <Notice tone={note.tone === 'warn' ? 'warn' : 'info'}>{note.text}</Notice>}
-      <NearLimit minutes={maxMinutes} />
+      <NearLimit />
 
       <div className="rounded-lg border border-line bg-stone-50 px-3.5 py-3">
         {callAudio ? (
@@ -159,7 +155,7 @@ function RecordingPanel({ maxMinutes }) {
 }
 
 /** The card at the top of the page: one obvious button to start, and everything about the call while it is being recorded. */
-function RecordCard({ picked, setPicked, maxMinutes }) {
+function RecordCard({ picked, setPicked }) {
   const { state, live, session } = useRecorder();
   const active = live || state === 'stopping';
   const paused = state === 'paused';
@@ -189,7 +185,7 @@ function RecordCard({ picked, setPicked, maxMinutes }) {
           </>
         )}
       </div>
-      {active ? <RecordingPanel maxMinutes={maxMinutes} /> : <RecordForm picked={picked} setPicked={setPicked} />}
+      {active ? <RecordingPanel /> : <RecordForm picked={picked} setPicked={setPicked} />}
     </Card>
   );
 }
@@ -259,7 +255,7 @@ function CallRow({ call, onAttach }) {
       </div>
       <div className="text-right text-[13px] text-stone-500 max-sm:basis-full max-sm:pl-[52px] max-sm:text-left">
         <span className="tabular block text-stone-700">{fmtDateTime(call.created_at)}{call.duration_ms ? ` · ${fmtLength(call.duration_ms)}` : ''}</span>
-        <span className="block">Recorded by {call.created_by_name || 'someone who has left'}</span>
+        <span className="block">{call.source === 'uploaded' ? 'Uploaded' : 'Recorded'} by {call.created_by_name || 'someone who has left'}</span>
       </div>
       {!call.candidate_id && call.status !== 'recording' && (
         <Button size="sm" icon={UserPlus} onClick={onAttach} className="relative z-10 max-sm:ml-[52px]">Add to a candidate</Button>
@@ -294,8 +290,9 @@ export default function Oracle() {
       .finally(() => { const next = new URLSearchParams(params); next.delete('application'); setParams(next, { replace: true }); });
   }, [preselect]);
 
-  // The list shows the call being recorded, and loses the "Recording" chip as soon as it stops.
-  useEffect(() => { calls.reload(); }, [recorder.live]);
+  // The list shows the call being recorded, and loses the "Recording" chip as soon as it stops, or as soon as a
+  // recording that was cut off (by a reload, say) has been saved.
+  useEffect(() => { calls.reload(); }, [recorder.live, recorder.recovered]);
 
   const show = (who) => { const next = new URLSearchParams(params); who === 'everyone' ? next.set('show', 'everyone') : next.delete('show'); setParams(next, { replace: true }); };
   const toggle = (label, on, who) => (
@@ -306,7 +303,7 @@ export default function Oracle() {
   return (
     <Page title="The Oracle" subtitle="Record your calls with candidates. Each one comes back as a transcript, a notes summary and a draft submission."
       actions={<Button icon={Upload} onClick={() => setUploading(true)}>Upload a recording</Button>}>
-      <RecordCard picked={picked} setPicked={setPicked} maxMinutes={status?.maxRecordingMinutes} />
+      <RecordCard picked={picked} setPicked={setPicked} />
       <ConnectionNotice status={status} />
 
       <Card className="mt-6 overflow-hidden">

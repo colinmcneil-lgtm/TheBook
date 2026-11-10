@@ -67,7 +67,8 @@ The Oracle is where recruiters record their calls with candidates.
    M4A, MP4, WAV, WebM or Ogg, up to 200 MB).
    A browser recording is sent to the server in small pieces during the call and each piece is saved as it arrives,
    so a dropped connection, a reloaded page or a restart of the server does not lose what was already recorded. A
-   recording can run for 3 hours.
+   recording can run for 3 hours, counted from when it started. The recruiter is warned ten minutes before, and at
+   3 hours the recording is stopped and saved; to carry on, they start a new one.
 2. **Transcript.** The audio is written out as text with the speakers told apart and a time on every turn.
 3. **Notes.** A summary is drafted under headings a recruiter would use: background, why they are looking, relevant
    experience, pay, notice period, location, other processes, concerns to probe, next steps. Only what was said on
@@ -78,8 +79,24 @@ The Oracle is where recruiters record their calls with candidates.
    clients, no names of other companies the candidate is talking to, nothing they said in confidence about their
    employer. The recruiter reviews it before anything is sent.
 
-A call can be recorded with no candidate chosen and added to one afterwards. Client users never see calls, audio,
-transcripts or notes, or the line on a candidate's history that says a call was recorded.
+A call can be recorded with no candidate chosen and added to one afterwards: the call's page and the list of calls
+both have "Add to a candidate", which also offers to add someone who is not in The Book yet. Client users never see
+calls, audio, transcripts or notes, or the line on a candidate's history that says a call was recorded.
+
+### Recording a call
+
+- Press **Record now** on The Oracle, or **Record a call** on the Calls tab of a candidate's profile, which starts
+  with that person and job already chosen.
+- By default only the recruiter's microphone is recorded. For a call held in Google Meet, Zoom or Teams in a browser
+  tab, press **Add the other side of the call**, choose that tab and tick "Also share tab audio". For a call on a
+  phone or in a desktop app, put it on speaker so the microphone hears both sides.
+- A red strip with the time, Pause and Stop stays at the top of every page, so the recruiter can open the
+  candidate's profile or anything else in The Book while the call is recorded. Stop pressed on The Oracle opens the
+  call; pressed from the strip anywhere else it saves the call and leaves the recruiter where they are.
+- Closing or reloading the tab ends the recording; the browser asks first. Whatever had been recorded, up to the
+  last few seconds, is saved the next time The Book is opened in that browser, and the call's page says it was cut
+  off. If the connection drops, or the server restarts, recording carries on and the missing part is sent when the
+  connection is back.
 
 ### The two keys
 
@@ -143,7 +160,11 @@ Each recruiter can ask for 40 AI drafts an hour, so a mistake cannot run up a bi
 The transcription request follows Deepgram's published description exactly, but Deepgram could not be reached from
 where this was built, so it has only been run against a stand-in that answers the way the description says. Before
 going live, record a one-minute call with two people in Chrome and in Safari with a real key and check that the
-transcript comes back with two speakers.
+transcript comes back with two speakers. The notes and submission drafts were likewise only run against a stand-in
+for Claude, so read the first few real ones closely.
+
+Recording was tested in Chrome only. Edge, Safari, Firefox and phones have not been
+tried, and neither has a real call of an hour or more.
 
 ## Chrome extension
 
@@ -300,5 +321,8 @@ they made at that client, their résumé files, and their recorded calls with th
 - AI-assisted screening of applications. (Calls are summarised by the Oracle; applications and résumés are not.)
 - Joining a video call to record it. The Oracle records in the recruiter's browser, or takes an uploaded recording.
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
-- Automated tests that drive the screens in a browser. `npm test` covers the résumé reader, job autofill and the
-  Oracle's server side; the screens were verified by hand in a browser during development.
+- Automated tests that drive the screens in a browser as part of `npm test`. `npm test` covers the résumé reader,
+  job autofill, the Oracle's server side and the Oracle's uploader. The Oracle's screens were driven end to end in
+  Chrome with a simulated microphone while it was built (record, reload and server restart mid-call, transcript, notes,
+  add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude; the other screens were
+  verified by hand.

@@ -93,7 +93,7 @@ test('the pages may use the microphone and play recorded audio; nothing else is 
   const { headers } = await priya.get('/oracle/status');
   assert.equal(headers.get('permissions-policy'), 'microphone=(self), display-capture=(self), camera=(), geolocation=()');
   const csp = headers.get('content-security-policy');
-  assert.match(csp, /media-src 'self' blob:/);
+  assert.match(csp, /media-src 'self';/);
   assert.match(csp, /default-src 'self'; script-src 'self';/);
   assert.match(csp, /connect-src 'self';/);
   assert.match(csp, /frame-ancestors 'none'/);
@@ -569,8 +569,16 @@ test('editing a call: title, speaker names, notes and the write-up', async () =>
 
 test('notes on request, and what happens when the AI cannot help', async () => {
   anthropic.reset();
+  // The transcript is ready a while before its notes are. In between, the call says the notes are on their way.
+  anthropic.delay = 500;
   const { body } = await uploadCall(priya);
-  let detail = await settled(priya, body.id, true);
+  let detail = await settled(priya, body.id);
+  assert.equal(detail.call.status, 'ready');
+  assert.equal(detail.call.notes, null);
+  assert.equal(detail.call.notes_pending, true);
+  detail = await settled(priya, body.id, true);
+  assert.equal(detail.call.notes_pending, false);
+  anthropic.delay = 0;
   // A name the recruiter typed is never replaced when the notes are written again.
   await priya.patch(`/oracle/calls/${body.id}`, { speakers: { 0: 'Typed by hand', 1: '' }, notes: '' });
   anthropic.reset();

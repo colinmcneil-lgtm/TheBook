@@ -1,7 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { CircleCheck, LoaderCircle, Mic, Pause, Play, Square, TriangleAlert, WifiOff, X } from 'lucide-react';
 import { useApp } from '../state.jsx';
+import { api } from '../lib.js';
 import { useToast, cx } from '../ui.jsx';
 import { CallRecorder, ChunkUploader, formatElapsed } from './recorder.js';
 
@@ -9,7 +10,7 @@ import { CallRecorder, ChunkUploader, formatElapsed } from './recorder.js';
 export const CONSENT_WORDING = 'Everyone on this call knows it is being recorded and has agreed.';
 
 const IDLE = {
-  state: 'idle', live: false, session: null, waiting: 0, callAudio: null, note: null,
+  state: 'idle', live: false, session: null, waiting: 0, callAudio: null, note: null, limitMinutes: null, minutesLeft: null,
   start: async () => { throw new Error('Recording is not available here.'); },
   pause: () => {}, resume: () => {}, stop: async () => {}, addCallAudio: async () => ({ ok: false, reason: 'unsupported' }),
   level: () => 0, elapsed: () => 0, clearNote: () => {},
@@ -17,6 +18,13 @@ const IDLE = {
 const RecorderContext = createContext(IDLE);
 /** The one recorder for the whole app. It lives above the pages, so a call keeps recording while the recruiter moves around. */
 export const useRecorder = () => useContext(RecorderContext);
+
+/** "3 hours" or "45 minutes": the longest a call can be recorded, as the server gives it in minutes. */
+export const limitWords = (minutes) => {
+  const whole = Math.round(minutes);
+  const n = whole % 60 === 0 ? whole / 60 : whole;
+  return `${n} ${whole % 60 === 0 ? 'hour' : 'minute'}${n === 1 ? '' : 's'}`;
+};
 
 /** Why recording could not start, in words the recruiter can act on. */
 function startProblem(err) {
@@ -45,6 +53,9 @@ export function RecorderProvider({ children }) {
   const { user } = useApp();
   const navigate = useNavigate();
   const toast = useToast();
+  const location = useLocation();
+  const onOracle = useRef(false); // is the recruiter looking at The Oracle right now, or working somewhere else in The Book?
+  onOracle.current = location.pathname.startsWith('/oracle');
   const rec = useRef(null);
   const recovering = useRef(null);
   const stoppedShort = useRef(false); // a call ended in this page without reaching the server (as opposed to the page closing)
@@ -54,8 +65,11 @@ export function RecorderProvider({ children }) {
   const [callAudio, setCallAudio] = useState(null); // { surface } while the other side of the call is being recorded
   const [note, setNote] = useState(null); // { tone: 'info' | 'warn', text } shown with the recording controls
   const [recovered, setRecovered] = useState(null); // { call_id } once an interrupted recording was saved, { failed: true } while it cannot be
+  const [limitMinutes, setLimitMinutes] = useState(null); // the longest a call can be recorded, once the server has said
+  const [minutesLeft, setMinutesLeft] = useState(null); // set for the last ten minutes before that limit
+  const startedAt = useRef(0);
 
-  const reset = () => { rec.current = null; setState('idle'); setSession(null); setWaiting(0); setCallAudio(null); setNote(null); };
+  const reset = () => { rec.current = null; setState('idle'); setSession(null); setWaiting(0); setCallAudio(null); setNote(null); setMinutesLeft(null); };
 
   /** Finish a recording that was cut off (a reload, a crash, a lost connection at the end of a call). */
   const recover = useCallback(() => {
@@ -104,6 +118,9 @@ export function RecorderProvider({ children }) {
       if (earlier?.failed) throw Object.assign(new Error('An earlier recording has not finished saving yet. Check your connection and try again in a moment.'), { status: 409 });
       const made = await r.start({ consent, title, application_id, userId: user.id });
       setSession({ callId: made.call_id, title: title || '', subject: subject || null });
+      // The server counts a call's length from the moment it started, pauses included, so this does the same.
+      startedAt.current = Date.now();
+      api.get('/oracle/status').then((s) => setLimitMinutes(s?.maxRecordingMinutes > 0 ? s.maxRecordingMinutes : null)).catch(() => {});
     } catch (err) {
       reset();
       throw new Error(startProblem(err));
@@ -128,14 +145,21 @@ export function RecorderProvider({ children }) {
     setState(r.state);
   }, [recover, user.id]);
 
-  const stop = useCallback(async () => {
+  const stop = useCallback(async (how) => {
     const r = rec.current;
     if (!r || (r.state !== 'recording' && r.state !== 'paused')) return;
+    const atLimit = how?.atLimit === true; // stopped by the clock below, not by the recruiter
     try {
       const result = await r.stop();
       reset();
-      toast('Call saved');
-      navigate(`/oracle/${result.call_id}`);
+      // Stopped from The Oracle, the recruiter goes straight to the call. Stopped from the strip while working somewhere
+      // else (a candidate's profile, with a note half typed), they stay where they are and are offered the call.
+      if (onOracle.current && !atLimit) {
+        toast('Call saved');
+        navigate(`/oracle/${result.call_id}`);
+      } else {
+        setRecovered({ call_id: result.call_id, late: true, atLimit });
+      }
     } catch (err) {
       // Whatever went wrong, the parts not yet sent are still in this browser. Say why if the server gave a reason,
       // then finish the call from what is held (now if possible, otherwise when the connection is back).
@@ -146,6 +170,20 @@ export function RecorderProvider({ children }) {
       recover();
     }
   }, [navigate, toast, recover]);
+
+  // A call can only be so long. The server refuses anything after that, so the recording is stopped and saved here
+  // when the time comes, and the recruiter is warned for the ten minutes before.
+  useEffect(() => {
+    if (!live || !limitMinutes) return undefined;
+    const check = () => {
+      const left = limitMinutes - (Date.now() - startedAt.current) / 60000;
+      setMinutesLeft(left <= 10 ? Math.max(0, left) : null);
+      if (left <= 0) stop({ atLimit: true });
+    };
+    check();
+    const timer = setInterval(check, 5_000);
+    return () => clearInterval(timer);
+  }, [live, limitMinutes, stop]);
 
   const addCallAudio = useCallback(async () => {
     const result = await rec.current?.addCallAudio() ?? { ok: false, reason: 'not-recording' };
@@ -161,7 +199,7 @@ export function RecorderProvider({ children }) {
   }, []);
 
   const value = useMemo(() => ({
-    state, live, session, waiting, callAudio, note, recovered,
+    state, live, session, waiting, callAudio, note, recovered, limitMinutes, minutesLeft,
     start, stop, addCallAudio,
     pause: () => rec.current?.pause(),
     resume: () => rec.current?.resume(),
@@ -170,7 +208,7 @@ export function RecorderProvider({ children }) {
     clearNote: () => setNote(null),
     retryRecovery: recover,
     dismissRecovered: () => setRecovered(null),
-  }), [state, live, session, waiting, callAudio, note, recovered, start, stop, addCallAudio, recover]);
+  }), [state, live, session, waiting, callAudio, note, recovered, limitMinutes, minutesLeft, start, stop, addCallAudio, recover]);
 
   return <RecorderContext.Provider value={value}>{children}</RecorderContext.Provider>;
 }
@@ -216,7 +254,7 @@ export const sessionLabel = (session) => session?.title || (session?.subject?.na
  * and the controls on every page; after an interrupted recording it says what happened to it.
  */
 export function RecorderStrip() {
-  const { state, live, session, waiting, recovered, pause, resume, stop, retryRecovery, dismissRecovered } = useRecorder();
+  const { state, live, session, waiting, recovered, limitMinutes, minutesLeft, pause, resume, stop, retryRecovery, dismissRecovered } = useRecorder();
   const strip = useRef(null);
   const shown = live || state === 'stopping' || Boolean(recovered);
 
@@ -248,6 +286,7 @@ export function RecorderStrip() {
         <LevelMeter className="w-12 shrink-0 bg-white/25 min-[420px]:w-20 sm:w-28" barClassName="bg-white" />
         <Link to="/oracle" className="hidden min-w-0 truncate text-white/90 underline decoration-white/40 underline-offset-2 hover:text-white md:block">{sessionLabel(session)}</Link>
         {waiting > 0 && <span className="inline-flex min-w-0 items-center gap-1.5 text-[13px] text-white/90" title="Connection lost. Still recording."><WifiOff className="size-3.5 shrink-0" /><span className="truncate max-sm:sr-only">Connection lost. Still recording.</span></span>}
+        {minutesLeft !== null && state !== 'stopping' && <span className="hidden text-[13px] font-medium whitespace-nowrap text-white sm:inline">About {Math.max(1, Math.round(minutesLeft))} min left</span>}
         <span className="flex-1" />
         {state === 'stopping' ? <LoaderCircle className="size-4 animate-spin" aria-label="Saving" /> : (
           <>
@@ -267,7 +306,11 @@ export function RecorderStrip() {
     return (
       <div ref={strip} role="status" className="no-print flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-brand-200 bg-brand-50 px-4 py-2.5 text-sm text-brand-950">
         <CircleCheck className="size-4 shrink-0 text-brand-700" />
-        <span className="min-w-0 flex-1 basis-64">{recovered.late ? 'The call you recorded has been saved.' : 'You were recording a call when this page closed. What was recorded has been saved.'}</span>
+        <span className="min-w-0 flex-1 basis-64">
+          {recovered.atLimit ? `This call reached the longest a call can be recorded${limitMinutes ? ` (${limitWords(limitMinutes)})` : ''}, so the recording was stopped. It has been saved.`
+            : recovered.late ? 'The call you recorded has been saved.'
+            : 'You were recording a call when this page closed. What was recorded has been saved.'}
+        </span>
         <Link to={`/oracle/${recovered.call_id}`} onClick={dismissRecovered} className="font-medium text-brand-800 underline underline-offset-2 hover:text-brand-950">Open the call</Link>
         <button type="button" onClick={dismissRecovered} aria-label="Dismiss" className="rounded-md p-1 text-brand-700 hover:bg-brand-100"><X className="size-4" /></button>
       </div>

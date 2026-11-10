@@ -734,6 +734,8 @@ export function registerOracle(api, { agencyOnly, bad, clean, int, takeHit, load
         consent_at: call.consent_at, consent_wording: call.consent_wording, consent_by_name: userName(call.consent_by),
         transcript: json(call.transcript, null), transcript_source: call.transcript_source, speakers: json(call.speakers, {}),
         notes: call.notes, notes_at: call.notes_at, submission: call.submission, submission_at: call.submission_at,
+        // True while the notes are being written, so the page knows to wait for them and not offer to write them twice.
+        notes_pending: writingNotes.has(call.id),
         application_id: call.application_id, candidate_id: call.candidate_id,
       },
       candidate,
@@ -788,7 +790,7 @@ export function registerOracle(api, { agencyOnly, bad, clean, int, takeHit, load
   /** The recording being added to. Only the person who started it may send pieces, ask what arrived, or finish it. */
   function ownRecording(req) {
     const call = /^[a-f0-9]{32}$/.test(req.params.id) ? q.get(`SELECT * FROM calls WHERE recording_id = ? AND source = 'recorded'`, req.params.id) : null;
-    if (!call) bad('This recording was not found.', 404);
+    if (!call) bad('This recording was not found. It may have been deleted.', 404);
     if (call.created_by !== req.user.id) bad('Only the person who started this recording can add to it.', 403);
     return call;
   }
@@ -806,11 +808,12 @@ export function registerOracle(api, { agencyOnly, bad, clean, int, takeHit, load
       const file = partOf(call.recording_id, seq);
       const already = await fsp.stat(file).catch(() => null);
       if (already) return res.json({ seq, bytes: already.size });
+      // (The two limit messages below are shown by the page as it stops the recording and saves what arrived.)
       // The first piece carries the file's header, so it shows whether this really is audio of the kind that was announced.
       if (seq === 0 && audioKind(req.body.subarray(0, 16)) !== recordFormat(call.mime_type).kind) bad('That does not look like an audio recording, so it was not kept.');
-      if (Date.now() - Date.parse(call.created_at) > MAX_RECORDING_MS + CATCH_UP_MS) bad('This recording has reached the 3 hour limit. Stop it to keep what was recorded.', 409);
+      if (Date.now() - Date.parse(call.created_at) > MAX_RECORDING_MS + CATCH_UP_MS) bad('This recording has reached the 3 hour limit, so it has been stopped. What was recorded up to here is kept.', 409);
       const total = await bytesSoFar(call.recording_id);
-      if (total + req.body.length > MAX_RECORDING_BYTES) bad('This recording has reached the 300 MB limit. Stop it to keep what was recorded.', 413);
+      if (total + req.body.length > MAX_RECORDING_BYTES) bad('This recording has reached the 300 MB limit, so it has been stopped. What was recorded up to here is kept.', 413);
       await fsp.mkdir(dirOf(call.recording_id), { recursive: true });
       const tmp = `${file}.${crypto.randomBytes(4).toString('hex')}.tmp`;
       await fsp.writeFile(tmp, req.body);
