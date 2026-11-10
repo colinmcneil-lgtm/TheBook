@@ -1,16 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Check, ChevronDown, Copy, Download, Plus, UserPlus, Trash2 } from 'lucide-react';
+import { useLocation, useSearchParams } from 'react-router-dom';
+import { Check, Copy, Download, LoaderCircle, Plus, RefreshCw, UserPlus, Trash2 } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, ago, fmtDate } from '../lib.js';
 import { Checkbox, Avatar, Badge, Button, Card, CardHeader, Field, Input, Modal, Page, Tabs, Textarea, useAction, useToast } from '../ui.jsx';
 import { ApproveForm, InviteForm } from '../components/Forms.jsx';
 import { Notice } from '../oracle/bits.jsx';
-import { PHONE_SETTINGS, settingNames, usePhone } from '../oracle/phone.jsx';
-import { showNumber } from '../oracle/calls.js';
-import { browserZone } from '../oracle/calendar.jsx';
+import { knownLine, readingLine } from '../oracle/calls.js';
+import { problemOf, useMetaview } from '../oracle/metaview.jsx';
 
-/** A link such as /settings?tab=account#phone lands on that card, not at the top of the page. */
+/** A link such as /settings?tab=agency#metaview lands on that card, not at the top of the page. */
 function useScrollToHash(ready) {
   const { hash } = useLocation();
   useEffect(() => {
@@ -20,13 +19,12 @@ function useScrollToHash(ready) {
 }
 
 function Account() {
-  const { user, isAgency } = useApp();
+  const { user } = useApp();
   const toast = useToast();
   const [form, setForm] = useState({ current: '', next: '' });
   const [save, busy] = useAction(async () => { await api.post('/me/password', form); setForm({ current: '', next: '' }); toast('Password changed'); });
   return (
-    <div className="max-w-lg space-y-6">
-    <Card>
+    <Card className="max-w-lg">
       <CardHeader title="Your account" />
       <div className="space-y-4 p-4">
         <div className="flex items-center gap-3">
@@ -40,175 +38,14 @@ function Account() {
         </form>
       </div>
     </Card>
-    {/* Calls and calendars belong to the agency's own people: a client's hiring team has neither. */}
-    {isAgency && <MobileCard />}
-    {isAgency && <CalendarLinkCard />}
-    </div>
   );
 }
 
-/** The signed-in person's own mobile, and the PIN that goes with ringing The Book from it. */
-function MobileCard() {
-  const { status, statusError, reloadStatus } = usePhone();
-  const toast = useToast();
-  const [number, setNumber] = useState(null); // null until typed in: the box then shows what is saved
-  const [pin, setPin] = useState('');
-  const [problem, setProblem] = useState(null);
-  const [busy, setBusy] = useState(false);
-  useScrollToHash(Boolean(status));
-  const saved = status?.my_phone ? showNumber(status.my_phone) : '';
-  const shown = number ?? saved;
-  const send = async (body, done) => {
-    setProblem(null);
-    setBusy(true);
-    try {
-      await api.put('/me/phone', body);
-      await reloadStatus();
-      setNumber(null);
-      setPin('');
-      toast(done);
-    } catch (err) { setProblem(err.status ? err.message : 'The Book could not be reached. Check your connection and try again.'); }
-    setBusy(false);
-  };
-  // The PIN is only sent when one was typed, so saving a new number leaves the PIN as it is.
-  const save = () => send({ phone: shown.trim(), ...(pin ? { pin } : {}) }, shown.trim() ? 'Mobile number saved' : 'Mobile number removed');
-  return (
-    <Card id="phone" className="scroll-mt-4">
-      <CardHeader title="Your mobile number" action={status && <Badge tone={status.my_phone ? 'green' : 'amber'}>{status.my_phone ? 'Saved' : 'Not saved'}</Badge>} />
-      <form className="space-y-4 p-4" onSubmit={(e) => { e.preventDefault(); save(); }}>
-        {!status && statusError && <Notice tone="bad">Your phone settings could not be loaded. {statusError}</Notice>}
-        {status && !status.configured && <Notice>Phone calls are not connected to this workspace yet. You can save your number now and it is used as soon as they are.</Notice>}
-        <Field label="Mobile number" hint="The phone The Book rings when you press Call, before it connects you to the candidate. It is also the only phone that can place calls by ringing The Book’s number.">
-          <Input type="tel" inputMode="tel" autoComplete="tel" value={shown} onChange={(e) => setNumber(e.target.value)} placeholder="(416) 555 0123" className="max-sm:!h-11 max-sm:!text-base" />
-        </Field>
-        <Field label={status?.my_pin_set ? 'New PIN' : 'PIN'} hint={`4 to 6 digits. You key it in when you ring The Book’s number from your mobile to place a call without the app, so nobody else can place calls with your phone.${status?.my_pin_set ? ' Leave this empty to keep the PIN you have.' : ''}`}>
-          <Input type="password" inputMode="numeric" autoComplete="off" pattern="[0-9]{4,6}" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} placeholder={status?.my_pin_set ? 'A PIN is set' : 'Choose a PIN'} className="max-w-40 max-sm:!h-11 max-sm:!text-base" />
-        </Field>
-        {problem && <Notice tone="bad">{problem}</Notice>}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="submit" variant="primary" busy={busy} disabled={!status || (shown.trim() === saved && !pin)}>Save</Button>
-          {status?.my_pin_set && <Button disabled={busy} onClick={() => send({ phone: status.my_phone || '', pin: '' }, 'PIN removed')}>Remove PIN</Button>}
-          {status?.my_phone && <Button variant="danger" disabled={busy} onClick={() => send({ phone: '' }, 'Mobile number removed')}>Remove number</Button>}
-        </div>
-        {status?.configured && status.number_display && (
-          <p className="text-[13px] leading-relaxed text-stone-500">The Book’s own number is <span className="tabular font-medium text-stone-700">{status.number_display}</span>. Candidates see it when you call them, and it is the number you ring to place a call from your phone. <Link to="/oracle" className="font-medium text-brand-700 hover:underline">How that works</Link></p>
-        )}
-      </form>
-    </Card>
-  );
-}
-
-const PROVIDERS = { google: 'Google Calendar', outlook: 'Outlook', icloud: 'Apple Calendar', other: 'Calendar link' };
-const strong = (text) => <b className="font-medium text-stone-900">{text}</b>;
-// Where each calendar keeps its private link. Checked against each provider's help pages, not against a live account.
-const HOW_TO = [
-  {
-    name: 'Google Calendar',
-    steps: [
-      <>On a computer, open Google Calendar, click the gear and choose {strong('Settings')}.</>,
-      <>On the left, under {strong('Settings for my calendars')}, click your calendar’s name.</>,
-      <>Scroll to {strong('Integrate calendar')} and copy the link under {strong('Secret address in iCal format')}.</>,
-    ],
-    note: 'On a work account, if there is no secret address, your Google Workspace admin has switched it off and is the person to ask.',
-  },
-  {
-    name: 'Outlook',
-    steps: [
-      <>In Outlook on the web, click the gear, then {strong('Calendar')}, then {strong('Shared calendars')}.</>,
-      <>Under {strong('Publish a calendar')}, choose your calendar and {strong('Can view all details')}, then click {strong('Publish')}.</>,
-      <>Click the {strong('ICS')} link that appears and choose {strong('Copy link')}.</>,
-    ],
-    note: 'If “Publish a calendar” is missing, your IT admin has switched publishing off. Outlook’s link usually leaves out who was invited, so you may have to choose the candidate for an event yourself.',
-  },
-  {
-    name: 'Apple Calendar',
-    steps: [
-      <>Open {strong('icloud.com/calendar')} and sign in (or on an iPhone: Calendar, then Calendars).</>,
-      <>Open the sharing options beside your calendar (the {strong('i')} on an iPhone) and switch on {strong('Public Calendar')}.</>,
-      <>Copy the link. It starts with webcal://, which is fine.</>,
-    ],
-    note: 'Anyone who has an Apple public link can read that calendar, so paste it here and nowhere else.',
-  },
-];
-
-/** The signed-in person's calendar link: paste it, see whether it is being read, remove it. The link is never shown again. */
-function CalendarLinkCard() {
-  const { version, bump } = useApp();
-  const toast = useToast();
-  const [status, setStatus] = useState(null);
-  const [link, setLink] = useState('');
-  const [problem, setProblem] = useState(null);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { api.get('/calendar/status').then(setStatus).catch((err) => setProblem(err.status ? err.message : 'The Book could not be reached. Check your connection and try again.')); }, [version]);
-  useScrollToHash(Boolean(status));
-  const connect = async () => {
-    setProblem(null);
-    setBusy(true);
-    try {
-      // The time zone goes with it so that "events today" counts this person's own today, not the server's.
-      const made = await api.put('/calendar/link', { url: link.trim(), tz: browserZone() });
-      setLink('');
-      toast(`Calendar connected. ${made.events_today === 1 ? '1 event' : `${made.events_today} events`} today.`);
-      bump();
-    } catch (err) { setProblem(err.status ? err.message : 'The Book could not be reached. Check your connection and try again.'); }
-    setBusy(false);
-  };
-  const [remove, removing] = useAction(async () => {
-    if (!window.confirm('Remove your calendar link? Your day in The Oracle then shows only the interviews scheduled in The Book. Calls already recorded are kept.')) return;
-    await api.del('/calendar/link');
-    toast('Calendar link removed');
-    bump();
-  });
-  return (
-    <Card id="calendar" className="scroll-mt-4">
-      <CardHeader title="Your calendar" action={status && <Badge tone={!status.connected ? 'amber' : status.error ? 'red' : 'green'}>{!status.connected ? 'Not connected' : status.error ? 'Not being read' : 'Connected'}</Badge>} />
-      <div className="space-y-4 p-4">
-        <p className="text-sm leading-relaxed text-stone-600">
-          Paste your calendar’s private link and your day shows in The Oracle, with a reminder when a call you added is about to start. The link lets The Book read your calendar and nothing else. It is kept on the server and never shown again, to you or anyone.
-        </p>
-        {status?.connected && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-stone-50 px-3 py-2.5 text-sm">
-            <span className="min-w-0 flex-1 basis-48">
-              <span className="block font-medium text-stone-900">{PROVIDERS[status.provider] || PROVIDERS.other}</span>
-              <span className="block text-[13px] text-stone-500">{/* The time is of the last read that worked. Beside "Not being read" that has to be said, or the two contradict each other. */}
-                {!status.last_read_at ? 'Not read yet' : status.error ? `Last read successfully ${ago(status.last_read_at)}` : `Last read ${ago(status.last_read_at)}`}</span>
-            </span>
-            <Button size="sm" variant="danger" icon={Trash2} busy={removing} onClick={remove}>Remove</Button>
-          </div>
-        )}
-        {status?.connected && status.error && <Notice tone="warn"><span className="font-medium">The last read did not work.</span> {status.error}</Notice>}
-        <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); connect(); }}>
-          <Field label={status?.connected ? 'Replace it with another link' : 'Calendar link'} hint="It is read once before it is accepted, so you know straight away that it works.">
-            <Input type="url" inputMode="url" autoComplete="off" spellCheck={false} value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" className="max-sm:!h-11 max-sm:!text-base" />
-          </Field>
-          {problem && <Notice tone="bad">{problem}</Notice>}
-          <Button type="submit" variant="primary" busy={busy} disabled={!link.trim()}>{busy ? 'Reading the calendar…' : status?.connected ? 'Replace link' : 'Connect calendar'}</Button>
-        </form>
-        <div className="space-y-2 border-t border-line pt-4">
-          <p className="text-[13px] font-medium text-stone-700">Where to find the link</p>
-          {HOW_TO.map((how) => (
-            <details key={how.name} className="group rounded-lg border border-line">
-              <summary className="flex min-h-10 list-none items-center gap-2 px-3 text-sm font-medium text-stone-800 hover:bg-stone-50 [&::-webkit-details-marker]:hidden">
-                {how.name}<ChevronDown className="ml-auto size-4 text-stone-400 transition-transform group-open:rotate-180" />
-              </summary>
-              <div className="space-y-2 border-t border-line px-3 py-3 text-[13px] leading-relaxed text-stone-600">
-                <ol className="list-decimal space-y-1.5 pl-5">{how.steps.map((step, i) => <li key={i}>{step}</li>)}</ol>
-                <p className="text-stone-500">{how.note}</p>
-              </div>
-            </details>
-          ))}
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-function AiCard() {
+/** What the AI and The Oracle are connected to. `metaview` is Metaview's connection, once it is known. */
+function AiCard({ metaview }) {
   const { isAdmin } = useApp();
   const { data: status } = useApi('/jobs/autofill/status');
   const { data: oracle } = useApi('/oracle/status');
-  const { status: phone } = usePhone();
-  useScrollToHash(Boolean(status && phone));
   if (!status) return null;
   const code = (text) => <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">{text}</code>;
   return (
@@ -227,66 +64,116 @@ function AiCard() {
           <div className="mt-3 space-y-2 border-t border-line pt-3">
             <p className="flex flex-wrap items-center gap-2 font-medium text-stone-900">
               The Oracle
+              {metaview && <Badge tone={metaview.connected ? 'green' : 'amber'}>{metaview.connected ? 'Metaview connected' : 'Metaview not connected'}</Badge>}
               <Badge tone={oracle.transcription ? 'green' : 'amber'}>{oracle.transcription ? 'Transcripts connected' : 'Transcripts not connected'}</Badge>
               <Badge tone={oracle.ai ? 'green' : 'amber'}>{oracle.ai ? 'Notes and drafts connected' : 'Notes and drafts not connected'}</Badge>
             </p>
             <p>
-              The Oracle uses two connections. Recorded calls are sent to Deepgram to be transcribed{oracle.transcription ? '' : <> (create an API key at deepgram.com and set {code('DEEPGRAM_API_KEY')})</>},
-              and each transcript is sent to Claude to write the notes summary and draft submissions{oracle.ai ? '' : <> (the {code('ANTHROPIC_API_KEY')} above)</>}.
-              {' '}Without them, calls are still recorded and saved, and a transcript can be pasted in. Both are billed to your own accounts per use.
+              The Oracle uses three connections. Your team’s calls are read from Metaview, with their transcripts and notes{metaview && !metaview.connected ? (isAdmin ? ' (connect it in the Metaview card below)' : ' (an admin can connect it here)') : ''}.
+              {' '}Calls recorded or uploaded in The Book are sent to Deepgram to be transcribed{oracle.transcription ? '' : <> (create an API key at deepgram.com and set {code('DEEPGRAM_API_KEY')})</>},
+              and transcripts are sent to Claude to write notes summaries and draft submissions{oracle.ai ? '' : <> (the {code('ANTHROPIC_API_KEY')} above)</>}.
+              {' '}Without Deepgram and Claude, calls are still recorded and saved, and a transcript can be pasted in. Both are billed to your own accounts per use.
             </p>
           </div>
         )}
-        {phone && (
-          <div id="phone-connection" className="mt-3 scroll-mt-4 space-y-2 border-t border-line pt-3">
-            <p className="flex flex-wrap items-center gap-2 font-medium text-stone-900">
-              Phone calls
-              <Badge tone={phone.configured ? 'green' : 'amber'}>{phone.configured ? 'Connected' : 'Not connected'}</Badge>
-              {phone.configured && <span className="tabular text-[13px] font-normal text-stone-500">{phone.number_display}</span>}
-            </p>
-            <p>
-              Recruiters call candidates through one phone number that belongs to The Book, from the app or by ringing that number from their own mobile. The calls go through Twilio, which rings both phones, records the call and passes the recording to The Oracle. Twilio bills your own account for the number and for each minute.
-            </p>
-            {phone.configured ? (
-              <p>
-                {phone.notice ? 'The other person hears a short notice that the call is recorded before a recorded call is connected.' : 'The spoken notice that a call is recorded is switched off, so recruiters have to say it themselves.'}
-                {' '}Calls can be placed to: {phone.countries?.length ? phone.countries.join(', ') : 'CA, US'}.
-              </p>
-            ) : isAdmin ? (
-              <>
-                {/* Exactly what is still in the way, when some of it has been done: being told to set what is already set helps nobody. */}
-                {phone.problem && phone.missing?.length < 4 && (
-                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950"><span className="font-medium">What is still missing:</span> {phone.problem}</p>
-                )}
-                <p>To connect them, create a Twilio account, buy a number there, and set these four where the app is hosted, then restart it:</p>
-                <ul className="list-disc space-y-1 pl-5">
-                  <li>{code(PHONE_SETTINGS[0])}: the account’s ID, which starts with AC.</li>
-                  <li>{code(PHONE_SETTINGS[1])}: the account’s secret token, shown next to it in the Twilio console.</li>
-                  <li>{code(PHONE_SETTINGS[2])}: the number you bought, written like +14165550123.</li>
-                  <li>{code('APP_URL')}: the public https address people open The Book at, with nothing after it. Twilio reports on each call to that address, and The Book only believes reports sent to exactly it.</li>
-                </ul>
-              </>
-            ) : (
-              <p>An admin can connect them: it needs a Twilio account and four settings ({settingNames([...PHONE_SETTINGS, 'APP_URL'])}) where the app is hosted.</p>
-            )}
-            {isAdmin && (
-              // Without this step calls placed from the app work, but ringing The Book's number reaches nothing, and
-              // nothing else in the app can know that: Twilio simply never tells The Book about the call.
-              <div className="space-y-1.5 rounded-lg border border-line bg-stone-50 px-3 py-2.5">
-                <p><span className="font-medium text-stone-900">One step is done at Twilio, not here.</span> Until it is, calls placed from the app work, but ringing The Book’s number from your own phone, and candidates ringing it, reach nothing. In the Twilio console open Phone Numbers, Active numbers, your number, and under Voice configuration enter:</p>
-                <ul className="space-y-1.5">
-                  {[['A call comes in', 'inbound'], ['Call status changes', 'status']].map(([label, name]) => (
-                    <li key={name}>
-                      <span className="block text-[13px] text-stone-700">{label}: Webhook, HTTP POST</span>
-                      <code className="mt-0.5 block rounded bg-white px-2 py-1 text-xs break-all text-stone-800 ring-1 ring-line select-all">{phone.webhooks?.[name] || `https://the-address-of-The-Book/api/phone/twilio/${name}`}</code>
-                    </li>
-                  ))}
-                </ul>
-                {!phone.webhooks && <p className="text-[13px] text-stone-500">The two addresses are shown in full here once {code('APP_URL')} is set.</p>}
-                <p className="text-[13px] text-stone-500">To check it, ring The Book’s number from a mobile saved in The Book: a voice should say “This is The Book” and ask for your PIN.</p>
-              </div>
-            )}
-          </div>
+      </div>
+    </Card>
+  );
+}
+
+const strong = (text) => <b className="font-medium text-stone-900">{text}</b>;
+// Where Metaview keeps the key. Checked in Metaview's own settings.
+const METAVIEW_STEPS = [
+  <>In Metaview, open {strong('Settings')}, then {strong('Integrations')}, then {strong('MCP')}.</>,
+  <>Switch on {strong('Use API Key instead of OAuth?')}</>,
+  <>Click {strong('Generate API Key')} and name it {strong('The Book')}.</>,
+  <>Copy the key and paste it here.</>,
+];
+
+/**
+ * Connecting Metaview, for admins: the key goes in once and is never shown again. Once connected, what The Book has
+ * read so far, whether calls are brought in by themselves, and the way to disconnect.
+ */
+function MetaviewCard({ metaview }) {
+  const toast = useToast();
+  const { status } = metaview;
+  const [key, setKey] = useState('');
+  const [problem, setProblem] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [replacing, setReplacing] = useState(false);
+  useScrollToHash(Boolean(status));
+  const connect = async () => {
+    setProblem(null);
+    setBusy(true);
+    try {
+      // The server tries the key with Metaview before it keeps it, so a wrong one is refused here and now.
+      const now = await api.put('/metaview/key', { key: key.trim() });
+      metaview.set(now);
+      setKey('');
+      setReplacing(false);
+      toast(now.workspace ? `Metaview connected: ${now.workspace}` : 'Metaview connected');
+    } catch (err) { setProblem(problemOf(err)); }
+    setBusy(false);
+  };
+  const [setAuto, savingAuto] = useAction(async (auto) => metaview.set(await api.put('/metaview/settings', { auto })));
+  const [disconnect, disconnecting] = useAction(async () => {
+    const here = Number(status.in_the_book || 0);
+    if (!window.confirm(`Disconnect Metaview?\n\nKept: ${here === 1 ? 'the 1 call' : `the ${here.toLocaleString('en-CA')} calls`} already in The Oracle, with ${here === 1 ? 'its' : 'their'} transcripts, notes and submission drafts.\n\nForgotten: the key, and what The Book remembered about the Metaview calls that were never brought in.\n\nNothing in Metaview is changed. The key itself keeps working there until you delete it in Metaview (Settings, Integrations, MCP).`)) return;
+    await api.del('/metaview/key');
+    toast('Metaview disconnected');
+    await metaview.reload();
+  });
+  const keyForm = (label, button) => (
+    <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); connect(); }}>
+      <Field label={label} hint="It is tried with Metaview before it is kept. The Book keeps it sealed and never shows it again, to you or anyone.">
+        <Input type="password" autoComplete="off" spellCheck={false} value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste the key" className="max-sm:!h-11 max-sm:!text-base" />
+      </Field>
+      {problem && <Notice tone="bad">{problem}</Notice>}
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" variant="primary" busy={busy} disabled={!key.trim()}>{busy ? 'Checking the key with Metaview…' : button}</Button>
+        {replacing && <Button disabled={busy} onClick={() => { setReplacing(false); setKey(''); setProblem(null); }}>Cancel</Button>}
+      </div>
+    </form>
+  );
+  const autoBox = (hint) => (
+    <Checkbox checked={Boolean(status.auto)} disabled={savingAuto} onChange={(e) => setAuto(e.target.checked)} label="Bring in calls by themselves when they clearly belong to one candidate" hint={hint} />
+  );
+  const reading = readingLine(status);
+  return (
+    <Card id="metaview" className="scroll-mt-4">
+      <CardHeader title="Metaview" action={status && <Badge tone={!status.connected ? 'amber' : status.error ? 'red' : 'green'}>{!status.connected ? 'Not connected' : status.error ? 'Not being read' : 'Connected'}</Badge>} />
+      <div className="space-y-4 p-4 text-sm leading-relaxed text-stone-600">
+        <p>Metaview records your team’s calls with candidates. Connect it and those calls appear in The Oracle with their transcripts and notes, on the right candidates. The Book only reads from Metaview: nothing there is changed.</p>
+        {!status ? (
+          metaview.error ? <Notice tone="bad">The Metaview connection could not be checked. {metaview.error}</Notice> : <LoaderCircle className="size-5 animate-spin text-stone-400" aria-label="Loading" />
+        ) : !status.connected ? (
+          <>
+            {/* Not connected, with something to say: a saved key that can no longer be read, or one set on the host that cannot be a key. */}
+            {status.error && <Notice tone="warn">{status.error}</Notice>}
+            <ol className="list-decimal space-y-1.5 pl-5">{METAVIEW_STEPS.map((step, i) => <li key={i}>{step}</li>)}</ol>
+            {keyForm('Metaview API key', 'Connect')}
+            <p className="text-[13px] text-stone-500">The key belongs to the person who makes it, and The Book sees the Metaview calls that person can see. Make it from an account that sees the whole team’s calls.</p>
+            {/* Decided before connecting, because bringing calls in starts as soon as the key is accepted. */}
+            {autoBox('Calls from the last two weeks, and new ones, that an email address or a phone number ties to one candidate come in without anyone opening them, up to a daily limit (50, unless that was changed where the app is hosted). Untick this first if you would rather bring calls in yourself.')}
+          </>
+        ) : (
+          <>
+            <div className="rounded-lg border border-line bg-stone-50 px-3 py-2.5">
+              <p className="font-medium text-stone-900">{status.workspace || 'Your Metaview workspace'}</p>
+              <p className="text-[13px] text-stone-600">{knownLine(status)}</p>
+              <p className="text-[13px] text-stone-500">{status.last_checked_at ? `The Book last looked for new calls ${ago(status.last_checked_at)}.` : 'The Book has not looked for calls yet.'}</p>
+              {reading && <p className="mt-1 flex items-center gap-2 text-[13px] text-stone-600" role="status"><LoaderCircle className="size-3.5 shrink-0 animate-spin text-brand-600" />{reading}.</p>}
+            </div>
+            {status.error && <Notice tone="warn"><span className="font-medium">Metaview could not be read the last time The Book looked.</span> {status.error}</Notice>}
+            {autoBox('Other calls wait on the Metaview tab of The Oracle until somebody opens them or chooses their candidate.')}
+            <div className="flex flex-wrap gap-2">
+              <Button icon={RefreshCw} busy={metaview.looking} onClick={metaview.look}>Look for new calls now</Button>
+              {status.source !== 'server' && <Button variant="danger" busy={disconnecting} onClick={disconnect}>Disconnect</Button>}
+            </div>
+            {status.source === 'server' ? <p className="text-[13px] text-stone-500">The key was set where the app is hosted, so it is changed or removed there, not here.</p>
+              : replacing ? keyForm('New Metaview API key', 'Replace key')
+              : <button type="button" onClick={() => setReplacing(true)} className="text-[13px] font-medium text-brand-700 hover:underline">Use a different key</button>}
+          </>
         )}
       </div>
     </Card>
@@ -299,6 +186,7 @@ function Agency() {
   const [name, setName] = useState(agencyName);
   const [photos, setPhotos] = useState(clientPhotos);
   const [save, busy] = useAction(async () => { await api.put('/settings', { agencyName: name, clientPhotos: photos }); await reloadMe(); toast('Saved'); });
+  const metaview = useMetaview();
   return (
     <div className="max-w-lg space-y-6">
       <Card>
@@ -310,7 +198,9 @@ function Agency() {
           {isAdmin && <Button type="submit" variant="primary" busy={busy}>Save</Button>}
         </form>
       </Card>
-      <AiCard />
+      <AiCard metaview={metaview.status} />
+      {/* Connecting Metaview takes its key, so it is for admins. Everyone else sees whether it is connected, above. */}
+      {isAdmin && <MetaviewCard metaview={metaview} />}
       <Card>
         <CardHeader title="Email delivery" action={<Badge tone={mailConfigured ? 'green' : 'amber'}>{mailConfigured ? 'Connected' : 'Not connected'}</Badge>} />
         <div className="space-y-2 p-4 text-sm leading-relaxed text-stone-600">

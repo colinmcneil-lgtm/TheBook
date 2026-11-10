@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, q, tx, setSetting, createStages, DATA_DIR, UPLOAD_DIR } from './db.js';
+import { reportStart } from './reporting.js';
 
 const reset = process.argv.includes('--reset');
 if (process.env.NODE_ENV === 'production' && !process.argv.includes('--force')) {
@@ -19,8 +20,9 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   }
   console.log(`Wiping ${DATA_DIR} ...`);
   tx(() => {
-    for (const t of ['phone_webhooks', 'phone_calls', 'calls', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
+    for (const t of ['report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
       db.exec(`DELETE FROM ${t}`);
+    db.exec(`DELETE FROM settings WHERE key LIKE 'metaview_%'`); // the demo is not connected to Metaview
     db.exec('DELETE FROM sqlite_sequence'); // a wiped database starts numbering from 1 again
   });
   for (const file of fs.readdirSync(UPLOAD_DIR)) fs.rmSync(path.join(UPLOAD_DIR, file), { recursive: true, force: true }); // résumés, photos and call audio of the rows just deleted
@@ -46,11 +48,10 @@ const LAST = ['Adeyemi', 'Bergström', 'Castillo', 'Dunne', 'Eriksen', 'Fontaine
 const COMPANIES = ['Brightwater', 'Coppermill', 'Ostrava Labs', 'Finchley & Co', 'Halden Systems', 'Juniper Row', 'Marlowe Group', 'Northgate Digital', 'Pellham', 'Quillon', 'Redfern Works', 'Sable Analytics', 'Tidewell', 'Varsity Freight', 'Wexcombe'];
 const CITIES = ['London', 'Manchester', 'Bristol', 'Leeds', 'Edinburgh', 'Dublin', 'Birmingham', 'Remote, UK'];
 const SOURCES = ['careers_page', 'careers_page', 'careers_page', 'careers_page', 'agency_sourced', 'agency_sourced', 'linkedin', 'linkedin', 'referral', 'job_board'];
-// Phone numbers from the range kept for fiction (555-0100 to 555-0199), so nothing in the demo can ring a real
-// person. No two candidates share one, and none is the mobile saved for Priya below.
+// Phone numbers from the range kept for fiction (555-0100 to 555-0199), so nothing in the demo is a real person's
+// number. No two candidates share one.
 const AREA_CODES = ['416', '647', '437', '905', '289', '613'];
-const PRIYA_MOBILE = '+16475550142';
-const takenPhones = new Set(['647-42']);
+const takenPhones = new Set();
 const demoPhone = () => {
   let area = between(100, 999) % AREA_CODES.length, last = between(100000, 999999) % 100;
   while (takenPhones.has(`${AREA_CODES[area]}-${last}`)) { last = (last + 1) % 100; if (!last) area = (area + 1) % AREA_CODES.length; }
@@ -308,8 +309,8 @@ tx(() => {
         q.run(`UPDATE applications SET review_status = ?, submission_note = ?, submitted_by = ?, review_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?`,
           pending ? 'pending' : 'approved',
           `${name.split(' ')[0]} is currently ${title} at ${pick(COMPANIES)}. Strong on the core of this brief, well regarded by former colleagues, and realistic on salary. Notice period is one month. Worth meeting.`,
-          priya, pending ? null : 'Agreed, keen to meet.', pending ? null : j.panel[0], pending ? null : enteredAt(1.5), appId);
-        act(appId, priya, 'submitted', 'Submitted to the hiring team for review', enteredAt(1.2));
+          owner ?? priya, pending ? null : 'Agreed, keen to meet.', pending ? null : j.panel[0], pending ? null : enteredAt(1.5), appId);
+        act(appId, owner ?? priya, 'submitted', 'Submitted to the hiring team for review', enteredAt(1.2));
         if (!pending) act(appId, j.panel[0], 'review', 'Approved for interview', enteredAt(1.5));
       }
 
@@ -326,6 +327,52 @@ tx(() => {
           appId, salary, ahead(status === 'hired' ? 12 : 30, 9).slice(0, 10), st, 'Includes standard benefits package.', enteredAt(hiredStage - 1), enteredAt(hiredStage - 1));
         act(appId, alex, 'offer', `Offer ${st}`, enteredAt(hiredStage - 1));
       }
+    }
+  }
+
+  // Reporting. A real workspace counts from 16 November 2026 and records nothing earlier. So that the demo's
+  // Individual and Clients reports have something in them, the demo alone counts from a Monday about five months
+  // back, and the moments those reports count are written down here for the history made above, as the server
+  // would have recorded them had it been running then: each search's kickoff, each first submission, the first
+  // interview with the client that followed it, and each hire with its fee.
+  const monday = new Date(Date.now() - 150 * DAY);
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  setSetting('reports_start', monday.toISOString().slice(0, 10));
+  const counted = reportStart();
+  // The demo behaves as if The Book had been installed, and counting had begun, on that Monday. Without these two
+  // the page would say, truthfully for a real workspace, that nothing was written down before today.
+  setSetting('reports_first_run', counted.at);
+  setSetting('reports_began', counted.at);
+  q.run(`UPDATE offers SET accepted_at = created_at WHERE status = 'accepted'`);
+  for (const j of q.all('SELECT id, client_id, opened_at FROM jobs WHERE opened_at >= ?', counted.at)) {
+    q.run(`INSERT INTO report_events (kind, job_id, client_id, at) VALUES ('search_opened', ?, ?, ?)`, j.id, j.client_id, j.opened_at);
+  }
+  const moment = (kind, a, userId, at) => q.run(
+    'INSERT INTO report_events (kind, application_id, candidate_name, job_id, client_id, user_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)', kind, a.id, a.name, a.job_id, a.client_id, userId, at);
+  const history = q.all(
+    `SELECT a.id, a.job_id, a.status, a.review_status, a.submitted_by, a.owner_id, a.hired_at, c.name, j.client_id, cl.fee_percent, cl.currency
+     FROM applications a JOIN candidates c ON c.id = a.candidate_id JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id ORDER BY a.id`);
+  for (const a of history) {
+    const sent = a.review_status ? q.get(`SELECT created_at AS at FROM activities WHERE application_id = ? AND type = 'submitted' ORDER BY id LIMIT 1`, a.id)?.at : null;
+    if (sent && sent >= counted.at) {
+      moment('submission', a, a.submitted_by, sent);
+      // Their first interview with the client: already in such a stage when they were submitted, or else whichever
+      // came first afterwards, a move into one or an interview booked for them.
+      const withClient = (when, after) => q.get(
+        `SELECT h.entered_at AS at FROM stage_history h JOIN stages s ON s.id = h.stage_id
+         WHERE h.application_id = ? AND s.kind = 'interview' AND s.with_client = 1 AND h.entered_at ${after ? '>' : '<='} ? ORDER BY h.entered_at LIMIT 1`, a.id, when)?.at;
+      const booked = q.get('SELECT MIN(created_at) AS at FROM interviews WHERE application_id = ? AND created_at > ?', a.id, sent).at;
+      const met = withClient(sent, false) ? sent : [withClient(sent, true), booked].filter(Boolean).sort()[0];
+      if (met) moment('first_interview', a, a.submitted_by, met);
+    }
+    if (a.status === 'hired' && a.hired_at >= counted.at) {
+      const offer = q.get('SELECT salary, accepted_at FROM offers WHERE application_id = ?', a.id);
+      const fee = offer?.salary != null && a.fee_percent > 0 ? Math.round((offer.salary * a.fee_percent) / 100) : null;
+      q.run(
+        `INSERT INTO report_events (kind, application_id, candidate_name, job_id, client_id, user_id, at, filled_at, salary, fee_percent, fee, currency)
+         VALUES ('placement', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        a.id, a.name, a.job_id, a.client_id, a.owner_id ?? a.submitted_by, a.hired_at, offer?.accepted_at && offer.accepted_at <= a.hired_at ? offer.accepted_at : a.hired_at,
+        offer?.salary ?? null, a.fee_percent, fee, a.currency);
     }
   }
 
@@ -456,79 +503,6 @@ tx(() => {
       'Next steps\n- Rowan to send a portfolio.\n- Add them to the Product Designer role.',
     ].join('\n\n'),
   });
-
-  // Phone calls: Priya's mobile is saved, and three calls went through The Book's number. One she placed and that
-  // was answered (so it is in the Oracle, on the candidate), one where the line was busy, and one that came in while
-  // she was away, where the caller left a message. As with the calls above, the demo holds no audio.
-  q.run('UPDATE users SET phone = ? WHERE id = ?', PRIYA_MOBILE, priya);
-  const NOTICE = 'This call from Harbour Talent Partners is recorded and transcribed for recruitment notes. Tell your recruiter if you\'d prefer it wasn\'t.';
-  const e164 = (typed) => `+1${typed.replace(/\D/g, '')}`;
-  /** Somebody active in a job who has a phone number and no call yet, to ring. */
-  const reachable = (jobId) => q.get(
-    `SELECT a.id, a.candidate_id, c.name, c.phone FROM applications a JOIN candidates c ON c.id = a.candidate_id
-     WHERE a.job_id = ? AND a.status = 'active' AND c.phone IS NOT NULL AND c.id NOT IN (SELECT candidate_id FROM calls WHERE candidate_id IS NOT NULL) ORDER BY a.id LIMIT 1`, jobId);
-  const demoPhoneCall = ({ app, days, direction, outcome, reason = null, voicemail = false, turns = null, notes = null }) => {
-    const at = ago(days, 15);
-    const seconds = turns ? Math.round(turns.at(-1).end + 2) : null;
-    const number = e164(app.phone);
-    let callId = null;
-    if (turns) {
-      const inbound = direction === 'inbound';
-      callId = q.insert(
-        `INSERT INTO calls (recording_id, title, status, source, direction, phone_number, speaker_roles, audio_channels, voicemail, duration_ms, transcript, transcript_source, speakers,
-           notes, notes_at, notes_auto, application_id, candidate_id, consent_by, consent_at, consent_wording, created_by, created_at, updated_at)
-         VALUES (?, ?, 'ready', 'phone', ?, ?, ?, ?, ?, ?, ?, 'deepgram', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        crypto.randomBytes(16).toString('hex'), voicemail ? `Voicemail from ${app.name}` : `Call with ${app.name}`, inbound ? 'inbound' : 'outbound', number,
-        JSON.stringify(voicemail ? { 0: 'candidate' } : inbound ? { 0: 'candidate', 1: 'recruiter' } : { 0: 'recruiter', 1: 'candidate' }), voicemail ? 1 : 2, voicemail ? 1 : 0,
-        seconds * 1000, JSON.stringify(turns), JSON.stringify(voicemail ? { 0: app.name } : inbound ? { 0: app.name, 1: 'Priya Nair' } : { 0: 'Priya Nair', 1: app.name }),
-        notes, at, app.id, app.candidate_id, priya, at,
-        inbound ? `The Book played this notice to ${app.name} when they rang, before the call was put through: “Thanks for calling Harbour Talent Partners. ${NOTICE.replace(' from Harbour Talent Partners', '')}”`
-          : `The Book played this notice to ${app.name} when they answered, before the call was connected: “${NOTICE}”`,
-        priya, at, at);
-      act(app.id, priya, 'call', voicemail ? `Voicemail left, ${seconds} sec` : `Phone call, ${Math.max(1, Math.round(seconds / 60))} min`, at);
-    }
-    q.run(
-      `INSERT INTO phone_calls (user_id, direction, status, outcome, reason, to_number, user_number, candidate_id, application_id, record, notice_at, answered_at, ended_at, talk_sec, voicemail,
-         recording_state, recording_channels, recording_sec, recording_deleted_at, call_id, call_made, started_at, updated_at)
-       VALUES (?, ?, 'ended', ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      priya, direction, outcome, reason, number, PRIYA_MOBILE, app.candidate_id, app.id, turns ? at : null, turns && !voicemail ? at : null, at, voicemail ? null : seconds, voicemail ? 1 : 0,
-      turns ? 'stored' : null, turns ? (voicemail ? 1 : 2) : null, seconds, turns ? at : null, callId, callId ? 1 : 0, at, at);
-  };
-
-  const designer = reachable(jobs[1].id);
-  if (designer) {
-    const first = designer.name.split(' ')[0];
-    demoPhoneCall({
-      app: designer, days: 3, direction: 'outbound', outcome: 'completed',
-      turns: timed([
-        [0, `Hi ${first}, it is Priya from Harbour Talent. Is now still a good time for a quick call?`],
-        [1, 'Yes, I have ten minutes before my next meeting.'],
-        [0, 'Perfect. I wanted to check two things before I put you forward: your notice period, and whether three days a week in the office works for you.'],
-        [1, 'My notice is one month. Three days is fine as long as two of them can be flexible, because I do the school run on Wednesdays.'],
-        [0, 'That should be workable; I will raise it. And on salary, are you still looking for around 68,000?'],
-        [1, 'Yes, 68,000 would be right. I would not move for less than 65,000.'],
-        [0, 'Understood. I will send you the details this afternoon and come back to you by Friday.'],
-        [1, 'Great, thank you.'],
-      ]),
-      notes: [
-        `${first} confirmed their notice period, working pattern and salary ahead of being put forward. Details to follow this afternoon, with an answer by Friday.`,
-        'Pay (current and expected)\n- Looking for around 68,000.\n- Would not move for less than 65,000.',
-        'Notice period and availability\n- One month.',
-        'Location and working pattern\n- Three days a week in the office is fine if two of them can be flexible.\n- Does the school run on Wednesdays (personal: not for the client).',
-        'Next steps\n- Send the details this afternoon.\n- Come back to them by Friday.',
-      ].join('\n\n'),
-    });
-  }
-  const unavailable = reachable(jobs[2].id);
-  if (unavailable) demoPhoneCall({ app: unavailable, days: 2, direction: 'outbound', outcome: 'busy' });
-  const caller = reachable(jobs[3].id);
-  if (caller) {
-    demoPhoneCall({
-      app: caller, days: 1, direction: 'inbound', outcome: 'no_answer', reason: 'missed', voicemail: true,
-      turns: timed([[0, `Hi Priya, it is ${caller.name.split(' ')[0]} returning your call. I am free after four today or any time tomorrow morning. Speak soon.`]]),
-      notes: `${caller.name.split(' ')[0]} returned a call and left a message.\n\nNext steps\n- Call them back after four today, or tomorrow morning.`,
-    });
-  }
 
   // People in The Book without a job: found while sourcing, or met along the way, and saved for when the right role
   // comes up. Each has an entry with no job and no stage, an owner, and whatever was known when they were saved.

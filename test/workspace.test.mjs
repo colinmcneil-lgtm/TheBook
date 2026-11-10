@@ -9,11 +9,9 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { startServer, session, tempDir, PORTS } from './oracle-helpers.mjs';
-import { putJson } from './phone-helpers.mjs';
 
-// Two ports that the other test files leave free whatever they are moved to: the two after the phone tests' seven.
-// (The two after the calendar tests' five belong to test/pool.test.mjs, which runs at the same time as this file.)
-const PORT = PORTS.main + 12, AI_PORT = PORTS.main + 13;
+// Two ports of its own (see oracle-helpers.mjs for who uses which).
+const PORT = PORTS.workspace, AI_PORT = PORTS.workspaceAi;
 
 const DRAFT = {
   job: { title: 'Head of Sales', department: 'Commercial', location: 'Manchester', work_mode: 'onsite', employment_type: 'full_time', salary_min: 80000, salary_max: 95000, salary_currency: 'GBP', openings: 1,
@@ -55,7 +53,7 @@ let ai, server, dataDir;
 let owner, priya, maya;   // the admin who creates the jobs, a recruiter who did not, and the client's hiring manager
 let clientId, job, stages;
 
-const put = (who, pathname, json) => putJson(who, server.base, pathname, json);
+const put = (who, pathname, json) => who.putJson(pathname, json);
 const feed = async (who = owner) => (await who.get('/dashboard')).body.recent;
 const addCandidate = async (name, extra = {}) => (await owner.upload('/applications', { job_id: job, name, email: `${name.toLowerCase().replace(/[^a-z]+/g, '.')}@mail.example`, ...extra })).body;
 const stage = (name) => stages.find((s) => s.name === name).id;

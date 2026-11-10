@@ -4,8 +4,7 @@
 // How a call moves through here:
 //   1. Audio arrives. A recording made in the browser is sent in small pieces while the call is still going, and
 //      each piece is saved the moment it lands, so a dropped connection, a reloaded page or a restarted server
-//      loses nothing that had already been recorded. A recording made elsewhere is uploaded as one file. A phone
-//      call placed through The Book arrives from the phone service when it ends (see phone.js).
+//      loses nothing that had already been recorded. A recording made elsewhere is uploaded as one file.
 //   2. With DEEPGRAM_API_KEY set, the audio is sent to Deepgram, which returns the words with a number for each
 //      speaker. Claude cannot listen to audio, so this step needs its own service. Without the key the audio is
 //      still kept and played back, and a transcript can be pasted in.
@@ -15,6 +14,9 @@
 // A recording that is cut off (the tab closed, the connection went) is never thrown away: the browser keeps what
 // the server does not have yet and sends it when it can, and after a day of silence the server saves the call from
 // what arrived, keeping the pieces for another week so the rest can still be added.
+//
+// A conversation recorded in Metaview is a call here too (see metaview.js): it arrives with its transcript and
+// Metaview's notes and with no audio, and from then on it is a call like any other.
 //
 // Everything here is for the agency only: client users are refused on every route. A call is personal data, so
 // nobody can start or upload one without confirming that everyone on it agreed, and deleting a candidate deletes
@@ -31,8 +33,6 @@ import { z } from 'zod';
 import { q, now, tx, getSetting, DATA_DIR, UPLOAD_DIR } from './db.js';
 import { aiConfigured } from './autofill.js';
 import { measureWebm, webmWithDuration } from './webm.js';
-import { displayNumber } from './phone-numbers.js';
-import { tieCallToEvent } from './calendar.js';
 
 // ---------- limits ----------
 const MB = 1024 * 1024;
@@ -51,10 +51,9 @@ const STALE_AFTER = 24 * HOUR;            // a recording with no new piece for a
 const KEEP_PIECES = 7 * 24 * HOUR;
 const MAX_PASTE = 300000;                 // characters; an hour of conversation is about 60,000
 const MAX_TRANSCRIPT_CHARS = 300000;      // the most transcript sent to Claude in one go
-const MAX_NOTES = 10000;                  // the same length a note on a candidate can be
+export const MAX_NOTES = 10000;           // the same length a note on a candidate can be
 const MAX_SUBMISSION = 6000;              // the same length the write-up sent to the hiring team can be
 export const UNTITLED = 'Untitled call';
-export const VOICEMAIL = 'Voicemail';     // the title of a message a caller left, before anyone knows who they are
 const UPLOAD_CONSENT = 'Everyone on this call knew it was being recorded and agreed.'; // what uploading with consent "true" confirms
 
 // ---------- where audio lives ----------
@@ -131,27 +130,20 @@ export const forgetDraftsFor = (applicationId) =>
 /** A note on a profile is being deleted: a call whose summary was saved as that note no longer points at it. */
 export const forgetSavedNote = (noteId) => q.run('UPDATE calls SET note_id = NULL WHERE note_id = ?', noteId);
 /** Two records turned out to be one person: the calls move to the record that is kept. */
-export function moveCalls(fromCandidateId, toCandidateId) {
+export const moveCalls = (fromCandidateId, toCandidateId) =>
   q.run('UPDATE calls SET candidate_id = ?, updated_at = ? WHERE candidate_id = ?', toCandidateId, now(), fromCandidateId);
-  q.run('UPDATE phone_calls SET candidate_id = ? WHERE candidate_id = ?', toCandidateId, fromCandidateId); // the list of phone calls made to them, too
-}
 /**
- * Two entries of one person saved to The Book without a job became one: the calls on the entry that goes, and the
- * calendar events it was chosen for, move to the entry that is kept (they would otherwise be left on nobody's profile).
+ * Two entries of one person saved to The Book without a job became one: the calls on the entry that goes move to
+ * the entry that is kept (they would otherwise be left on nobody's profile).
  */
-export function moveCallsToEntry(fromApplicationId, toApplicationId) {
+export const moveCallsToEntry = (fromApplicationId, toApplicationId) =>
   q.run('UPDATE calls SET application_id = ?, updated_at = ? WHERE application_id = ?', toApplicationId, now(), fromApplicationId);
-  q.run('UPDATE phone_calls SET application_id = ? WHERE application_id = ?', toApplicationId, fromApplicationId);
-  q.run('UPDATE calendar_events SET application_id = ? WHERE application_id = ?', toApplicationId, fromApplicationId);
-}
 /**
  * An entry has been given a record of its own (somebody going back to The Book while the client keeps its record of
  * them for another job): the calls recorded on that entry belong with it, so they move to the entry's record.
  */
-export function moveEntryCallsToRecord(applicationId, candidateId) {
+export const moveEntryCallsToRecord = (applicationId, candidateId) =>
   q.run('UPDATE calls SET candidate_id = ?, updated_at = ? WHERE application_id = ?', candidateId, now(), applicationId);
-  q.run('UPDATE phone_calls SET candidate_id = ? WHERE application_id = ?', candidateId, applicationId);
-}
 
 // ---------- joining a recording ----------
 async function receivedSeqs(recordingId) {
@@ -314,7 +306,7 @@ const DEEPGRAM_URL = process.env.DEEPGRAM_API_URL || 'https://api.deepgram.com/v
 // 300 seconds. Stopping just short of that gives a clean failure that can be tried again.
 const DEEPGRAM_TIMEOUT = Number(process.env.DEEPGRAM_TIMEOUT_MS) || 280000;
 const DEEPGRAM_RETRY = Number(process.env.DEEPGRAM_RETRY_MS) || 2000;
-// A long phone call is a large file (about 115 MB an hour). Above this size the audio is sent straight from the
+// An uploaded recording can be a large file (up to 200 MB). Above this size the audio is sent straight from the
 // disk, a piece at a time, so the whole of it is never held in memory at once.
 const SEND_FROM_DISK_ABOVE = Number(process.env.ORACLE_STREAM_BYTES) || 32 * MB;
 const deepgramKey = () => (process.env.DEEPGRAM_API_KEY || '').trim();
@@ -334,15 +326,9 @@ const DEEPGRAM_PARAMS = {
 // If the service ever refuses "diarize_model", the older switch still tells speakers apart. Once that has happened
 // the older switch is used until the server is next started.
 let olderDiarize = false;
-/**
- * The request for one recording. A phone call fetched with each person on a channel of their own (`twoChannel`) is
- * written out channel by channel: who said what is then exact, where telling voices apart is a guess. The two are
- * never asked for together, because told apart inside a channel that holds one person, everybody is "speaker 0".
- */
-function deepgramQuery(twoChannel = false) {
+function deepgramQuery() {
   const params = new URLSearchParams(DEEPGRAM_PARAMS);
-  if (twoChannel) { params.delete('diarize_model'); params.set('multichannel', 'true'); params.set('tag', 'oracle-phone'); }
-  else if (olderDiarize) { params.delete('diarize_model'); params.set('diarize', 'true'); }
+  if (olderDiarize) { params.delete('diarize_model'); params.set('diarize', 'true'); }
   return params.toString();
 }
 
@@ -403,11 +389,11 @@ export function deepgramError(status, bodyText, retryAfter = null) {
  * One request: the whole audio file as the body. `audio` is the file's bytes, or { file, size } for a file that is
  * sent from the disk. Resolves to the answer, or throws a TranscriptionError.
  */
-async function deepgramOnce(audio, type, twoChannel) {
+async function deepgramOnce(audio, type) {
   let res, body;
   const fromDisk = !Buffer.isBuffer(audio);
   try {
-    res = await fetch(`${DEEPGRAM_URL}?${deepgramQuery(twoChannel)}`, {
+    res = await fetch(`${DEEPGRAM_URL}?${deepgramQuery()}`, {
       method: 'POST',
       headers: { Authorization: `Token ${deepgramKey()}`, 'Content-Type': type || 'application/octet-stream', ...(fromDisk ? { 'Content-Length': String(audio.size) } : {}) },
       body: fromDisk ? fs.createReadStream(audio.file) : audio,
@@ -423,7 +409,7 @@ async function deepgramOnce(audio, type, twoChannel) {
 }
 
 /** Send the audio, trying again (twice at most) when the service is busy or failing, and once when it does not answer. */
-async function deepgram(file, type, twoChannel = false) {
+async function deepgram(file, type) {
   let audio;
   try {
     const { size } = await fsp.stat(file);
@@ -432,9 +418,9 @@ async function deepgram(file, type, twoChannel = false) {
   let timeouts = 0;
   for (let attempt = 1; ; attempt++) {
     try {
-      return await deepgramOnce(audio, type, twoChannel);
+      return await deepgramOnce(audio, type);
     } catch (err) {
-      if (!twoChannel && !olderDiarize && err.status === 400 && /diarize_model/i.test(`${err.code} ${err.detail}`)) {
+      if (!olderDiarize && err.status === 400 && /diarize_model/i.test(`${err.code} ${err.detail}`)) {
         console.error('The transcription service refused diarize_model; using the older diarize switch from now on.');
         olderDiarize = true;
         attempt--; // this was our request being out of date, not a failed try
@@ -452,21 +438,16 @@ async function deepgram(file, type, twoChannel = false) {
  * The service splits speech at every pause, so one person's turn often arrives as several pieces in a row; those
  * are joined. When no speaker numbers came back at all, nothing is joined: the call would become one endless
  * paragraph with a single time to jump to. Everything in the answer is optional, so each part is read with a fallback.
+ * The speakers are always the ones the service told apart by voice, however many channels the audio had (an
+ * uploaded file may be stereo).
  */
-export function turnsFrom(answer, byChannel = null) {
+export function turnsFrom(answer) {
   const seconds = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
   const speakerOf = (v) => (Number.isInteger(Number(v)) && Number(v) >= 0 ? Number(v) : 0); // no speaker labels: everything is one speaker
   const piece = (speaker, start, end, text) => ({ speaker: speakerOf(speaker), told: speaker != null, start: seconds(start), end: seconds(end), text: String(text ?? '').replace(/\s+/g, ' ').trim() });
   const durationMs = Number.isFinite(Number(answer?.metadata?.duration)) ? Math.round(Number(answer.metadata.duration) * 1000) : null;
 
   const utterances = Array.isArray(answer?.results?.utterances) ? answer.results.utterances : [];
-  const heard = Array.isArray(answer?.results?.channels) ? answer.results.channels : [];
-  const channels = Number.isInteger(answer?.metadata?.channels) ? answer.metadata.channels : heard.length;
-  // More than one channel came back: the audio was written out channel by channel, and the answer says how many.
-  // `byChannel` is whether that was asked for. When it was not (a recording from the browser, or an uploaded file
-  // that happens to be stereo), the speakers are the ones the service told apart by voice, however many channels
-  // the answer mentions; reading it channel by channel would make the whole call one speaker.
-  if (channels > 1 && byChannel !== false) return { turns: channelTurns(utterances, heard, piece), durationMs, channels };
   let pieces = utterances.map((u) => piece(u?.speaker, u?.start, u?.end, u?.transcript)).filter((p) => p.text);
   if (!pieces.length) {
     // No list of utterances came back: fall back on the paragraphs, then on the plain text.
@@ -485,94 +466,28 @@ export function turnsFrom(answer, byChannel = null) {
   return { turns, durationMs };
 }
 /**
- * The turns of a recording that was written out channel by channel: the speaker is the channel. The service does
- * not promise the order its list comes in, so it is put in order of time here. Nothing is cut where two people
- * talk over each other: a turn may begin before the one before it has ended, because that is what happened.
- */
-function channelTurns(utterances, heard, piece) {
-  let pieces = utterances.map((u) => piece(u?.channel ?? 0, u?.start, u?.end, u?.transcript)).filter((p) => p.text);
-  if (!pieces.length) {
-    // No list of utterances came back: use each channel's sentences.
-    heard.forEach((channel, index) => {
-      for (const paragraph of channel?.alternatives?.[0]?.paragraphs?.paragraphs ?? []) {
-        for (const sentence of Array.isArray(paragraph?.sentences) ? paragraph.sentences : []) pieces.push(piece(index, sentence?.start, sentence?.end, sentence?.text));
-      }
-    });
-    pieces = pieces.filter((p) => p.text);
-  }
-  pieces.sort((a, b) => a.start - b.start || a.end - b.end || a.speaker - b.speaker);
-  const turns = [];
-  for (const { told, ...p } of pieces) {
-    const last = turns.at(-1);
-    if (last && last.speaker === p.speaker) { last.text += ` ${p.text}`; last.end = Math.max(last.end, p.end); }
-    else turns.push(p);
-  }
-  return turns;
-}
-
-/**
- * Who is on which channel of a phone call, as speaker number -> name. The phone service puts the person it rang
- * first on the first channel, so which one is the recruiter differs between a call placed and a call that came
- * in; the call carries that as `speaker_roles`. Somebody whose name is not known is "Candidate" (a call that was
- * placed) or "Caller" (a call that came in), and takes their name when the call is added to a candidate.
- */
-function phoneSpeakers(call) {
-  const roles = json(call.speaker_roles, {});
-  const candidate = call.candidate_id ? q.get('SELECT name FROM candidates WHERE id = ?', call.candidate_id)?.name : null;
-  const speakers = {};
-  for (const [channel, role] of Object.entries(roles)) {
-    speakers[channel] = role === 'recruiter' ? userName(call.created_by) || 'Recruiter' : candidate || (call.direction === 'inbound' ? 'Caller' : 'Candidate');
-  }
-  return speakers;
-}
-
-// Others can ask to be told when a call has been written out and its notes are there, or when it could not be
-// written out after all. The phone module uses it to e-mail the recruiter, who may be nowhere near a screen.
-const readyListeners = [];
-export const onCallReady = (listener) => { readyListeners.push(listener); };
-function tellReady(callId) {
-  for (const listener of readyListeners) {
-    Promise.resolve().then(() => listener(callId)).catch((err) => console.error('Could not tell someone their call is ready:', err?.message ?? err));
-  }
-}
-
-/** A message left on the phone line by a number that is nobody's: anyone can leave one, so nothing is spent on it unasked. */
-const fromNobody = (call) => call.source === 'phone' && Boolean(call.voicemail) && !call.candidate_id;
-/**
- * What follows a transcript: the notes are written (unless they are there, could not be written, or the call is a
- * message from nobody's number), and then whoever asked is told. Also used to pick up a call that a restart, or a
- * failed e-mail, left written out but with its recruiter never told. Safe to ask for twice: one runs at a time.
+ * What follows a transcript: the notes are written, unless they are already there or could not be written. Safe to
+ * ask for twice: one runs at a time.
  */
 const finishing = new Set();
-export function finishWritingUp(id) {
+function finishWritingUp(id) {
   const call = callRow(id);
   if (!call || finishing.has(id)) return;
   // The recruiter comes back to a transcript and its notes. Notes that are already there (written or edited before a
   // second transcription) are left alone. The submission is never drafted unasked: that is a button.
   // If they cannot be written, the reason is kept on the call (see notesFor) and the page shows it.
-  if (call.status === 'ready' && aiConfigured() && !call.notes && !call.notes_error && !fromNobody(call)) {
+  if (call.status === 'ready' && aiConfigured() && !call.notes && !call.notes_error) {
     finishing.add(id);
     notesFor(id).catch((err) => console.error('Writing call notes failed:', err?.status ?? '', err?.name ?? '', err?.message ?? err))
-      .finally(() => { finishing.delete(id); tellReady(id); });
-  } else tellReady(id);
-}
-
-// A phone call is written out with nobody at a screen to press "Transcribe" again, so when the transcription
-// service is busy, failing or not answering, the call goes back in line by itself with a growing pause.
-const PHONE_RETRY = Number(process.env.ORACLE_PHONE_RETRY_MS) > 0 ? Number(process.env.ORACLE_PHONE_RETRY_MS) : 60000;
-const PHONE_RETRY_STEPS = [1, 5, 15, 60, 180, 360, 720, 1440]; // minutes: about two days in all
-const retryTimers = new Map();
-function transcribeLater(id, wait) {
-  clearTimeout(retryTimers.get(id));
-  // A long wait is also kept in the database (transcribe_next_at), so a restart picks it up; see recoverAfterRestart.
-  retryTimers.set(id, setTimeout(() => { retryTimers.delete(id); startTranscription(id); }, Math.min(wait, 2 ** 31 - 1)).unref());
+      .finally(() => finishing.delete(id));
+  }
 }
 
 // Transcription runs in the background, two calls at a time, never inside the request that delivered the audio.
 const waiting = [];
 const queued = new Set();
 let running = 0;
-export function startTranscription(callId) {
+function startTranscription(callId) {
   if (queued.has(callId)) return;
   queued.add(callId);
   waiting.push(callId);
@@ -597,8 +512,6 @@ async function transcribeCall(id) {
 }
 async function transcribeAudio(call) {
   const id = call.id;
-  // A phone call whose audio has each person on a channel of their own.
-  const twoChannel = call.source === 'phone' && call.audio_channels === 2;
   // Saved only if the call is still waiting for this, with the same audio: it may have been deleted, a transcript
   // pasted in, or its audio replaced, meanwhile.
   const settle = (sql, ...params) =>
@@ -606,41 +519,22 @@ async function transcribeAudio(call) {
   let answer;
   try {
     if (!call.audio_file) throw new TranscriptionError('missing_file');
-    answer = await deepgram(audioPath(call.audio_file), call.audio_type, twoChannel);
+    answer = await deepgram(audioPath(call.audio_file), call.audio_type);
   } catch (err) {
     const problem = err instanceof TranscriptionError ? err : new TranscriptionError('server', { detail: String(err?.message ?? err) });
     console.error('Transcription failed:', problem.kind, problem.status ?? '', problem.code ?? '', problem.detail, problem.requestId ?? '');
-    const step = PHONE_RETRY_STEPS[call.transcribe_tries];
-    if (call.source === 'phone' && problem.retryable && step) {
-      // Still "transcribing" as far as the page is concerned: it will be, again, shortly.
-      const wait = PHONE_RETRY * step;
-      if (settle('transcribe_tries = transcribe_tries + 1, transcribe_next_at = ?', new Date(Date.now() + wait).toISOString())) {
-        console.error(`Call ${id}: trying the transcription again in ${Math.round(wait / 1000)} seconds.`);
-        transcribeLater(id, wait);
-      }
-      return;
-    }
-    if (settle(`status = 'failed', error = ?, transcribe_next_at = NULL`, problem.message)) tellReady(id);
+    settle(`status = 'failed', error = ?`, problem.message);
     return;
   }
-  const { turns, durationMs, channels } = turnsFrom(answer, twoChannel);
+  const { turns, durationMs } = turnsFrom(answer);
   if (!turns.length) {
-    if (settle(`status = 'failed', error = ?, duration_ms = COALESCE(duration_ms, ?), transcribe_next_at = NULL`, NO_SPEECH, durationMs)) tellReady(id);
+    settle(`status = 'failed', error = ?, duration_ms = COALESCE(duration_ms, ?)`, NO_SPEECH, durationMs);
     return;
-  }
-  // On a two-channel phone call the speaker is the channel, so the names are known without anyone listening. If the
-  // service nevertheless answered for one channel, both people are in it and nobody can be named from here.
-  let named = null;
-  if (twoChannel) {
-    if (channels === 2) named = JSON.stringify(phoneSpeakers(call));
-    else console.error(`Call ${id}: its audio has two channels but the transcription service answered for ${channels ?? 1}, so the speakers could not be named.`);
-  } else if (call.source === 'phone' && call.voicemail && new Set(turns.map((turn) => turn.speaker)).size === 1) {
-    named = JSON.stringify(phoneSpeakers(call)); // a message left by a caller: one channel, one person
   }
   // Names given to the speakers of a pasted transcript do not carry over: the service numbers speakers its own way.
   const saved = settle(`status = 'ready', error = NULL, transcript = ?, transcript_source = 'deepgram', duration_ms = COALESCE(duration_ms, ?),
-    transcribe_tries = 0, transcribe_next_at = NULL, notes_error = CASE WHEN notes IS NULL THEN NULL ELSE notes_error END,
-    speakers = COALESCE(?, CASE WHEN transcript_source = 'pasted' THEN '{}' ELSE speakers END)`, JSON.stringify(turns), durationMs, named);
+    notes_error = CASE WHEN notes IS NULL THEN NULL ELSE notes_error END,
+    speakers = CASE WHEN transcript_source = 'pasted' THEN '{}' ELSE speakers END`, JSON.stringify(turns), durationMs);
   if (!saved) return;
   finishWritingUp(id);
 }
@@ -938,7 +832,7 @@ async function writeSubmission(id) {
 // ---------- tidying up ----------
 /** A recording nobody has added to for a long while was cut short: keep what arrived, or remove it when nothing did. */
 async function finishStaleRecordings(staleAfter) {
-  // Only recordings made in a browser arrive in pieces. A phone call under way is looked after by phone.js.
+  // Only recordings made in a browser arrive in pieces.
   for (const call of q.all(`SELECT * FROM calls WHERE status = 'recording' AND source = 'recorded'`)) {
     try {
       let latest = Date.parse(call.created_at);
@@ -970,10 +864,8 @@ async function removeOldPieces() {
 }
 /** What a restart leaves behind: transcriptions that were under way, recordings that were cut short, and files no call points at. */
 function recoverAfterRestart() {
-  for (const call of q.all(`SELECT id, transcribe_next_at FROM calls WHERE status = 'transcribing'`)) {
+  for (const call of q.all(`SELECT id FROM calls WHERE status = 'transcribing'`)) {
     if (!transcriptionConfigured()) q.run(`UPDATE calls SET status = 'uploaded', updated_at = ? WHERE id = ?`, now(), call.id);
-    // A phone call that was waiting to be tried again keeps waiting for what is left of its pause.
-    else if (call.transcribe_next_at && Date.parse(call.transcribe_next_at) > Date.now()) transcribeLater(call.id, Date.parse(call.transcribe_next_at) - Date.now());
     else startTranscription(call.id);
   }
   // Audio and pieces whose call is gone (a candidate deleted in a way that skipped the file clean-up, or a crash
@@ -987,6 +879,146 @@ function recoverAfterRestart() {
   tidy();
   setInterval(tidy, HOUR).unref();
 }
+
+// ---------- putting a call on a candidate ----------
+const candidateName = (id) => (id ? q.get('SELECT name FROM candidates WHERE id = ?', id)?.name ?? null : null);
+/** The note on a profile that this call's summary was last saved as, while it is still there and still agency-only. */
+const savedNote = (call) => (call.note_id && call.application_id
+  ? q.get('SELECT id FROM notes WHERE id = ? AND application_id = ? AND private = 1', call.note_id, call.application_id) ?? null : null);
+/**
+ * What follows a call when it is put on a different person (`name`), or taken off everyone (null). A title the
+ * call was given automatically is rewritten, so a call moved because it was put on the wrong person does not keep
+ * that person's name; a title somebody typed is left alone. Speakers named after the person it was on, or just
+ * "Candidate" because nobody was known, are renamed the same way.
+ */
+function renamedFor(call, name) {
+  const before = candidateName(call.candidate_id);
+  // "Call with +16475550100" is automatic too: the call came from somewhere that knew the person only by their number.
+  const automatic = call.title === UNTITLED || (before && call.title === `Call with ${before}`) || /^Call with \+?[\d\s().-]{7,}$/.test(call.title);
+  const speakers = json(call.speakers, {});
+  for (const [number, speaker] of Object.entries(speakers)) {
+    if (speaker === before || (name && speaker === 'Candidate')) speakers[number] = name || 'Candidate';
+  }
+  const title = !automatic ? call.title : name ? `Call with ${name}` : UNTITLED;
+  return { title, speakers: JSON.stringify(speakers) };
+}
+/** The line a candidate's history gets for a call. One that came from Metaview says so. */
+const historyLine = (call, verb) => `${call.source === 'metaview' ? 'Metaview call' : `Call ${verb}`}${lengthWords(call.duration_ms)}`;
+
+/** Attach a call to an application and its candidate, and say so on that candidate's history. */
+function attach(call, app, userId, verb) {
+  // The summary saved on a profile follows the call to another job of the same person. It does not stay on the
+  // profile of somebody the call turned out not to be with.
+  const note = savedNote(call);
+  const samePerson = call.candidate_id === app.candidate_id;
+  if (note && samePerson) q.run('UPDATE notes SET application_id = ? WHERE id = ?', app.id, note.id);
+  else if (note) q.run('DELETE FROM notes WHERE id = ?', note.id);
+  const { title, speakers } = renamedFor(call, app.candidate_name);
+  // A draft written for another job does not follow the call.
+  q.run(`UPDATE calls SET application_id = ?, candidate_id = ?, title = ?, speakers = ?, submission = NULL, submission_at = NULL, note_id = ?, updated_at = ? WHERE id = ?`,
+    app.id, app.candidate_id, title, speakers, note && samePerson ? note.id : null, now(), call.id);
+  // A call still being recorded is put on the candidate's history when it ends, with its length.
+  if (call.status !== 'recording') logCall(app.id, userId, historyLine(call, verb));
+}
+/** Take a call off its candidate. The call is kept; what was written for or saved on that person does not stay behind. */
+function detach(call) {
+  const note = savedNote(call);
+  if (note) q.run('DELETE FROM notes WHERE id = ?', note.id);
+  const { title, speakers } = renamedFor(call, null);
+  q.run('UPDATE calls SET application_id = NULL, candidate_id = NULL, title = ?, speakers = ?, submission = NULL, submission_at = NULL, note_id = NULL, updated_at = ? WHERE id = ?',
+    title, speakers, now(), call.id);
+}
+
+// ---------- a call recorded somewhere else ----------
+// A conversation recorded outside The Book (in Metaview) becomes a call here with its transcript, its notes and a
+// link back to where the recording is, and with no audio: there is nothing to play and nothing to transcribe. The
+// module that fetched it (metaview.js) hands it over through the three functions below, so everything that is true
+// of a call (who may see it, what happens when it is put on a candidate, how it is deleted) is decided here.
+
+/** An application in the shape `attach` reads, or null when it is not there. */
+const applicationFor = (id) => (Number.isInteger(id)
+  ? q.get('SELECT a.id, a.candidate_id, c.name AS candidate_name FROM applications a JOIN candidates c ON c.id = a.candidate_id WHERE a.id = ?', id) ?? null : null);
+/** Notes from outside, at the length notes can be here. Longer ones are cut at the end of a line, and say so. */
+function notesWithin(notes, where) {
+  const text = String(notes ?? '').replace(/\r\n?/g, '\n').trim();
+  if (text.length <= MAX_NOTES) return text || null;
+  const ending = `\n\nThe rest of these notes is in ${where}.`;
+  const kept = text.slice(0, MAX_NOTES - ending.length);
+  return `${kept.slice(0, Math.max(kept.lastIndexOf('\n'), 1)).trimEnd()}${ending}`;
+}
+
+/** Speakers as they are kept for a call on a candidate: one known only as "Candidate" takes that candidate's name. */
+const speakersFor = (speakers, candidate) => (candidate
+  ? Object.fromEntries(Object.entries(speakers).map(([number, name]) => [number, name === 'Candidate' ? candidate : name])) : speakers);
+
+/**
+ * Keep a conversation recorded elsewhere as a call. Resolves to the new call's id.
+ * @param call { source, where, title, withName, turns, speakers, notes, noTranscript, durationMs, externalUrl,
+ *               tookPlaceAt, wording, createdBy, applicationId }
+ *   where         the name of the place it was recorded, for sentences ("Metaview")
+ *   title         what the conversation was called there, if anything; otherwise it is "Call with <withName>"
+ *   turns         the transcript, [{ speaker, start, end, text }], and `speakers` the name of each speaker number
+ *   noTranscript  the sentence that explains why there is no transcript, when there is none
+ *   wording       what the call's record says where a recording made here has a recruiter's confirmation of consent.
+ *                 Nobody confirmed anything in The Book, so there is no name and no time beside it.
+ *   createdBy     the user of The Book the call belongs to
+ *   applicationId the application to put it on, if any. It is said on that candidate's history, as done by `addedBy`.
+ *                 A speaker known only as "Candidate" is then given that candidate's name, as when a call is
+ *                 put on a candidate later (see renamedFor).
+ *   then          run with the new call's id before anything is final, so the caller's own record of the call is
+ *                 written with it or not at all
+ */
+export function addOutsideCall({ source, where, title = null, withName = null, turns = [], speakers = {}, notes = null, noTranscript = null,
+  durationMs = null, externalUrl = null, tookPlaceAt = null, wording, createdBy = null, applicationId = null, addedBy = createdBy, then = null }) {
+  return tx(() => {
+    const app = applicationFor(applicationId);
+    const t = now();
+    const kept = notesWithin(notes, where);
+    const named = speakersFor(speakers, app?.candidate_name);
+    const id = q.insert(
+      `INSERT INTO calls (recording_id, title, status, error, source, duration_ms, transcript, transcript_source, speakers, notes, notes_at, notes_auto,
+         external_url, took_place_at, application_id, candidate_id, consent_wording, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      crypto.randomBytes(16).toString('hex'), title || (app ? `Call with ${app.candidate_name}` : withName ? `Call with ${withName}` : UNTITLED),
+      turns.length ? 'ready' : 'uploaded', turns.length ? null : noTranscript, source, durationMs > 0 ? Math.round(durationMs) : null,
+      turns.length ? JSON.stringify(turns) : null, turns.length ? source : null, JSON.stringify(named), kept, kept ? t : null, kept ? 1 : 0,
+      externalUrl, tookPlaceAt, app?.id ?? null, app?.candidate_id ?? null, wording, createdBy, t, t);
+    if (app) logCall(app.id, addedBy, historyLine({ source, duration_ms: durationMs }, 'added'));
+    then?.(id);
+    return id;
+  });
+}
+
+/**
+ * Add what arrived after a call from elsewhere was brought in: its transcript, its notes, or the reason there will
+ * be no notes. Each only fills a gap: a transcript somebody pasted in and notes somebody wrote are never replaced.
+ */
+export function fillOutsideCall(id, { where, turns = null, speakers = {}, notes = null, notesProblem = null }) {
+  const call = callRow(id);
+  if (!call) return;
+  if (turns?.length) {
+    q.run(`UPDATE calls SET transcript = ?, transcript_source = ?, speakers = ?, status = 'ready', error = NULL, updated_at = ? WHERE id = ? AND transcript IS NULL`,
+      JSON.stringify(turns), call.source, JSON.stringify(speakersFor(speakers, candidateName(call.candidate_id))), now(), id);
+  }
+  const kept = notesWithin(notes, where);
+  if (kept) q.run('UPDATE calls SET notes = ?, notes_at = ?, notes_auto = 1, notes_blind = 0, notes_error = NULL, updated_at = ? WHERE id = ? AND notes IS NULL', kept, now(), now(), id);
+  else if (notesProblem) q.run('UPDATE calls SET notes_error = ?, updated_at = ? WHERE id = ? AND notes IS NULL AND notes_error IS NULL', notesProblem, now(), id);
+}
+
+/** Put a call on an application, as "Add to a candidate" does. False when the call or the application is not there. */
+export function putCallOn(callId, applicationId, userId) {
+  return tx(() => {
+    const call = callRow(callId), app = applicationFor(applicationId);
+    if (!call || !app) return false;
+    if (call.application_id !== app.id) attach(call, app, userId, 'added');
+    return true;
+  });
+}
+
+// Notes that are on their way from somewhere else (Metaview is still writing them) count as being written, so the
+// call's page waits for them and does not offer to write them twice. The module that is waiting says which calls.
+let notesAwaited = () => false;
+export const whenNotesAwaited = (check) => { notesAwaited = check; };
 
 // ---------- the routes ----------
 class UploadRefused extends Error {}
@@ -1025,56 +1057,6 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
   };
   const oracleLimit = (name, user, max) => { if (!takeHit(`oracle-${name}:${user.id}`, max, HOUR)) bad('That is a lot in one hour. Try again a little later.', 429); };
 
-  const candidateName = (id) => (id ? q.get('SELECT name FROM candidates WHERE id = ?', id)?.name ?? null : null);
-  /** The note on a profile that this call's summary was last saved as, while it is still there and still agency-only. */
-  const savedNote = (call) => (call.note_id && call.application_id
-    ? q.get('SELECT id FROM notes WHERE id = ? AND application_id = ? AND private = 1', call.note_id, call.application_id) ?? null : null);
-  /**
-   * What follows a call when it is put on a different person (`name`), or taken off everyone (null). A title the
-   * call was given automatically is rewritten, so a call moved because it was put on the wrong person does not keep
-   * that person's name; a title somebody typed is left alone. Speakers named after the person it was on, or just
-   * "Candidate" because nobody was known, are renamed the same way.
-   */
-  function renamedFor(call, name) {
-    const before = candidateName(call.candidate_id);
-    // A message a caller left is titled "Voicemail ..." the same automatic way.
-    const voicemail = call.title === VOICEMAIL || (before && call.title === `${VOICEMAIL} from ${before}`);
-    const automatic = voicemail || call.title === UNTITLED || (before && call.title === `Call with ${before}`);
-    const speakers = json(call.speakers, {});
-    for (const [number, speaker] of Object.entries(speakers)) {
-      if (speaker === before || (name && (speaker === 'Candidate' || speaker === 'Caller'))) speakers[number] = name || 'Candidate';
-    }
-    const title = !automatic ? call.title : voicemail ? (name ? `${VOICEMAIL} from ${name}` : VOICEMAIL) : name ? `Call with ${name}` : UNTITLED;
-    return { title, speakers: JSON.stringify(speakers) };
-  }
-
-  /** Attach a call to an application and its candidate, and say so on that candidate's history. */
-  function attach(call, app, userId, verb) {
-    // The summary saved on a profile follows the call to another job of the same person. It does not stay on the
-    // profile of somebody the call turned out not to be with.
-    const note = savedNote(call);
-    const samePerson = call.candidate_id === app.candidate_id;
-    if (note && samePerson) q.run('UPDATE notes SET application_id = ? WHERE id = ?', app.id, note.id);
-    else if (note) q.run('DELETE FROM notes WHERE id = ?', note.id);
-    const { title, speakers } = renamedFor(call, app.candidate_name);
-    // A draft written for another job does not follow the call.
-    q.run(`UPDATE calls SET application_id = ?, candidate_id = ?, title = ?, speakers = ?, submission = NULL, submission_at = NULL, note_id = ?, updated_at = ? WHERE id = ?`,
-      app.id, app.candidate_id, title, speakers, note && samePerson ? note.id : null, now(), call.id);
-    // The entry in the list of phone calls goes with it, so it is erased with the person if they ever are.
-    q.run('UPDATE phone_calls SET candidate_id = ?, application_id = ? WHERE call_id = ?', app.candidate_id, app.id, call.id);
-    // A call still being recorded is put on the candidate's history when it ends, with its length.
-    if (call.status !== 'recording') logCall(app.id, userId, `Call ${verb}${lengthWords(call.duration_ms)}`);
-  }
-  /** Take a call off its candidate. The call is kept; what was written for or saved on that person does not stay behind. */
-  function detach(call) {
-    const note = savedNote(call);
-    if (note) q.run('DELETE FROM notes WHERE id = ?', note.id);
-    const { title, speakers } = renamedFor(call, null);
-    q.run('UPDATE calls SET application_id = NULL, candidate_id = NULL, title = ?, speakers = ?, submission = NULL, submission_at = NULL, note_id = NULL, updated_at = ? WHERE id = ?',
-      title, speakers, now(), call.id);
-    q.run('UPDATE phone_calls SET candidate_id = NULL, application_id = NULL WHERE call_id = ?', call.id);
-  }
-
   /** Everything the call's page shows. */
   function detail(id, user) {
     const call = loadCall(id);
@@ -1093,15 +1075,16 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
     return {
       call: {
         id: call.id, title: call.title, status: call.status, error: call.error, source: call.source, duration_ms: call.duration_ms,
-        // A phone call: which way it went, the other person's number, and whether it is a message a caller left.
-        direction: call.direction ?? null, phone_display: displayNumber(call.phone_number), voicemail: Boolean(call.voicemail),
+        // A call brought in from Metaview: its page there (where the recording can be listened to) and when the
+        // conversation took place. `created_at` is when it was brought into The Book.
+        external_url: call.external_url ?? null, took_place_at: call.took_place_at ?? null,
         created_at: call.created_at, created_by: call.created_by, created_by_name: userName(call.created_by),
         has_audio: Boolean(call.audio_file), audio_type: call.audio_type, interrupted: Boolean(call.interrupted),
         consent_at: call.consent_at, consent_wording: call.consent_wording, consent_by_name: userName(call.consent_by),
         transcript: json(call.transcript, null), transcript_source: call.transcript_source, speakers: json(call.speakers, {}),
         notes: call.notes, notes_at: call.notes_at, submission: call.submission, submission_at: call.submission_at,
         // True while the notes are being written, so the page knows to wait for them and not offer to write them twice.
-        notes_pending: writingNotes.has(call.id),
+        notes_pending: writingNotes.has(call.id) || (!call.notes && Boolean(notesAwaited(call.id))),
         // Why the last attempt to write the notes failed, while there are still none.
         notes_error: call.notes ? null : call.notes_error,
         // The notes were written before anyone knew who the call was with: worth writing again now that it is on a candidate.
@@ -1131,19 +1114,23 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
     // job: those belong to no client, and a call recorded a moment ago must not vanish from the list because a
     // client is chosen in the sidebar.
     if (int(req.query.client_id)) { where.push('(COALESCE(j.client_id, c.client_id) IS NULL OR COALESCE(j.client_id, c.client_id) = ?)'); p.push(int(req.query.client_id)); }
+    // One kind of call: the ones brought in from Metaview, or the ones recorded or uploaded in The Book.
+    if (req.query.source === 'metaview') where.push(`k.source = 'metaview'`);
+    else if (req.query.source === 'book') where.push(`k.source != 'metaview'`);
+    else if (req.query.source) bad('The kind of call to list is "metaview" or "book".');
+    // In the order the conversations happened: a call from Metaview may be brought in long after it took place.
     const rows = q.all(
       `SELECT k.id, k.title, k.status, k.source, k.duration_ms, k.created_at, k.created_by, u.name AS created_by_name,
-         k.direction, k.phone_number, k.voicemail,
+         k.external_url, k.took_place_at, k.audio_file IS NOT NULL AS has_audio,
          k.candidate_id, c.name AS candidate_name, substr(c.photo_file, 1, 8) AS candidate_photo,
          k.application_id, j.id AS job_id, j.title AS job_title, cl.name AS client_name,
          k.transcript IS NOT NULL AS has_transcript, k.notes IS NOT NULL AS has_notes, k.submission IS NOT NULL AS has_submission, k.error
        FROM calls k LEFT JOIN users u ON u.id = k.created_by LEFT JOIN candidates c ON c.id = k.candidate_id
        LEFT JOIN applications a ON a.id = k.application_id LEFT JOIN jobs j ON j.id = a.job_id
        LEFT JOIN clients cl ON cl.id = COALESCE(j.client_id, c.client_id)
-       ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY k.created_at DESC, k.id DESC LIMIT 300`, ...p);
-    res.json(rows.map(({ phone_number, ...row }) => ({
-      ...row, has_transcript: Boolean(row.has_transcript), has_notes: Boolean(row.has_notes), has_submission: Boolean(row.has_submission),
-      phone_display: displayNumber(phone_number), voicemail: Boolean(row.voicemail),
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY COALESCE(k.took_place_at, k.created_at) DESC, k.id DESC LIMIT 300`, ...p);
+    res.json(rows.map((row) => ({
+      ...row, has_audio: Boolean(row.has_audio), has_transcript: Boolean(row.has_transcript), has_notes: Boolean(row.has_notes), has_submission: Boolean(row.has_submission),
     })));
   });
 
@@ -1165,9 +1152,6 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
        VALUES (?, ?, 'recording', 'recorded', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       recordingId, clean(b.title, 160) || (app ? `Call with ${app.candidate_name}` : UNTITLED), clean(b.mimeType, 100),
       app?.id ?? null, app?.candidate_id ?? null, req.user.id, t, wording, req.user.id, t, t);
-    // Started from an event in the recruiter's day: the event then shows that its call was recorded. A key that is
-    // not one of this person's events is ignored; it never stops a recording.
-    if (b.event_key != null) tieCallToEvent(req.user.id, b.event_key, callId);
     res.status(201).json({ id: recordingId, call_id: callId });
   });
 
@@ -1364,11 +1348,12 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
   api.post('/oracle/calls/:id/transcribe', agencyOnly, (req, res) => {
     const call = loadCall(req.params.id);
     if (call.status === 'recording') bad('Finish the recording first.', 409);
+    if (call.source === 'metaview') bad('This call was recorded in Metaview, so there is no audio here to transcribe. Its transcript is brought in from Metaview when there is one.');
     if (!call.audio_file) bad('There is no audio for this call to transcribe. You can paste a transcript instead.');
     if (!transcriptionConfigured()) bad('Transcription is not connected to this workspace. Ask whoever hosts The Book to set DEEPGRAM_API_KEY, or paste a transcript instead.');
     if (call.status !== 'transcribing') {
       oracleLimit('transcribe', req.user, 60);
-      q.run(`UPDATE calls SET status = 'transcribing', error = NULL, transcribe_tries = 0, transcribe_next_at = NULL, updated_at = ? WHERE id = ?`, now(), call.id);
+      q.run(`UPDATE calls SET status = 'transcribing', error = NULL, updated_at = ? WHERE id = ?`, now(), call.id);
     }
     startTranscription(call.id);
     res.status(202).json({ status: 'transcribing' });

@@ -1,17 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines,
+  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines, LoaderCircle, Plus,
 } from 'lucide-react';
-import { api, url, ago, since, extUrl, photoUrl, fmtDate, fmtDateTime, money, firstName, NO_JOB, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
+import { api, url, ago, since, extUrl, photoUrl, telHref, fmtDate, fmtDateTime, fmtWhen, money, firstName, NO_JOB, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import ResumeViewer from './ResumeViewer.jsx';
-import { CallStatus, PhoneMark, callName, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
-import { personOf, usePhone } from '../oracle/phone.jsx';
-import { telHref } from '../oracle/calls.js';
+import { CallStatus, MetaviewMark, callName, callWhen, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
+import { kindLine, oraclePath } from '../oracle/calls.js';
+import { ChannelBadge, problemOf } from '../oracle/metaview.jsx';
 import { NoJobBadge } from './bits.jsx';
-import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal, AddToJobModal } from './CandidateModals.jsx';
+import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, PlacementFeeModal, EditCandidateModal, AddToJobModal } from './CandidateModals.jsx';
 
 const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
 const DELIVERY = { sent: { label: 'Sent', tone: 'green' }, failed: { label: 'Delivery failed', tone: 'red' }, not_configured: { label: 'Saved, not sent', tone: 'amber' } };
@@ -30,12 +30,8 @@ export default function CandidateDrawer({ id, onClose }) {
 function CandidateView({ data, onClose }) {
   const { isAgency, bump, user } = useApp();
   const toast = useToast();
-  const phone = usePhone();
-  // With the phone line connected, an agency user calls through The Book (their mobile is rung, then the candidate's,
-  // and the call is written up). Otherwise the number is an ordinary link that dials from their own device.
-  const callThroughTheBook = isAgency && phone.status?.configured ? () => phone.openDialer({ person: personOf(data), application_id: data.application.id }) : null;
   const [tab, setTab] = useState('overview');
-  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'edit' | 'addToJob' | { review } | { scorecard }
+  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'fee' | 'edit' | 'addToJob' | { review } | { scorecard }
   const { application: app, candidate, job, client, stages } = data;
   // Someone saved to The Book without a job: there is no job, client or stage, so everything that works on one
   // (moving, rejecting, scheduling, submitting, offers) is left off their profile, and "Add to a job" leads instead.
@@ -49,18 +45,20 @@ function CandidateView({ data, onClose }) {
     toast(to.kind === 'hired' ? `${firstName(candidate.name)} marked as hired` : `Moved to ${to.name}`);
     bump();
   });
-  // Recorded calls (The Oracle) belong to the agency: the hiring team never sees that they exist.
-  // The list is looked at again while a call is being written up or its recording is on its way, and as soon as a
-  // phone call placed from here changes, so a call made from this profile shows up on it without reopening it.
+  // Calls (The Oracle) belong to the agency: the hiring team never sees that they exist.
+  // The list is looked at again while a call is being written up.
   const { data: calls, error: callsError, reload: reloadCalls } = useLive(isAgency ? url('/oracle/calls', { candidate_id: candidate.id }) : null,
-    (rows) => rows.some((c) => c.status === 'transcribing' || (c.status === 'recording' && c.source === 'phone')));
-  useEffect(() => { reloadCalls(); }, [phone.call?.status, phone.call?.call_id, phone.call?.message]);
+    (rows) => rows.some((c) => c.status === 'transcribing'));
 
   const [restore] = useAction(async () => { await api.post(`/applications/${app.id}/restore`); bump(); });
   const [withdraw] = useAction(async () => { await api.post(`/applications/${app.id}/withdraw`); toast('Marked as withdrawn'); bump(); });
+  // Only asked for the agency: erasing somebody says what happens to their Metaview calls when Metaview is connected.
+  const { data: metaview } = useApi(isAgency ? '/metaview/status' : null);
   const [erase] = useAction(async () => {
     const others = data.others.length ? ` This also removes their ${data.others.length === 1 ? 'application' : 'applications'} for ${data.others.map((o) => o.job_title).join(', ')}.` : '';
-    if (!window.confirm(`Permanently delete everything held on ${candidate.name}${client ? ` at ${client.name}` : ''}: contact details, notes, scorecards, interviews, emails, résumé and recorded calls?${others} This cannot be undone.`)) return;
+    const inMetaview = metaview?.connected || calls?.some((c) => c.source === 'metaview')
+      ? `\n\nThe Book also forgets their Metaview calls. The conversations themselves stay in Metaview: delete them there too if they must go altogether.` : '';
+    if (!window.confirm(`Permanently delete everything held on ${candidate.name}${client ? ` at ${client.name}` : ''}: contact details, notes, scorecards, interviews, emails, résumé and recorded calls?${others} This cannot be undone.${inMetaview}`)) return;
     await api.del(`/candidates/${candidate.id}`);
     toast(`All data on ${candidate.name} deleted`);
     onClose();
@@ -117,14 +115,7 @@ function CandidateView({ data, onClose }) {
               {candidate.email
                 ? <a href={`mailto:${candidate.email}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Mail className="size-3.5" />{candidate.email}</a>
                 : <span className="inline-flex items-center gap-1.5 text-stone-400"><Mail className="size-3.5" />No email yet</span>}
-              {candidate.phone && (
-                <span className="inline-flex items-center gap-2">
-                  <a href={telHref(candidate.phone)} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Phone className="size-3.5" />{candidate.phone}</a>
-                  {isAgency && (callThroughTheBook
-                    ? <button type="button" onClick={callThroughTheBook} className="inline-flex h-6 items-center rounded-md bg-brand-700 px-2 text-xs font-medium text-white hover:bg-brand-800 max-sm:h-8 max-sm:px-3">Call</button>
-                    : <a href={telHref(candidate.phone)} className="inline-flex h-6 items-center rounded-md border border-line bg-white px-2 text-xs font-medium text-stone-700 hover:bg-stone-50 max-sm:h-8 max-sm:px-3">Call</a>)}
-                </span>
-              )}
+              {candidate.phone && <a href={telHref(candidate.phone)} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Phone className="size-3.5" />{candidate.phone}</a>}
               {extUrl(candidate.linkedin) && <a href={extUrl(candidate.linkedin)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 hover:text-brand-700"><Link2 className="size-3.5" />Profile link</a>}
               {candidate.location && <span className="inline-flex items-center gap-1.5"><MapPin className="size-3.5" />{candidate.location}</span>}
             </div>
@@ -212,11 +203,11 @@ function CandidateView({ data, onClose }) {
         ))}
         <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
 
-        {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onResume={() => setTab('resume')} />}
+        {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} />}
         {/* Drawn afresh when the file changes: a newer résumé can take the place of this one under the same address and name. */}
         {tab === 'resume' && app.resume_file && <ResumeViewer key={app.resume_file} app={app} />}
         {tab === 'interviews' && !general && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onScorecard={(i) => setModal({ scorecard: i })} />}
-        {tab === 'calls' && isAgency && <CallsTab data={data} calls={calls} error={callsError} onCall={candidate.phone ? callThroughTheBook : null} />}
+        {tab === 'calls' && isAgency && <CallsTab data={data} calls={calls} error={callsError} reload={reloadCalls} />}
         {tab === 'activity' && <ActivityTab data={data} />}
         {tab === 'emails' && <EmailsTab data={data} onCompose={() => setModal('email')} />}
       </div>
@@ -226,6 +217,7 @@ function CandidateView({ data, onClose }) {
       {modal === 'email' && <EmailModal data={data} onClose={() => setModal(null)} />}
       {modal === 'submit' && <SubmitModal data={data} onClose={() => setModal(null)} />}
       {modal === 'offer' && <OfferModal data={data} onClose={() => setModal(null)} />}
+      {modal === 'fee' && <PlacementFeeModal data={data} onClose={() => setModal(null)} />}
       {modal === 'edit' && <EditCandidateModal data={data} onClose={() => setModal(null)} />}
       {modal === 'addToJob' && <AddToJobModal data={data} onClose={() => setModal(null)} />}
       {modal?.review && <ReviewModal data={data} decision={modal.review} onClose={() => setModal(null)} />}
@@ -272,7 +264,7 @@ function ReviewBanner({ data, onDecide }) {
   );
 }
 
-function Overview({ data, onOffer, onResume }) {
+function Overview({ data, onOffer, onFee, onResume }) {
   const { isAgency, bump, user } = useApp();
   const { application: app, client } = data;
   const general = Boolean(app.general) || !data.job;
@@ -410,11 +402,30 @@ function Overview({ data, onOffer, onResume }) {
               <dl className="mt-2 text-sm">
                 {data.offer.salary != null && row('Base salary', money(data.offer.salary, client.currency))}
                 {data.offer.start_date && row('Start date', fmtDate(data.offer.start_date, true))}
-                {isAgency && client.fee_percent > 0 && data.offer.salary != null && row(`Your fee (${client.fee_percent}%)`, money((data.offer.salary * client.fee_percent) / 100, client.currency))}
+                {/* Once they are hired the fee is the one recorded under Placement below, so this estimate from today's terms steps aside. */}
+                {isAgency && !data.placement && client.fee_percent > 0 && data.offer.salary != null && row(`Your fee (${client.fee_percent}%)`, money((data.offer.salary * client.fee_percent) / 100, client.currency))}
               </dl>
             ) : <p className="mt-1 text-sm text-stone-500">No offer recorded yet.</p>}
             {data.offer?.notes && <p className="mt-2 text-[13px] text-stone-600">{data.offer.notes}</p>}
             {isAgency && <Button size="sm" className="mt-3 w-full" onClick={onOffer}>{data.offer ? 'Update offer' : 'Record offer'}</Button>}
+          </Card>
+        )}
+        {/* The placement recorded for Reports when they were marked hired. Sent to agency users only. */}
+        {data.placement && (
+          <Card className="p-4">
+            <h3 className="text-sm font-semibold text-stone-900">Placement</h3>
+            <dl className="mt-2 text-sm">
+              {row('Placement fee', data.placement.fee != null ? money(data.placement.fee, data.placement.currency) : <span className="font-normal text-stone-500">{data.placement.fee_edited ? 'No fee' : 'Not set'}</span>)}
+              {row('Credited to', data.placement.credited_to || 'No recruiter')}
+              {row('Recorded', fmtDate(data.placement.at, true))}
+            </dl>
+            <p className="mt-2 text-xs leading-relaxed text-stone-500">
+              {data.placement.fee_edited ? (data.placement.fee != null ? 'The fee was entered by hand.' : 'Somebody on your team said there is no fee for this placement.')
+                : data.placement.fee != null ? `The fee was worked out when they were hired: ${data.placement.fee_percent}% of the ${money(data.placement.salary, data.placement.currency)} offer.`
+                  : 'No fee could be worked out when they were hired: the offer had no salary, or the client has no fee per hire.'}
+              {' '}This is the figure Reports counts. Your agency only.
+            </p>
+            <Button size="sm" className="mt-3 w-full" onClick={onFee}>{data.placement.fee != null ? 'Correct the fee' : 'Add the fee'}</Button>
           </Card>
         )}
         {data.others.length > 0 && (
@@ -510,46 +521,109 @@ function InterviewsTab({ data, onSchedule, onScorecard }) {
   );
 }
 
-/** Calls with this person in The Oracle, recorded in the browser or made on the phone line, for any of the jobs they are being considered for. Agency only. */
-function CallsTab({ data, calls, error, onCall }) {
+/**
+ * Calls with this person in The Oracle, for any of the jobs they are being considered for: the ones recorded or
+ * uploaded in The Book and the ones brought in from Metaview. Under them, when Metaview is connected, the Metaview
+ * calls that belong to this person and are not in The Book yet, each of which can be added. Agency only.
+ */
+function CallsTab({ data, calls, error, reload }) {
   const navigate = useNavigate();
+  const toast = useToast();
   const { application: app, candidate } = data;
-  const actions = (
-    <span className="flex shrink-0 justify-end gap-2">
-      {onCall && <Button icon={Phone} size="sm" onClick={onCall}>Call</Button>}
-      <Button variant="primary" icon={Mic} size="sm" onClick={() => navigate(`/oracle?application=${app.id}`)}>Record a call</Button>
-    </span>
-  );
+  // Nothing about Metaview is asked for, or shown, unless it is connected.
+  const { data: metaview } = useApi('/metaview/status');
+  const waiting = useLive(metaview?.connected ? url('/metaview/calls', { candidate_id: candidate.id, show: 'new' }) : null);
+  const inMetaview = (waiting.data?.calls || []).filter((c) => !c.call_id);
+  // Some of these are certainly this person's. Others only may be: the number on the call is also on somebody
+  // else's record, or its address and its name point at two people. Those say so, and are only added one at a time.
+  const certain = inMetaview.filter((c) => c.match?.candidate_id === candidate.id);
+  const whoElse = (c) => {
+    if (certain.includes(c)) return null;
+    const others = (c.suggestions || []).filter((s) => s.candidate_id !== candidate.id).map((s) => `${s.name}’s`);
+    return others.length ? `Could also be ${others.join(' or ')}` : `May not be ${firstName(candidate.name)}’s`;
+  };
+  const [adding, setAdding] = useState(null); // the Metaview call being brought in just now
+  // One at a time, so Metaview is asked for one transcript at a time however many calls there are.
+  const add = async (list) => {
+    let added = 0;
+    try {
+      for (const c of list) {
+        setAdding(c.id);
+        await api.post(`/metaview/calls/${c.id}/open`, { application_id: app.id });
+        added += 1;
+      }
+    } catch (err) { toast(problemOf(err), 'error'); }
+    setAdding(null);
+    if (added) toast(added === 1 ? `Call added to ${firstName(candidate.name)}’s profile` : `${added} calls added to ${firstName(candidate.name)}’s profile`);
+    await Promise.all([reload(), waiting.reload()]);
+  };
+
+  const record = <Button variant="primary" icon={Mic} size="sm" onClick={() => navigate(`${oraclePath('record')}&application=${app.id}`)}>Record a call</Button>;
   if (error) return <Card><Empty icon={CircleAlert} title="The calls could not be loaded">{error}</Empty></Card>;
   if (!calls) return <Loading />;
-  if (!calls.length)
-    return <Card><Empty icon={AudioLines} title="No calls yet" action={actions}>{onCall ? `Call ${firstName(candidate.name)} through The Book, or record` : 'Record'} your conversations with {firstName(candidate.name)} in The Oracle, and they are kept here with their transcript and notes. Only your agency sees them.</Empty></Card>;
+  if (!calls.length && !inMetaview.length)
+    return <Card><Empty icon={AudioLines} title="No calls yet" action={record}>Record your conversations with {firstName(candidate.name)} in The Oracle, and they are kept here with their transcript and notes. Only your agency sees them.</Empty></Card>;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <span className="inline-flex items-center gap-1.5 text-xs text-stone-500"><Lock className="size-3.5" />Only your agency sees calls.</span>
-        {actions}
+        {record}
       </div>
-      <Card className="divide-y divide-line overflow-hidden">
-        {calls.map((c) => (
-          <Link key={c.id} to={`/oracle/${c.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 hover:bg-stone-50">
-            <span className={cx('flex size-8 shrink-0 items-center justify-center rounded-full ring-1 ring-inset', c.source === 'phone' ? 'bg-brand-950 text-gold ring-brand-900' : 'bg-brand-50 text-brand-700 ring-brand-100')} aria-hidden="true">
-              {c.source === 'phone' ? <Phone className="size-4" /> : <Mic className="size-4" />}
-            </span>
-            <span className="min-w-0 flex-1 basis-56">
-              <span className="flex flex-wrap items-center gap-2">
-                <span className="truncate text-sm font-medium text-stone-900">{callName(c)}</span>
-                <PhoneMark call={c} />
-                <CallStatus status={c.status} source={c.source} />
+      {calls.length > 0 && (
+        <Card className="divide-y divide-line overflow-hidden">
+          {calls.map((c) => (
+            <Link key={c.id} to={`/oracle/${c.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 hover:bg-stone-50">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700 ring-1 ring-brand-100 ring-inset" aria-hidden="true">
+                {c.source === 'metaview' ? <AudioLines className="size-4" /> : <Mic className="size-4" />}
               </span>
-              <span className="block truncate text-[13px] text-stone-500">
-                {madeBy(c)}{c.phone_display ? ` · ${c.phone_display}` : ''}{c.application_id !== app.id && c.job_title ? ` · about ${c.job_title}` : ''}
+              <span className="min-w-0 flex-1 basis-56">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="truncate text-sm font-medium text-stone-900">{callName(c)}</span>
+                  <MetaviewMark call={c} />
+                  <CallStatus status={c.status} />
+                </span>
+                <span className="block truncate text-[13px] text-stone-500">
+                  {madeBy(c)}{c.application_id !== app.id && c.job_title ? ` · about ${c.job_title}` : ''}
+                </span>
               </span>
-            </span>
-            <span className="tabular text-right text-[13px] text-stone-600">{fmtDateTime(c.created_at)}{c.duration_ms ? ` · ${fmtLength(c.duration_ms)}` : ''}</span>
-          </Link>
-        ))}
-      </Card>
+              <span className="tabular text-right text-[13px] text-stone-600">{fmtWhen(callWhen(c))}{c.duration_ms ? ` · ${fmtLength(c.duration_ms)}` : ''}</span>
+            </Link>
+          ))}
+        </Card>
+      )}
+      {inMetaview.length > 0 && (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 pt-2">
+            <div className="min-w-0 flex-1 basis-56">
+              <h3 className="text-sm font-semibold text-stone-900">In Metaview</h3>
+              <p className="text-[13px] text-stone-500">
+                {inMetaview.length === 1 ? 'A call' : 'Calls'} {certain.length === inMetaview.length
+                  ? `with ${firstName(candidate.name)} in Metaview that ${inMetaview.length === 1 ? 'is' : 'are'}`
+                  : `in Metaview that may be with ${firstName(candidate.name)} and ${inMetaview.length === 1 ? 'is' : 'are'}`} not in The Book yet. Adding one brings in its transcript and notes.
+              </p>
+            </div>
+            {certain.length > 1 && <Button size="sm" busy={Boolean(adding)} onClick={() => add(certain)}>Add all {certain.length}</Button>}
+          </div>
+          <Card className="divide-y divide-line overflow-hidden">
+            {inMetaview.map((c) => (
+              <div key={c.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
+                <ChannelBadge call={c} size={32} />
+                <span className="min-w-0 flex-1 basis-56">
+                  <span className="block truncate text-sm font-medium text-stone-900">{c.title}</span>
+                  <span className="block truncate text-[13px] text-stone-500">{[fmtWhen(c.started_at), kindLine(c)].filter(Boolean).join(' · ')}</span>
+                  {whoElse(c) && <span className="block truncate text-[13px] font-medium text-amber-700">{whoElse(c)}</span>}
+                </span>
+                {adding === c.id
+                  ? <span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-brand-700" role="status"><LoaderCircle className="size-3.5 animate-spin" />Bringing it in…</span>
+                  : <Button size="sm" icon={Plus} disabled={Boolean(adding)} onClick={() => add([c])} aria-label={`Add ${c.title}`}>Add</Button>}
+              </div>
+            ))}
+          </Card>
+          {waiting.data?.total > waiting.data?.calls.length && (
+            <p className="text-xs text-stone-500">These are the {waiting.data.calls.length} most recent. <Link to={`${oraclePath('metaview')}&who=everyone&q=${encodeURIComponent(candidate.name)}`} className="font-medium text-brand-700 hover:underline">Find the rest in The Oracle</Link></p>
+          )}
+        </>
+      )}
     </div>
   );
 }

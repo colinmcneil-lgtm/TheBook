@@ -40,6 +40,10 @@ export function watchForUpdate() {
   return (err) => missedLoads > before || (online() && /dynamically imported module|module script failed/i.test(String(err?.message)));
 }
 
+/** Something small this browser keeps for next time (the client chosen in the sidebar, the last tab used). Null when it has nothing, or may not keep things. */
+export const remembered = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
+export const remember = (key, value) => { try { value == null ? localStorage.removeItem(key) : localStorage.setItem(key, value); } catch { /* storage unavailable */ } };
+
 /** Build a path with query parameters, skipping empty values. */
 export function url(path, params = {}) {
   const qs = new URLSearchParams();
@@ -59,6 +63,12 @@ export const fmtDate = (d, withYear = false) =>
   d ? parseDate(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(withYear ? { year: 'numeric' } : {}) }) : '';
 export const fmtTime = (d) => new Date(d).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 export const fmtDateTime = (d) => `${new Date(d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}, ${fmtTime(d)}`;
+/** The same, with the year when it is not this year: for lists that go back a long way. */
+export const fmtWhen = (d) => {
+  const date = new Date(d);
+  if (date.getFullYear() === new Date().getFullYear()) return fmtDateTime(d);
+  return `${date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}, ${fmtTime(d)}`;
+};
 export const fmtDay = (d) => {
   const date = new Date(d), today = new Date();
   const diff = Math.round((new Date(date).setHours(0, 0, 0, 0) - new Date(today).setHours(0, 0, 0, 0)) / DAY);
@@ -93,6 +103,8 @@ export function extUrl(value) {
   // "example.com:8080" is a host and port, not a scheme.
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^(javascript|data|vbscript|mailto|tel|file|blob|about):/i.test(s) ? null : `https://${s}`;
 }
+/** A tap-to-call address for a phone number however it was typed. */
+export const telHref = (number) => `tel:${String(number || '').replace(/[^\d+]/g, '')}`;
 export const toLocalInput = (d) => {
   const x = new Date(d);
   const pad = (n) => String(n).padStart(2, '0');
@@ -138,6 +150,11 @@ export const REJECT_REASONS = [
   'Not enough relevant experience', 'Skills not a match for this role', 'Salary expectations too far apart',
   'Location or right-to-work mismatch', 'Stronger candidates in process', 'Role closed or on hold', 'Other',
 ];
+/**
+ * Is this the name of an interview stage the agency holds itself ("Recruiter screen", "Agency interview")? Such a
+ * stage starts with "Interview with the client" unticked on the job form. The server uses the same rule (db.js).
+ */
+export const agencyStageName = (name) => /recruiter|screen|agency/i.test(String(name || ''));
 export const ENGAGEMENTS = { retainer: 'Monthly retainer', per_hire: 'Fee per hire', hybrid: 'Retainer + fee per hire' };
 
 /** What stands where a job would be for someone saved to The Book without one. The same words everywhere. */

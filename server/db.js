@@ -8,7 +8,9 @@ export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 export const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
-db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+// secure_delete: what is deleted is written over, not just marked as free space. People ask to be erased and keys
+// get replaced, and neither should be readable afterwards in a copy of the file.
+db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
@@ -215,22 +217,23 @@ CREATE TABLE IF NOT EXISTS email_templates (
   body TEXT NOT NULL
 );
 
--- The Oracle: calls with candidates that a recruiter recorded or uploaded, with the transcript, the notes summary
--- and the draft write-up for the hiring team. Agency only: client users never see any of it.
+-- The Oracle: calls with candidates that a recruiter recorded or uploaded, or that were brought in from Metaview,
+-- with the transcript, the notes summary and the draft write-up for the hiring team. Agency only: client users
+-- never see any of it.
 CREATE TABLE IF NOT EXISTS calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused, so an old link cannot open a different call
   recording_id TEXT NOT NULL UNIQUE,                 -- 32 hex characters; names the folder the pieces of a recording arrive in
   title TEXT NOT NULL,
   status TEXT NOT NULL,                              -- recording | uploaded | transcribing | ready | failed
   error TEXT,                                        -- why transcription failed, in plain English
-  source TEXT NOT NULL,                              -- recorded | uploaded
+  source TEXT NOT NULL,                              -- recorded | uploaded | metaview (and phone, on calls from before phone calls were taken out)
   mime_type TEXT,                                    -- the format the browser said it was recording in
   audio_file TEXT, audio_type TEXT, audio_size INTEGER, -- the finished audio: a file in the uploads folder
   duration_ms INTEGER,
   interrupted INTEGER NOT NULL DEFAULT 0,            -- 1 = finished from what had arrived after the recording was cut short
   joined_parts INTEGER,                              -- how many pieces of the recording the audio file was made from
   transcript TEXT,                                   -- JSON: [{ speaker, start, end, text }]
-  transcript_source TEXT,                            -- deepgram | pasted
+  transcript_source TEXT,                            -- deepgram | pasted | metaview
   speakers TEXT NOT NULL DEFAULT '{}',               -- JSON: speaker number -> name
   notes TEXT, notes_at TEXT,
   notes_auto INTEGER NOT NULL DEFAULT 0,             -- 1 = the notes are as the AI wrote them; 0 once somebody has typed or changed them
@@ -249,19 +252,24 @@ CREATE TABLE IF NOT EXISTS calls (
 `);
 
 // ---------- migrations for databases created by an earlier version ----------
+/** Add a column a table does not have yet. Says whether it was added just now, for a step that must only follow the first time. */
 function addColumn(table, column, type) {
   const has = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
   if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  return !has;
 }
 /**
  * Rebuild a table with a changed definition (SQLite cannot alter a column in place). `change` receives the table's
  * CREATE statement and returns the new one; nothing happens if it returns it unchanged. Rows and ids are kept, and
  * so is the table's record of the highest id it ever gave out, so the id of a deleted row is still never reused.
+ * The table's indexes and triggers are kept too, written as they were: dropping a table drops them with it, and
+ * one that an earlier version made and this one no longer makes would otherwise be gone for good.
  */
 function rebuildTable(table, change) {
   const { sql } = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
   const changed = change(sql);
   if (changed === sql) return;
+  const belongings = db.prepare(`SELECT sql FROM sqlite_master WHERE tbl_name = ? AND type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY rowid`).all(table);
   const rebuilt = changed.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?\w+["`]?/i, `CREATE TABLE ${table}__new`);
   // sqlite_sequence only exists once some table uses AUTOINCREMENT, and dropping a table discards its row.
   const hasSequences = db.prepare(`SELECT 1 AS x FROM sqlite_master WHERE name = 'sqlite_sequence'`).get();
@@ -273,6 +281,7 @@ function rebuildTable(table, change) {
     db.exec(`INSERT INTO ${table}__new SELECT * FROM ${table}`);
     db.exec(`DROP TABLE ${table}`);
     db.exec(`ALTER TABLE ${table}__new RENAME TO ${table}`);
+    for (const own of belongings) db.exec(own.sql);
     if (highest != null && /AUTOINCREMENT/i.test(changed)) {
       // The copy only counted up to the highest row that still exists; put back the real high-water mark.
       const kept = db.prepare('UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = ?').run(highest, table).changes;
@@ -424,184 +433,168 @@ CREATE TABLE IF NOT EXISTS earlier_resumes (
 );
 CREATE INDEX IF NOT EXISTS idx_earlier_resumes_app ON earlier_resumes(application_id);`);
 
-// ---------- phone calls ----------
-// Calls placed and received through The Book's own phone number (see phone.js). Agency only, like the Oracle.
+// ---------- features that have been taken out ----------
+// The Book once had phone calls of its own and a calendar in The Oracle. Both are gone, and a database made today has
+// nothing of theirs. A database that was in use before still holds their tables (phone_calls, phone_webhooks,
+// phone_recordings_owed, phone_calls_erased, calendar_links, calendar_events), their columns on users (phone and the
+// PIN columns) and on calls (direction, phone_number, speaker_roles, audio_channels, voicemail, notified_at,
+// event_key and the retry columns), and their triggers and indexes. They are left exactly as they are: nothing here
+// drops, empties or rewrites them, because removing a feature is no reason to touch people's data on a live system.
+// Nothing reads or writes them any more, so the app runs the same on a database that has them and on one that never did.
+// The one way they are ever cleared is by hand: `node server/forget-removed.js` removes the saved calendar links and
+// the phone numbers and PINs, for an owner who wants them gone.
+
+// ---------- finding the candidate a conversation was with ----------
+// Kept together and after everything above: the indexes and triggers on candidates have to be made again whenever
+// that table has been rebuilt by a migration. They are what lets match.js look people up by e-mail address, by phone
+// number and by name without reading every candidate.
 db.exec(`
--- One row for each phone call, from the moment it is placed or arrives. This is what the screen follows while the
--- call is live, and what ties the phone service's webhooks and its recording to the call in the Oracle.
-CREATE TABLE IF NOT EXISTS phone_calls (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,   -- the recruiter on the call
-  direction TEXT NOT NULL,                                   -- outbound (clicked in the app) | switchboard (dialled in from their own phone) | inbound
-  status TEXT NOT NULL,                                      -- ringing_you | waiting_for_you | calling_them | in_call | ended | failed
-  outcome TEXT,                                              -- completed | busy | no_answer | failed | you_did_not_answer | cancelled
-  reason TEXT,                                               -- which sentence explains the outcome, when the outcome alone does not say
-  to_number TEXT,                                            -- the other person's number, in the stored form (+1...)
-  user_number TEXT,                                          -- the recruiter's own phone that was rung, or that rang in
-  -- Erasing a person erases the record of the calls with them. Removing an application leaves it with the person.
-  candidate_id INTEGER REFERENCES candidates(id) ON DELETE CASCADE,
-  application_id INTEGER REFERENCES applications(id) ON DELETE SET NULL,
-  record INTEGER NOT NULL DEFAULT 1,                         -- 0 = placed with no recording and no notice
-  event_key TEXT,                                            -- the calendar event this call was made from, if any
-  call_sid TEXT, child_sid TEXT,                             -- the phone service's names for the two halves of the call
-  pin_ok INTEGER NOT NULL DEFAULT 0,                         -- switchboard: the right PIN has been keyed in on this call
-  tries INTEGER NOT NULL DEFAULT 0,                          -- how many times this call has been asked for a key or a number
-  notice_at TEXT,                                            -- when the recorded-call notice was played to the other person
-  answered_at TEXT, ended_at TEXT, hangup_at TEXT,           -- when the two were joined, when it ended, when the app asked to hang up
-  talk_sec INTEGER,                                          -- how long the two spoke
-  voicemail INTEGER NOT NULL DEFAULT 0,                      -- 1 = nobody answered and the caller left a message
-  -- The recording: waiting (for the phone service to say it is ready) | pending (ready, to be fetched) | fetching |
-  -- stored (the audio is on our disk) | absent (none was made) | discarded (the call was deleted first) | failed
-  recording_state TEXT, recording_sid TEXT, recording_channels INTEGER, recording_sec INTEGER,
-  recording_tries INTEGER NOT NULL DEFAULT 0, recording_next_at TEXT, recording_since TEXT,
-  recording_deleted_at TEXT,                                 -- when the phone service's own copy was deleted
-  call_id INTEGER REFERENCES calls(id) ON DELETE SET NULL,   -- the call in the Oracle that this one is, or will become
-  call_made INTEGER NOT NULL DEFAULT 0,                      -- 1 = it has had a call in the Oracle; with call_id empty, that call was deleted
-  checked_at TEXT,                                           -- when the phone service was last asked about a call that went quiet
-  started_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
--- What the phone service told us about each call, kept for two weeks so a call that went wrong can be understood.
--- Numbers and keys pressed are masked before a row is written: nothing here can be used to ring anyone.
-CREATE TABLE IF NOT EXISTS phone_webhooks (
-  id INTEGER PRIMARY KEY,
-  phone_call_id INTEGER REFERENCES phone_calls(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL,
-  params TEXT NOT NULL,
-  received_at TEXT NOT NULL
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_phone_calls_sid ON phone_calls(call_sid) WHERE call_sid IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_phone_calls_user ON phone_calls(user_id, started_at);
-CREATE INDEX IF NOT EXISTS idx_phone_calls_candidate ON phone_calls(candidate_id);
-CREATE INDEX IF NOT EXISTS idx_phone_calls_call ON phone_calls(call_id);
-CREATE INDEX IF NOT EXISTS idx_phone_webhooks_call ON phone_webhooks(phone_call_id);`);
-// Each agency user's own mobile (the phone The Book rings for them, and the one they may ring in from) and the PIN
-// that goes with ringing in. Only a hash of the PIN is kept. Three wrong PINs lock that phone out for a while.
-addColumn('users', 'phone', 'TEXT');
-addColumn('users', 'phone_pin_hash', 'TEXT');
-addColumn('users', 'phone_pin_fails', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('users', 'phone_locked_until', 'TEXT');
-db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone) WHERE phone IS NOT NULL'); // a phone says who is ringing in, so no two people share one
-// What a call in the Oracle carries when it was a phone call (calls.source = 'phone').
-addColumn('calls', 'direction', 'TEXT');                       // outbound | inbound
-addColumn('calls', 'phone_number', 'TEXT');                    // the other person's number
-addColumn('calls', 'speaker_roles', 'TEXT');                   // JSON: channel of the audio -> recruiter | candidate
-addColumn('calls', 'audio_channels', 'INTEGER');               // 2 = each person is on a channel of their own
-addColumn('calls', 'voicemail', 'INTEGER NOT NULL DEFAULT 0'); // 1 = a message a caller left when nobody answered
-addColumn('calls', 'notified_at', 'TEXT');                     // when the recruiter was e-mailed that the notes are ready
-addColumn('calls', 'event_key', 'TEXT');                       // the calendar event the call was made from, if any
-// A phone call is written out with nobody at a screen, so what would be a button for a browser recording is tried
-// again by itself: how often the transcription and the e-mail to the recruiter have been tried, and when each is next due.
-addColumn('calls', 'transcribe_tries', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('calls', 'transcribe_next_at', 'TEXT');
-addColumn('calls', 'notify_tries', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('calls', 'notify_next_at', 'TEXT');
-// Wrong PINs on the switchboard: how many locks in a row this phone has earned (each longer than the last), and how
-// many wrong PINs were keyed in since `phone_pin_wrong_since` (ten in a day switches the PIN off).
-addColumn('phone_calls', 'title', 'TEXT');                     // what the call is called in the Oracle when it is with nobody on file (the calendar event's name)
-addColumn('users', 'phone_lock_level', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('users', 'phone_pin_wrong', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('users', 'phone_pin_wrong_since', 'TEXT');
-db.exec(`
--- What is still owed to the phone service after a phone call's own row has gone. Erasing a person erases the rows
--- of their calls, and the row was the only memory of a recording still sitting at the phone service; these two
--- tables outlive it. They hold the phone service's own names for things and nothing about any person.
--- A recording to delete at the phone service, tried until it is gone.
-CREATE TABLE IF NOT EXISTS phone_recordings_owed (
-  recording_sid TEXT PRIMARY KEY,
-  noted_at TEXT NOT NULL,
-  tries INTEGER NOT NULL DEFAULT 0,
-  next_at TEXT
-);
--- A recorded call that was erased before its recording was known: the phone service is asked what it recorded for
--- the call, and whatever it names is deleted.
-CREATE TABLE IF NOT EXISTS phone_calls_erased (
-  call_sid TEXT PRIMARY KEY,
-  noted_at TEXT NOT NULL,
-  next_at TEXT
-);
--- Written by the database itself, so every way a call's row can go (a candidate deleted, two records merged, a
--- clean-up nobody has written yet) leaves the note behind.
-CREATE TRIGGER IF NOT EXISTS phone_calls_owed_recording BEFORE DELETE ON phone_calls
-WHEN OLD.recording_sid IS NOT NULL AND OLD.recording_deleted_at IS NULL
-BEGIN
-  INSERT OR IGNORE INTO phone_recordings_owed (recording_sid, noted_at) VALUES (OLD.recording_sid, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-END;
-CREATE TRIGGER IF NOT EXISTS phone_calls_erased_unrecorded BEFORE DELETE ON phone_calls
-WHEN OLD.record = 1 AND OLD.call_sid IS NOT NULL AND OLD.recording_sid IS NULL
-  AND (OLD.recording_state = 'waiting' OR (OLD.recording_state IS NULL AND OLD.status NOT IN ('ended', 'failed')))
-BEGIN
-  INSERT OR IGNORE INTO phone_calls_erased (call_sid, noted_at) VALUES (OLD.call_sid, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-END;`);
-// ---------- end of phone calls ----------
-// ---------- your calendar in The Oracle ----------
-// Kept together and after everything above: the tables below point at users, applications and calls, and the indexes
-// and triggers on candidates have to be made again whenever that table has been rebuilt by a migration.
-/**
- * A candidate's phone number with the usual punctuation taken out, cut to its last ten characters. A number found in
- * a calendar event is looked up by this, using the index on the same expression, so the look-up does not read every
- * candidate. Numbers are stored as they were typed, which is why the tidying happens here.
- */
-export const PHONE_TAIL = `substr(replace(replace(replace(replace(replace(replace(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), '+', ''), -10)`;
-db.exec(`
--- The private calendar link each agency user may save. The link is a password to that person's whole calendar, so
--- it is stored sealed (see secret.js), never returned by any route and never written to a log.
-CREATE TABLE IF NOT EXISTS calendar_links (
-  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,                            -- google | outlook | icloud | other, going by the link's host
-  link_sealed TEXT NOT NULL,
-  tz TEXT,                                           -- the time zone the person last looked at their day in
-  created_at TEXT NOT NULL,
-  last_read_at TEXT,                                 -- when the calendar was last read successfully
-  last_error TEXT                                    -- why the last read failed, in plain English; null when it worked
-);
-
--- What a person has done with the events of their day: marked one to be recorded ("+ Add"), chosen the candidate it
--- is with, recorded a call for it. One row per event a person has been shown, so that an event can be found again
--- from its key alone. Nothing from the calendar itself is kept here: no titles, guests or times, only the key (a
--- keyed hash that is different for every person) and a fingerprint of the title and start time.
-CREATE TABLE IF NOT EXISTS calendar_events (
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  event_key TEXT NOT NULL,
-  source TEXT NOT NULL,                              -- calendar | interview
-  day TEXT NOT NULL, tz TEXT NOT NULL,               -- the day (YYYY-MM-DD, in that time zone) it was last seen on
-  fingerprint TEXT,                                  -- finds a marked event again when the calendar gives it a new identity
-  added INTEGER NOT NULL DEFAULT 0,                  -- 1 = marked to be recorded
-  application_id INTEGER REFERENCES applications(id) ON DELETE SET NULL, -- the candidate the person chose themselves
-  call_id INTEGER REFERENCES calls(id) ON DELETE SET NULL,               -- the call recorded for this event
-  seen_at TEXT NOT NULL,
-  PRIMARY KEY (user_id, event_key)
-);
-CREATE INDEX IF NOT EXISTS idx_calendar_events_print ON calendar_events(user_id, fingerprint);
-CREATE INDEX IF NOT EXISTS idx_calendar_events_seen ON calendar_events(seen_at);
-
 -- The first and last word of each candidate's name with accents and capitals removed ("kevin" and "tremblay" for
--- "Kévin Tremblay"), so the candidates an event's title might be naming are found through an index however many
--- candidates are on file. SQLite cannot remove accents by itself, so the words are worked out by the server
--- (calendar.js): the two triggers note which candidates are new or renamed, and the server catches up on those
--- before it matches anything.
+-- "Kévin Tremblay"), so the candidates a name might belong to are found through an index however many candidates
+-- are on file. SQLite cannot remove accents by itself, so the words are worked out by the server (match.js): the
+-- triggers note which candidates are new or changed, and the server catches up on those before it matches anything.
 CREATE TABLE IF NOT EXISTS candidate_name_keys (
   candidate_id INTEGER PRIMARY KEY REFERENCES candidates(id) ON DELETE CASCADE,
   first TEXT NOT NULL,
   last TEXT NOT NULL                                 -- empty for a name of one word
 );
 CREATE INDEX IF NOT EXISTS idx_candidate_name_keys_words ON candidate_name_keys(first, last);
+-- Each candidate's phone number as it is compared: its last ten digits, and whatever digits come before them (the
+-- country code, when one was written). Numbers are stored as they were typed ("416-555-0183 ext 4", "416/555/0184"),
+-- so the server works these out as well (match.js), by the one rule it also reads Metaview's numbers with. A box
+-- holding two numbers gives two rows. A candidate whose number is too short to compare has one row with an empty
+-- tail, so that they are not looked at again every time the server starts.
+CREATE TABLE IF NOT EXISTS candidate_phone_keys (
+  candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+  tail TEXT NOT NULL,
+  lead TEXT NOT NULL                                 -- the country code: 1 unless another was written; empty when the country is not known
+);
+CREATE INDEX IF NOT EXISTS idx_candidate_phone_keys_tail ON candidate_phone_keys(tail);
+CREATE INDEX IF NOT EXISTS idx_candidate_phone_keys_candidate ON candidate_phone_keys(candidate_id);
+-- The candidates whose name or number has to be worked out again.
 CREATE TABLE IF NOT EXISTS candidate_name_dirty (candidate_id INTEGER PRIMARY KEY);
 CREATE TRIGGER IF NOT EXISTS candidate_name_added AFTER INSERT ON candidates
   BEGIN INSERT OR IGNORE INTO candidate_name_dirty (candidate_id) VALUES (NEW.id); END;
 CREATE TRIGGER IF NOT EXISTS candidate_name_changed AFTER UPDATE OF name ON candidates
   BEGIN INSERT OR IGNORE INTO candidate_name_dirty (candidate_id) VALUES (NEW.id); END;
+CREATE TRIGGER IF NOT EXISTS candidate_phone_changed AFTER UPDATE OF phone ON candidates
+  BEGIN INSERT OR IGNORE INTO candidate_name_dirty (candidate_id) VALUES (NEW.id); END;
 INSERT OR IGNORE INTO candidate_name_dirty (candidate_id)
-  SELECT id FROM candidates WHERE id NOT IN (SELECT candidate_id FROM candidate_name_keys);
+  SELECT id FROM candidates WHERE id NOT IN (SELECT candidate_id FROM candidate_name_keys)
+    OR (phone IS NOT NULL AND phone != '' AND id NOT IN (SELECT candidate_id FROM candidate_phone_keys));
 
--- Guests' e-mail addresses and phone numbers in events are looked up through these.
-CREATE INDEX IF NOT EXISTS idx_candidates_email_lower ON candidates(lower(email));
-CREATE INDEX IF NOT EXISTS idx_candidates_phone_tail ON candidates(${PHONE_TAIL}) WHERE phone IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_interviews_starts ON interviews(starts_at);`);
-addColumn('calendar_events', 'series', 'TEXT'); // finds a marked date of a repeating event again when the whole series is moved (a keyed fingerprint, not the calendar's own identifier)
-// ---------- end of the calendar's part ----------
+-- E-mail addresses are looked up through this. (A database from an earlier version also has an index on the last
+-- ten characters of the phone number, idx_candidates_phone_tail. Numbers are looked up through candidate_phone_keys
+-- now; the old index is left where it is, like everything else an earlier version made.)
+CREATE INDEX IF NOT EXISTS idx_candidates_email_lower ON candidates(lower(email));`);
+
+// ---------- Metaview in The Oracle ----------
+// What The Book remembers about the conversations recorded in Metaview (see metaview.js). Agency only.
+db.exec(`
+-- One row for each conversation Metaview has told The Book about: enough to list it and to work out which candidate
+-- it was with, and nothing more. The transcript and the notes are only fetched when a conversation is brought into
+-- The Oracle, and they are kept on the call there (calls), not here.
+CREATE TABLE IF NOT EXISTS metaview_calls (
+  id INTEGER PRIMARY KEY,                            -- Metaview's own number for the conversation
+  url TEXT,                                          -- its page in Metaview, where the recording can be listened to
+  started_at TEXT NOT NULL,                          -- when the conversation took place
+  title TEXT,                                        -- the calendar event's name; most phone calls have none
+  kind TEXT, channel TEXT,                           -- "Job Interview"...; "Phone", "Zoom"...
+  minutes INTEGER,
+  has_transcript INTEGER NOT NULL DEFAULT 0,
+  -- JSON: [{ name, role, emails, phones }], role candidate | interviewer | other. Addresses and numbers are kept only
+  -- for the people a conversation is matched by (see readConversation in metaview-client.js); an interviewer keeps
+  -- their address, which is how "my calls" and whose call it is are worked out.
+  people TEXT NOT NULL DEFAULT '[]',
+  search TEXT NOT NULL DEFAULT '',                   -- names, addresses, phone digits and the title in lower case: what the search box looks through
+  call_id INTEGER REFERENCES calls(id) ON DELETE SET NULL, -- the call in The Oracle, once it has been brought in
+  -- When it was first brought in. It stays when the call in The Oracle is deleted, so a call somebody removed is
+  -- never brought back by itself (a person can still open it again).
+  brought_in_at TEXT,
+  auto_at TEXT,                                      -- when it was brought in with nobody clicking, for the daily limit
+  -- Something is still owed to the call in The Oracle (notes Metaview had not finished writing, a transcript that
+  -- arrived later): how often it has been asked for, and when it is next due. Empty when nothing is owed.
+  fetch_tries INTEGER NOT NULL DEFAULT 0, fetch_next_at TEXT,
+  seen_at TEXT NOT NULL                              -- when Metaview last told The Book about it
+);
+CREATE INDEX IF NOT EXISTS idx_metaview_calls_started ON metaview_calls(started_at);
+CREATE INDEX IF NOT EXISTS idx_metaview_calls_call ON metaview_calls(call_id);
+CREATE INDEX IF NOT EXISTS idx_metaview_calls_owed ON metaview_calls(fetch_next_at) WHERE fetch_next_at IS NOT NULL;
+
+-- What each conversation can be matched or found by, one row per fact, so that the look-ups run through indexes:
+--   email        an address of somebody on the call who is not an interviewer
+--   phone        the last ten digits of such a person's number; the digits before them (the country code) are in the column "first"
+--   name         such a person's name as plain words ("dana whitlock"), with its first and last word
+--   interviewer  an interviewer's address (for "calls I took part in")
+CREATE TABLE IF NOT EXISTS metaview_people (
+  call_id INTEGER NOT NULL REFERENCES metaview_calls(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  value TEXT NOT NULL,
+  first TEXT, last TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_metaview_people_call ON metaview_people(call_id);
+CREATE INDEX IF NOT EXISTS idx_metaview_people_value ON metaview_people(kind, value);
+
+-- Conversations The Book has been told to forget: the ones that were with a candidate who has since been erased.
+-- Only Metaview's numbers for them are kept, so that the next reading of Metaview's list does not bring the person's
+-- name and contact details straight back. The list is kept for good, through disconnecting and connecting again.
+CREATE TABLE IF NOT EXISTS metaview_forgotten (id INTEGER PRIMARY KEY);`);
+// What a call in the Oracle carries when it came from Metaview (calls.source = 'metaview').
+addColumn('calls', 'external_url', 'TEXT');    // the conversation's page in Metaview
+addColumn('calls', 'took_place_at', 'TEXT');   // when the conversation happened (created_at is when it was brought in)
+// ---------- reporting ----------
+// The numbers on the Individual and Clients reports are written down as things happen (see reporting.js), not worked
+// out afterwards from how the records look today. Everything here is new: no existing row is rewritten.
+/**
+ * Is this the name of an interview stage the agency holds itself ("Recruiter screen", "Agency interview")? Such a
+ * stage does not count as an interview with the client unless somebody ticks it on the job form.
+ */
+export const agencyStageName = (name) => /recruiter|screen|agency/i.test(String(name || ''));
+// Each interview stage says whether the client meets the candidate in it. On by default; off for the stages whose
+// names say they are the agency's own. Stages that already exist get the same defaults, once, when the column arrives.
+// The column and its defaults are saved together. Were a start cut off between the two, the next one would find the
+// column there and leave every "Recruiter screen" counted as an interview with the client.
+if (!db.prepare('PRAGMA table_info(stages)').all().some((c) => c.name === 'with_client')) {
+  db.exec('BEGIN');
+  try {
+    addColumn('stages', 'with_client', 'INTEGER NOT NULL DEFAULT 1');
+    db.exec(`UPDATE stages SET with_client = 0 WHERE kind = 'interview' AND (name LIKE '%recruiter%' OR name LIKE '%screen%' OR name LIKE '%agency%')`);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+addColumn('offers', 'accepted_at', 'TEXT'); // when the offer was marked accepted: the end of "time to fill"
+db.exec(`
+-- One row for each moment the reports count. A search is opened once; a candidate in a job is submitted once, has a
+-- first interview with the client once and is placed once. Who gets the credit, the client, and for a placement the
+-- fee and its currency are written here at that moment, so reassigning a candidate or editing a client's terms
+-- afterwards changes none of it. Deleting the candidate, the job or the client removes their rows; merging two
+-- candidate records keeps them, because the application they hang from is kept.
+CREATE TABLE IF NOT EXISTS report_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,                                -- search_opened | submission | first_interview | placement, or hired_earlier: a note, never
+                                                     -- counted, that the candidate was hired in this job before anything was written down
+  application_id INTEGER REFERENCES applications(id) ON DELETE CASCADE, -- empty for search_opened
+  candidate_name TEXT,                               -- as it was at that moment
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, -- the recruiter credited
+  at TEXT NOT NULL,                                  -- when it happened
+  -- For a placement only:
+  filled_at TEXT,                                    -- when the offer was accepted, or the hire itself when no accepted offer was on record
+  salary INTEGER, fee_percent REAL,                  -- what the fee was worked out from
+  fee INTEGER, currency TEXT,                        -- the fee, in the client's currency at that moment; empty when it could not be worked out
+  fee_edited INTEGER NOT NULL DEFAULT 0,             -- 1 = somebody corrected the fee by hand
+  set_aside_at TEXT                                  -- the hired candidate was moved out of Hired, rejected or withdrew; not counted until they are hired again
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_report_events_once ON report_events(application_id, kind) WHERE application_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_report_events_search ON report_events(job_id) WHERE kind = 'search_opened';
+CREATE INDEX IF NOT EXISTS idx_report_events_at ON report_events(at);
+CREATE INDEX IF NOT EXISTS idx_report_events_job ON report_events(job_id);
+CREATE INDEX IF NOT EXISTS idx_report_events_client ON report_events(client_id);`);
+// ---------- end of reporting ----------
 
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
@@ -612,6 +605,15 @@ export const q = {
 
 export const now = () => new Date().toISOString();
 q.run('DELETE FROM sessions WHERE expires_at < ?', now()); // tidy expired sign-ins on startup
+
+/**
+ * Empty the file SQLite keeps recent changes in (app.db-wal) into the database. What was deleted is written over in
+ * the database itself (secure_delete, above), but the earlier contents stay readable in that file until this is
+ * done. Called after something that has to be gone has been deleted. It never fails the work it follows.
+ */
+export function scrub() {
+  try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* somebody is reading; the next time will do */ }
+}
 
 export function tx(fn) {
   db.exec('BEGIN');
@@ -632,10 +634,16 @@ export const setSetting = (key, value) =>
 export const DEFAULT_INTERVIEW_STAGES = ['Recruiter screen', 'Hiring manager interview', 'Final interview'];
 export const DEFAULT_CRITERIA = ['Role-specific skills', 'Problem solving', 'Communication', 'Values and motivation'];
 
-/** Create the pipeline for a new job: Applied, the interview stages, Offer, Hired. */
+/**
+ * Create the pipeline for a new job: Applied, the interview stages, Offer, Hired. An interview stage is a name, or
+ * { name, with_client } when the job form said whether the client meets the candidate in it; a bare name goes by
+ * what it says (see agencyStageName).
+ */
 export function createStages(jobId, interviewStages = DEFAULT_INTERVIEW_STAGES) {
-  const rows = [['Applied', 'applied'], ...interviewStages.map((n) => [n, 'interview']), ['Offer', 'offer'], ['Hired', 'hired']];
-  rows.forEach(([name, kind], i) => q.run('INSERT INTO stages (job_id, name, kind, position) VALUES (?, ?, ?, ?)', jobId, name, kind, i));
+  const interviews = interviewStages.map((s) => (typeof s === 'string' ? { name: s } : s))
+    .map((s) => [s.name, 'interview', (typeof s.with_client === 'boolean' ? s.with_client : !agencyStageName(s.name)) ? 1 : 0]);
+  const rows = [['Applied', 'applied', 1], ...interviews, ['Offer', 'offer', 1], ['Hired', 'hired', 1]];
+  rows.forEach(([name, kind, withClient], i) => q.run('INSERT INTO stages (job_id, name, kind, position, with_client) VALUES (?, ?, ?, ?, ?)', jobId, name, kind, i, withClient));
 }
 
 const DEFAULT_TEMPLATES = [

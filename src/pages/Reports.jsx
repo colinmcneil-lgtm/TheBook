@@ -3,6 +3,7 @@ import { Printer } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, fmtDate, money } from '../lib.js';
 import { Button, Card, CardHeader, Page, Select, Stat, cx } from '../ui.jsx';
+import { ReportTabs, IndividualReport, ClientsReport, useReportView } from './ReportViews.jsx';
 
 const RANGES = [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['', 'All time']];
 const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '–');
@@ -61,7 +62,13 @@ function Weekly({ weeks }) {
   );
 }
 
+/** The agency chooses between three reports; which one is in the address (?view=individual, ?view=clients). Client users get the overview. */
 export default function Reports() {
+  const view = useReportView();
+  return view === 'individual' ? <IndividualReport /> : view === 'clients' ? <ClientsReport /> : <Overview />;
+}
+
+function Overview() {
   const { scope, scopeClient, isAgency, agencyName } = useApp();
   const openCandidate = useOpenCandidate();
   const [days, setDays] = useState('90');
@@ -89,6 +96,7 @@ export default function Reports() {
         </>
       }
     >
+      {isAgency && <ReportTabs />}
       {!data ? <Pending error={error} /> : (
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -110,6 +118,9 @@ export default function Reports() {
                   </React.Fragment>
                 ))}
               </div>
+              <p className="border-t border-line px-4 py-2.5 text-xs text-stone-500">
+                Placement fees are the fees recorded when each candidate was hired, the same figures as on the Clients report. A hire from before counting started is estimated from the client’s terms today.
+              </p>
             </Card>
           )}
 

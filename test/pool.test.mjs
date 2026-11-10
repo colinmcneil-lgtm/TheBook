@@ -5,36 +5,33 @@
 // a profile allows to them, check that everything about jobs, clients and the hiring team's view carries on as if
 // they were not there, and then put them on jobs.
 //
-// Phone calls go to the stand-in for Twilio (test/twilio-standin/), and the calendar is a file the test writes: no
-// real phone rings and no real calendar is read. The screens are not driven here.
+// Metaview is the stand-in (test/metaview-standin.mjs), holding only the conversations these tests put in it: the
+// real Metaview is never read. The screens are not driven here.
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
-import { session, tempDir, until, RECORDING } from './oracle-helpers.mjs';
-import { startApi, PORTS as CALENDAR_PORTS, calendar, vevent, at } from './calendar-helpers.mjs';
-import { BOOK_NUMBER, putJson } from './phone-helpers.mjs';
-import { startStandin } from './twilio-standin/standin.mjs';
+import { session, tempDir, until, RECORDING, PORTS as SHARED } from './oracle-helpers.mjs';
+import { startBook, connect } from './metaview-helpers.mjs';
+import { metaviewStandIn } from './metaview-standin.mjs';
 
-// Two ports: POOL_TEST_PORT and the one after it, or the two straight after the calendar tests' five.
-const BASE_PORT = Number(process.env.POOL_TEST_PORT) || CALENDAR_PORTS.internal + 1;
-const PORTS = { api: BASE_PORT, twilio: BASE_PORT + 1 };
-const TZ = 'America/Toronto';
-const DAY = '2026-11-10';
+// Two ports: POOL_TEST_PORT and the one after it, or the two kept for this file (see oracle-helpers.mjs).
+const BASE_PORT = Number(process.env.POOL_TEST_PORT) || SHARED.pool;
+const PORTS = { api: BASE_PORT, metaview: BASE_PORT + 1 };
 const NEEDS_JOB = { error: 'Add them to a job first.' };
 // A real picture, one pixel square: the workspace reads a photo's own size and refuses a file that only starts like one.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const resume = (text, name = 'resume.pdf') => ({ name, bytes: Buffer.from(text) });
 
-let api, twilio, dataDir, files;
+let api, metaview, dataDir;
 let alex, dana, sam, maya, noor;          // the owner, two recruiters, and a hiring manager at each of two clients
 const client = {}, job = {}, app = {};    // ids, by a short name
 const book = {};                          // the entries of people saved without a job, by a short name
 let baseline;                             // what the lists about jobs and clients answered before anyone was saved without a job
 
-const put = (who, pathname, json) => putJson(who, api.base, pathname, json);
+const put = (who, pathname, json) => who.putJson(pathname, json);
 const detail = async (who, id) => (await who.get(`/applications/${id}`)).body;
 const list = async (who, query = '') => (await who.get(`/applications${query}`)).body;
 const uploads = () => fs.readdirSync(path.join(dataDir, 'uploads')).sort();
@@ -67,15 +64,9 @@ async function jobsAndClients() {
 
 before(async () => {
   dataDir = tempDir('pool');
-  files = tempDir('pool-calendar');
-  twilio = await startStandin({ port: PORTS.twilio, numbers: [BOOK_NUMBER], quiet: true, stepMs: 5 });
-  api = await startApi({
-    port: PORTS.api, dataDir, files,
-    env: {
-      TWILIO_ACCOUNT_SID: twilio.config.accountSid, TWILIO_AUTH_TOKEN: twilio.config.authToken, TWILIO_NUMBER: BOOK_NUMBER, TWILIO_API_URL: twilio.baseUrl,
-      APP_URL: `http://127.0.0.1:${PORTS.api}`, PHONE_SWEEP_MS: '150', PHONE_QUIET_MS: '500', PHONE_RECORDING_WAIT_MS: '350', PHONE_RECORDING_GIVE_UP_MS: '900', PHONE_RETRY_MS: '50',
-    },
-  });
+  // A Metaview with nothing in it: each test adds the conversations it is about. Nothing is read until a test connects it.
+  metaview = await metaviewStandIn(PORTS.metaview, { count: 0 });
+  api = await startBook({ port: PORTS.api, dataDir, standIn: metaview });
 
   alex = session(api.base);
   assert.equal((await alex.post('/setup', { agencyName: 'Harbour Talent', name: 'Alex Morgan', email: 'alex@agency.example', password: 'demo1234' })).status, 200);
@@ -120,8 +111,8 @@ before(async () => {
 
 after(async () => {
   await api?.stop();
-  await twilio?.close();
-  for (const dir of [dataDir, files]) if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  await metaview?.stop();
+  if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
 // ---------- saving somebody without a job ----------
@@ -409,7 +400,7 @@ test('everyone who owns somebody in The Book is offered as an owner, even after 
   assert.deepEqual((await list(alex, `?general=1&owner=${lenaId}`)).map((r) => r.id), [book.eve]);
 });
 
-// ---------- calls, the phone and the calendar ----------
+// ---------- calls, and conversations in Metaview ----------
 test('a call in The Oracle can be put on somebody who is on no job, and its summary saved on their profile', async () => {
   const uploaded = await dana.upload('/oracle/calls/upload', { audio: { name: 'call.webm', bytes: RECORDING }, consent: 'true', application_id: book.cleo });
   assert.equal(uploaded.status, 201, JSON.stringify(uploaded.body));
@@ -445,59 +436,64 @@ test('a call in The Oracle can be put on somebody who is on no job, and its summ
   assert.equal((await dana.del(`/oracle/calls/${loose}`)).status, 200);
 });
 
-test('they can be found to ring, rung through The Book, and the call lands on their profile', async () => {
-  const found = (await dana.get('/phone/lookup?q=bruno')).body;
-  assert.deepEqual(found, [{
-    candidate_id: found[0]?.candidate_id, name: 'Bruno Okafor', photo: null, phone: '+14165550177', phone_display: '(416) 555-0177',
-    applications: [{ id: book.bruno, job_title: null, client_name: null, status: 'active' }],
-  }]);
-  // By the digits of a number; Kevin has one record at a client and one in The Book, with the same number.
-  const kevins = (await dana.get('/phone/lookup?q=5550142')).body;
-  assert.deepEqual(kevins.map((k) => k.applications.map((a) => [a.id, a.job_title, a.client_name])).sort(), [[[app.kevin, 'Senior Accountant', 'Maple Freight']], [[book.kevin, null, null]]].sort());
-
-  assert.equal((await put(dana, '/me/phone', { phone: '647-555-0142' })).status, 200);
-  const placed = await dana.post('/phone/calls', { application_id: book.bruno });
-  assert.equal(placed.status, 201, JSON.stringify(placed.body));
-  await twilio.idle();
-  const ended = await until(async () => (await dana.get(`/phone/calls/${placed.body.id}`)).body, (c) => c.status === 'ended' || c.status === 'failed');
-  assert.equal(ended.outcome, 'completed', JSON.stringify(ended));
-  // The recording is fetched and becomes a call in The Oracle on their entry, with a line on their history.
-  const calls = await until(async () => (await dana.get(`/oracle/calls?application_id=${book.bruno}`)).body, (rows) => rows.length === 1 && rows[0].status !== 'recording' && rows[0].duration_ms);
-  assert.deepEqual([calls[0].source, calls[0].candidate_name, calls[0].job_title, calls[0].client_name, calls[0].title], ['phone', 'Bruno Okafor', null, null, 'Call with Bruno Okafor']);
-  const history = await until(async () => (await detail(dana, book.bruno)).activities, (rows) => rows.some((a) => a.type === 'call'));
-  assert.match(history.find((a) => a.type === 'call').detail, /^Phone call, /);
-  book.brunoCall = calls[0].id;
-});
-
-test('the calendar matches an event to somebody who is on no job, and they can be chosen for one', async () => {
-  const timed = (uid, title, from, to, ...more) => vevent(`UID:${uid}`, `SUMMARY:${title}`, `DTSTART${at('20261110', from)}`, `DTEND${at('20261110', to)}`, ...more);
-  fs.writeFileSync(path.join(files, 'pool-day.ics'), calendar(
-    timed('guest@test', 'Intro call', '0900', '0930', 'ATTENDEE;CN=Bruno;PARTSTAT=NEEDS-ACTION:mailto:bruno@example.com'),
-    timed('named@test', 'Coffee with Cleo Marchetti', '1000', '1030'),
-    timed('number@test', 'Ring back', '1100', '1115', 'DESCRIPTION:Cell: 613 555 0190'),
-    timed('first@test', 'Call Eve', '1200', '1215'),
-    timed('both@test', 'Catch up with Kevin Tremblay', '1300', '1330'),
-    timed('free@test', 'Planning', '1400', '1430')));
-  const linked = await put(dana, '/calendar/link', { url: 'https://calendar.test/pool-day.ics', tz: TZ });
-  assert.equal(linked.status, 200, JSON.stringify(linked.body));
-  const day = (await dana.get(`/calendar/day?date=${DAY}&tz=${TZ}`)).body;
-  assert.deepEqual(day.warnings, []);
-  const event = (title) => day.events.find((e) => e.title === title);
+test('a conversation in Metaview is matched to somebody who is on no job, listed on their profile, and brought in onto their entry', async () => {
+  // Nothing is brought in by itself until the end of this test, so that what a match says can be looked at first.
+  assert.equal((await put(alex, '/metaview/settings', { auto: false })).status, 200);
+  const talk = (title, person, more = {}) => metaview.add({ person, title, channel: 'Zoom', ...more });
+  const intro = talk('Intro call', { name: 'Bruno', email: 'bruno@example.com' });
+  const coffee = talk('Coffee', { name: 'Cleo Marchetti' });
+  const ringBack = talk('Ring back', { name: 'Ana Ruiz', phone: '+16135550190' });
+  talk('Call Eve', { name: 'Eve' });
+  talk('Catch up', { name: 'Kevin Tremblay' });
+  const planning = talk('Planning', { name: 'Somebody Unknown' });
+  await connect(alex);
+  const listed = async (query = '') => (await dana.get(`/metaview/calls${query}`)).body;
+  const all = await until(() => listed(), (page) => page.total === 6);
+  const call = (title, page = all) => page.calls.find((c) => c.title === title);
   const shape = (m) => m && [m.application_id, m.name, m.job_title, m.client_name, m.how];
-  assert.deepEqual(shape(event('Intro call').match), [book.bruno, 'Bruno Okafor', null, null, 'email']);
-  assert.deepEqual(shape(event('Coffee with Cleo Marchetti').match), [book.cleo, 'Cleo Marchetti', null, null, 'name']);
-  assert.deepEqual(shape(event('Ring back').match), [book.ana, 'Ana Ruiz', null, null, 'phone']);
+  assert.deepEqual(shape(call('Intro call').match), [book.bruno, 'Bruno Okafor', null, null, 'email']);
+  assert.deepEqual(shape(call('Coffee').match), [book.cleo, 'Cleo Marchetti', null, null, 'name']);
+  assert.deepEqual(shape(call('Ring back').match), [book.ana, 'Ana Ruiz', null, null, 'phone']);
   // A first name alone is only ever offered.
-  assert.equal(event('Call Eve').match, null);
-  assert.deepEqual(event('Call Eve').suggestions.map(shape), [[book.eve, 'Eve Lindqvist', null, null, 'name']]);
+  assert.equal(call('Call Eve').match, null);
+  assert.deepEqual(call('Call Eve').suggestions.map(shape), [[book.eve, 'Eve Lindqvist', null, null, 'name']]);
   // Kevin is on file twice, at a client and in The Book, and in progress in both: which is meant is the recruiter's call.
-  assert.equal(event('Catch up with Kevin Tremblay').match, null);
-  assert.deepEqual(event('Catch up with Kevin Tremblay').suggestions.map(shape).sort(), [[app.kevin, 'Kevin Tremblay', 'Senior Accountant', 'Maple Freight', 'name'], [book.kevin, 'Kevin Tremblay', null, null, 'name']].sort());
+  assert.equal(call('Catch up').match, null);
+  assert.deepEqual(call('Catch up').suggestions.map(shape).sort(), [[app.kevin, 'Kevin Tremblay', 'Senior Accountant', 'Maple Freight', 'name'], [book.kevin, 'Kevin Tremblay', null, null, 'name']].sort());
+  assert.equal(call('Planning').match, null);
+  assert.deepEqual((await listed('?show=unmatched')).calls.map((c) => c.title).sort(), ['Call Eve', 'Catch up', 'Planning']);
 
-  const chosen = await put(dana, `/calendar/events/${event('Planning').key}`, { application_id: book.eve, added: true });
+  // Their profile's Calls tab asks for the conversations that are theirs and not in The Book yet.
+  const bruno = (await detail(dana, book.bruno)).candidate.id;
+  const waiting = await listed(`?candidate_id=${bruno}&show=new`);
+  assert.deepEqual(waiting.calls.map((c) => [c.id, c.match.candidate_id, c.call_id]), [[intro.id, bruno, null]]);
+
+  // Brought in from their profile, it is a call in The Oracle on their entry, with a line in their history.
+  const opened = await dana.post(`/metaview/calls/${intro.id}/open`, { application_id: book.bruno });
+  assert.equal(opened.status, 200, JSON.stringify(opened.body));
+  const calls = (await dana.get(`/oracle/calls?application_id=${book.bruno}`)).body;
+  assert.deepEqual(calls.map((c) => [c.id, c.source, c.candidate_name, c.job_title, c.client_name, c.title]), [[opened.body.call_id, 'metaview', 'Bruno Okafor', null, null, 'Intro call']]);
+  assert.equal((await detail(dana, book.bruno)).activities.some((a) => a.type === 'call'), true);
+  assert.deepEqual(shape(call('Intro call', await listed()).match), [book.bruno, 'Bruno Okafor', null, null, 'email']);
+  book.brunoCall = opened.body.call_id;
+
+  // A conversation that names nobody on file can be put on somebody who is on no job by hand.
+  const chosen = await dana.post(`/metaview/calls/${planning.id}/open`, { application_id: book.eve });
   assert.equal(chosen.status, 200, JSON.stringify(chosen.body));
-  assert.deepEqual(shape(chosen.body.match), [book.eve, 'Eve Lindqvist', null, null, 'chosen']);
-  assert.deepEqual(shape((await dana.get(`/calendar/day?date=${DAY}&tz=${TZ}`)).body.events.find((e) => e.title === 'Planning').match), [book.eve, 'Eve Lindqvist', null, null, 'chosen']);
+  assert.deepEqual(shape(call('Planning', await listed()).match), [book.eve, 'Eve Lindqvist', null, null, 'chosen']);
+  book.planning = planning.id;
+
+  // With "bring calls in by themselves" on, a conversation that an address ties to them alone arrives on their entry unasked.
+  const later = talk('Follow-up', { name: 'Bruno Okafor', email: 'bruno@example.com' });
+  assert.equal((await put(alex, '/metaview/settings', { auto: true })).status, 200);
+  assert.equal((await dana.post('/metaview/refresh')).status, 202);
+  const both = await until(async () => (await dana.get(`/oracle/calls?application_id=${book.bruno}`)).body, (rows) => rows.length === 2);
+  assert.deepEqual(both.map((c) => [c.title, c.source, c.job_title]).sort(), [['Follow-up', 'metaview', null], ['Intro call', 'metaview', null]]);
+  // By their number and by their name, the other two came in as well: each was certainly one person.
+  const arrived = await until(() => listed('?show=new'), (page) => !page.calls.some((c) => c.title === 'Ring back'));
+  assert.deepEqual(arrived.calls.map((c) => c.title).sort(), ['Call Eve', 'Catch up', 'Coffee']);
+  assert.equal((await put(alex, '/metaview/settings', { auto: false })).status, 200);
+  assert.ok(later.id && coffee.id && ringBack.id);
 });
 
 // ---------- the agency's alone ----------
@@ -528,8 +524,9 @@ test('a client user sees none of it, on any route', async () => {
       await who.upload('/applications', { name: 'From A Client', email: 'fromclient@example.com' }), await who.post(`/applications/${book.cleo}/add-to-job`, { job_id: job.accountant }),
       await who.post(`/applications/${book.cleo}/submit`, { note: 'x' }), await put(who, `/applications/${book.cleo}/offer`, { salary: 1 }), await who.del(`/applications/${book.cleo}`),
       await who.del(`/candidates/${cleo}`), await who.del(`/candidates/${cleo}/photo`), await who.post(`/candidates/${cleo}/merge`, { into: 1 }),
-      await who.get('/candidates/lookup?email=cleo@example.com'), await who.get('/phone/lookup?q=bruno'), await who.get('/oracle/calls'), await who.get(`/oracle/calls/${book.cleoCall}`),
-      await who.get(`/oracle/calls/${book.cleoCall}/audio`), await who.get(`/oracle/calls?application_id=${book.cleo}`), await who.get(`/calendar/day?date=${DAY}&tz=${TZ}`),
+      await who.get('/candidates/lookup?email=cleo@example.com'), await who.get('/metaview/calls'), await who.get('/oracle/calls'), await who.get(`/oracle/calls/${book.cleoCall}`),
+      await who.get(`/oracle/calls/${book.cleoCall}/audio`), await who.get(`/oracle/calls?application_id=${book.cleo}`), await who.get(`/metaview/calls?candidate_id=${cleo}&show=new`),
+      await who.post(`/metaview/calls/${book.planning}/open`, { application_id: book.cleo }), await who.get('/metaview/status'),
     ];
     for (const answer of agencyOnly) {
       assert.equal(answer.status, 403, JSON.stringify(answer.body));
@@ -646,11 +643,28 @@ test('removing their entry removes the person, with their résumé, photo and re
   const candidateId = (await detail(dana, id)).candidate.id;
   const call = (await dana.upload('/oracle/calls/upload', { audio: { name: 'call.webm', bytes: RECORDING }, consent: 'true', application_id: id })).body.id;
   assert.equal(uploads().length, before_.length + 1);
+  // Two conversations with them in Metaview: one brought in as a call on their entry, one still only listed.
+  const inMetaview = [metaview.add({ person: { name: 'Gil Removed', email: 'gil@example.com' }, title: 'First call with Gil' }), metaview.add({ person: { name: 'Gil Removed', email: 'gil@example.com' }, title: 'Second call with Gil' })];
+  assert.equal((await dana.post('/metaview/refresh')).status, 202);
+  const theirs = async () => (await dana.get('/metaview/calls?q=gil')).body.calls.map((c) => c.id).sort();
+  assert.deepEqual(await until(theirs, (ids) => ids.length === 2), inMetaview.map((c) => c.id).sort());
+  const broughtIn = (await dana.post(`/metaview/calls/${inMetaview[0].id}/open`, { application_id: id })).body.call_id;
+  assert.ok(broughtIn);
   const kept = (await list(alex, '?general=1')).map((r) => r.id).filter((x) => x !== id).sort((a, b) => a - b);
   assert.equal((await dana.del(`/applications/${id}`)).status, 200);
   assert.equal((await dana.get(`/applications/${id}`)).status, 404);
   assert.equal((await dana.get(`/oracle/calls/${call}`)).status, 404);
+  assert.equal((await dana.get(`/oracle/calls/${broughtIn}`)).status, 404);
   assert.equal(db('SELECT COUNT(*) AS n FROM candidates WHERE id = ?', candidateId)[0].n, 0);
+  // What The Book remembered about their conversations in Metaview goes with them, and reading Metaview again does not bring it back.
+  assert.deepEqual(await theirs(), []);
+  assert.deepEqual(db('SELECT id FROM metaview_forgotten ORDER BY id').map((r) => r.id), inMetaview.map((c) => c.id).sort());
+  const readAt = () => db(`SELECT value FROM settings WHERE key = 'metaview_checked_at'`)[0]?.value;
+  const lastRead = readAt();
+  assert.equal((await dana.post('/metaview/refresh')).status, 202);
+  await until(async () => readAt(), (at) => at !== lastRead);
+  assert.deepEqual(await theirs(), []);
+  assert.equal(db('SELECT COUNT(*) AS n FROM metaview_calls WHERE id IN (?, ?)', inMetaview[0].id, inMetaview[1].id)[0].n, 0);
   await until(async () => uploads(), (now_) => now_.length === before_.length - 2);   // the résumé, the photo and the call's audio are gone
   assert.deepEqual((await list(alex, '?general=1')).map((r) => r.id).sort((a, b) => a - b), kept);
   // "Delete candidate data" does the same from the person's side.
@@ -729,8 +743,8 @@ test('put on a job, their entry becomes that job\'s application: same id, at the
   const ivo = await detail(dana, placed);
   assert.deepEqual([ivo.application.status, ivo.application.hired_at, ivo.activities.slice(0, 2).map((a) => [a.type, a.detail])],
     ['hired', ivo.application.applied_at, [['hired', 'Marked as hired'], ['added', 'Added to Hygienist at Hired']]]);
-  // The calendar event Eve was chosen for still names her, now with her job.
-  const planning = (await dana.get(`/calendar/day?date=${DAY}&tz=${TZ}`)).body.events.find((e) => e.title === 'Planning');
+  // The Metaview conversation Eve was chosen for still names her, now with her job.
+  const planning = (await dana.get('/metaview/calls')).body.calls.find((c) => c.id === book.planning);
   assert.deepEqual([planning.match.application_id, planning.match.job_title, planning.match.client_name, planning.match.how], [book.eve, 'Hygienist', 'Northline Dental', 'chosen']);
 });
 
@@ -1422,6 +1436,86 @@ test('interview stages put in a new order in the job form: people who came from 
 });
 
 // ---------- the demo data ----------
+// ---------- the reports ----------
+test('the reports count somebody who came from The Book like anyone else in a job, and what was counted goes when they return to The Book', async () => {
+  // Counting begins now: a real workspace starts on a set day, and writes nothing down before it.
+  assert.equal((await put(alex, '/reports/start', { date: '2026-01-05' })).status, 200);
+  const events = (applicationId) => db('SELECT kind, job_id, client_id, user_id, fee, set_aside_at FROM report_events WHERE application_id = ? ORDER BY id', applicationId);
+  const counted = async () => {
+    const row = (await alex.get('/reports/individual')).body.rows.find((r) => r.name === 'Dana Recruiter') ?? { submissions: 0, interviews: 0, placements: 0 };
+    const maple = (await alex.get('/reports/clients')).body.rows.find((r) => r.id === client.maple);
+    return { dana: [row.submissions, row.interviews, row.placements], maple: [maple.submissions, maple.interviews, maple.placements, maple.billings] };
+  };
+  const danaId = db(`SELECT id FROM users WHERE email = 'dana@agency.example'`)[0].id;
+  const before_ = await counted();
+  const first = (await alex.post('/jobs', { client_id: client.maple, title: 'Financial Analyst', status: 'open' })).body.id;
+  const second = (await alex.post('/jobs', { client_id: client.maple, title: 'Treasury Analyst', status: 'open' })).body.id;
+  const stagesOf = async (jobId) => (await alex.get(`/jobs/${jobId}`)).body.stages;
+  const withClient = (stages) => stages.find((s) => s.kind === 'interview' && s.with_client);
+
+  // Saved without a job: nothing to count, and no placement to show.
+  const id = await saved(dana, { name: 'Rhea Counted', email: 'rhea.counted@example.com' });
+  assert.deepEqual(events(id), []);
+  assert.equal((await detail(dana, id)).placement, null);
+
+  // On a job, she is submitted, meets the client and is hired: each is written down once, as for anyone.
+  const firstStages = await stagesOf(first);
+  assert.equal((await addToJob(dana, id, { job_id: first })).status, 200);
+  assert.equal((await dana.post(`/applications/${id}/submit`, { note: 'Worth meeting.' })).status, 200);
+  assert.equal((await dana.post(`/applications/${id}/move`, { stage_id: withClient(firstStages).id })).status, 200);
+  assert.equal((await put(dana, `/applications/${id}/offer`, { salary: 100000, status: 'accepted' })).status, 200);
+  assert.equal((await dana.post(`/applications/${id}/move`, { stage_id: firstStages.at(-1).id })).status, 200);
+  assert.deepEqual(events(id).map((e) => [e.kind, e.job_id, e.client_id, e.user_id, e.fee]),
+    [['submission', first, client.maple, danaId, null], ['first_interview', first, client.maple, danaId, null], ['placement', first, client.maple, danaId, 20000]]);
+  const during = await counted();
+  assert.deepEqual(during.dana, before_.dana.map((n) => n + 1));
+  assert.deepEqual(during.maple.slice(0, 3), before_.maple.slice(0, 3).map((n) => n + 1));
+  assert.equal((await detail(dana, id)).placement.fee, 20000);
+  assert.equal((await detail(maya, id)).placement, undefined);   // the fee is the agency's business
+
+  // Removed from the job she goes back to The Book, and what was counted for her in that job goes, as it does for
+  // anybody removed from a job. The reports are as they were.
+  const removed = await dana.del(`/applications/${id}`);
+  assert.deepEqual(removed.body, { ok: true, returned: true, id });
+  assert.deepEqual(events(id), []);
+  assert.deepEqual(await counted(), before_);
+  assert.equal((await detail(dana, id)).placement, null);
+
+  // On the next job she is counted afresh, for that job: the first job's submission does not stand in for this one.
+  const secondStages = await stagesOf(second);
+  assert.equal((await addToJob(dana, id, { job_id: second })).status, 200);
+  assert.equal((await dana.post(`/applications/${id}/submit`, { note: 'Worth meeting here too.' })).status, 200);
+  assert.deepEqual(events(id).map((e) => [e.kind, e.job_id]), [['submission', second]]);
+  assert.equal((await dana.post(`/applications/${id}/move`, { stage_id: secondStages.at(-1).id })).status, 200);
+  assert.deepEqual(events(id).map((e) => [e.kind, e.job_id, e.fee]), [['submission', second, null], ['placement', second, null]]);   // no offer on this job, so no fee yet
+  assert.equal((await detail(dana, id)).placement.fee, null);
+
+  // When the job itself is deleted she returns to The Book again, and again nothing stays counted for her.
+  assert.equal((await alex.del(`/jobs/${second}`)).status, 200);
+  assert.equal((await detail(dana, id)).application.general, true);
+  assert.deepEqual(events(id), []);
+  assert.deepEqual(await counted(), before_);
+
+  // Put straight into Hired, by each of the three ways onto a job, is a placement, credited to whoever owns them.
+  assert.equal((await addToJob(sam, id, { job_id: first, stage_id: firstStages.at(-1).id })).status, 200);
+  assert.deepEqual(events(id).map((e) => [e.kind, e.job_id, e.user_id]), [['placement', first, danaId]]);
+  const typed = await saved(dana, { name: 'Tomas Counted', email: 'tomas.counted@example.com' });
+  const viaForm = await dana.upload('/applications', { job_id: first, stage_id: firstStages.at(-1).id, name: 'Tomas Counted', email: 'tomas.counted@example.com' });
+  assert.deepEqual([viaForm.status, viaForm.body.id], [200, typed]);
+  assert.deepEqual(events(typed).map((e) => [e.kind, e.job_id, e.user_id]), [['placement', first, danaId]]);
+  const third = (await alex.post('/jobs', { client_id: client.maple, title: 'Tax Analyst', status: 'open' })).body.id;
+  const another = await addToJob(dana, typed, { job_id: third, stage_id: (await stagesOf(third)).at(-1).id });
+  assert.equal(another.status, 200, JSON.stringify(another.body));
+  assert.deepEqual(events(another.body.id).map((e) => [e.kind, e.job_id, e.user_id]), [['placement', third, danaId]]);
+  // Put into a stage where the client meets them, with nothing submitted, is no interview on the reports: the ratio is interviews out of submissions.
+  const quiet = await saved(dana, { name: 'Una Counted', email: 'una.counted@example.com' });
+  assert.equal((await addToJob(dana, quiet, { job_id: first, stage_id: withClient(firstStages).id })).status, 200);
+  assert.deepEqual(events(quiet), []);
+  // The hiring team is not sent which stages are interviews with the client, here as anywhere.
+  assert.equal(Object.hasOwn((await detail(maya, quiet)).stages[1], 'with_client'), false);
+  assert.equal(Object.hasOwn((await detail(dana, quiet)).stages[1], 'with_client'), true);
+});
+
 test('the demo data has people in The Book without a job', () => {
   const dir = tempDir('pool-seed');
   try {
