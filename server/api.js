@@ -894,7 +894,9 @@ function moveToStage(app, stageId, user) {
   q.run(`UPDATE applications SET stage_id = ?, stage_entered_at = ?, updated_at = ?, status = ?, hired_at = ?, reject_reason = NULL WHERE id = ?`,
     stage.id, t, t, hired ? 'hired' : 'active', hired ? t : null, app.id);
   q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', app.id, stage.id, t);
-  logActivity(app.id, user.id, hired ? 'hired' : 'stage', hired ? 'Marked as hired' : `Moved to ${stage.name}`);
+  // The kind of stage is part of the activity type, so the dashboard can pick out interview and offer moves.
+  const moveType = hired ? 'hired' : stage.kind === 'interview' ? 'stage_interview' : stage.kind === 'offer' ? 'stage_offer' : 'stage';
+  logActivity(app.id, user.id, moveType, hired ? 'Marked as hired' : `Moved to ${stage.name}`);
   // An applicant nobody owns yet becomes the responsibility of the recruiter who first takes them forward.
   if (!app.owner_id && isAgency(user) && stage.kind !== 'applied') q.run('UPDATE applications SET owner_id = ? WHERE id = ? AND owner_id IS NULL', user.id, app.id);
   return stage;
@@ -1406,10 +1408,21 @@ api.get('/dashboard', (req, res) => {
   const jobs = q.all(`${jobSelect} WHERE j.status = 'open' ${w} ORDER BY new_applicants DESC, j.opened_at LIMIT 8`, ...p)
     .map(({ description, ideal_profile, brief, fee_percent, questions, criteria, ...j }) => j);
   const recent = q.all(
-    `SELECT ac.id, ac.type, ac.detail, ac.created_at, ac.application_id, u.name AS user_name, c.name AS candidate_name, j.title AS job_title, cl.name AS client_name
+    `SELECT ac.id, ac.type, ac.detail, ac.created_at, ac.application_id, u.name AS user_name, c.name AS candidate_name, j.title AS job_title, cl.name AS client_name,
+       -- The moments worth shouting about: into an interview stage, an interview booked, approved by the hiring team, offer, hire.
+       -- Moves logged before the stage kind was recorded are recognised by the stage's name.
+       CASE
+         WHEN ac.type = 'hired' THEN 'hired'
+         WHEN ac.type = 'stage_interview' THEN 'interview'
+         WHEN ac.type = 'stage_offer' THEN 'offer'
+         WHEN ac.type = 'stage' THEN (SELECT CASE s.kind WHEN 'interview' THEN 'interview' WHEN 'offer' THEN 'offer' END FROM stages s WHERE s.job_id = j.id AND 'Moved to ' || s.name = ac.detail LIMIT 1)
+         WHEN ac.type = 'interview' AND ac.detail LIKE 'Scheduled %' THEN 'booked'
+         WHEN ac.type = 'review' AND ac.detail LIKE 'Approved%' THEN 'approved'
+         WHEN ac.type = 'offer' AND ac.detail = 'Offer accepted' THEN 'accepted'
+       END AS milestone
      FROM activities ac JOIN applications a ON a.id = ac.application_id JOIN candidates c ON c.id = a.candidate_id
      JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = ac.user_id
-     WHERE 1 = 1 ${w} ORDER BY ac.created_at DESC, ac.id DESC LIMIT 10`, ...p);
+     WHERE 1 = 1 ${w} ORDER BY ac.created_at DESC, ac.id DESC LIMIT 15`, ...p);
   const stale = q.all(
     `${appSelect} WHERE a.status = 'active' AND s.kind IN ('interview', 'offer') AND a.stage_entered_at < ? ${w}
      AND NOT EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = a.id AND i.status = 'scheduled' AND i.starts_at >= ?)

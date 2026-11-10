@@ -1,10 +1,39 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarDays, Briefcase, Inbox, Hourglass, ClipboardCheck, ArrowRight, UserPlus } from 'lucide-react';
+import { CalendarDays, Briefcase, Inbox, Hourglass, ClipboardCheck, ArrowRight, UserPlus, CalendarCheck, ArrowUpRight, ThumbsUp, Handshake, Trophy } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, ago, daysSince, firstName, fmtDay, plural } from '../lib.js';
 import { Card, CardHeader, Empty, Page, Stat, Avatar } from '../ui.jsx';
 import { ClientName, InterviewLine, StageBadge } from '../components/bits.jsx';
+
+// The moments a recruiter most wants to see in the feed. Each gets a label, an icon and a tint so it stands out
+// from notes, emails and other routine activity.
+const MILESTONES = {
+  interview: { label: 'Interview stage', icon: ArrowUpRight, row: 'border-l-sky-500 bg-sky-50/70 hover:bg-sky-50', pill: 'bg-sky-600 text-white' },
+  booked: { label: 'Interview booked', icon: CalendarCheck, row: 'border-l-sky-500 bg-sky-50/70 hover:bg-sky-50', pill: 'bg-sky-600 text-white' },
+  approved: { label: 'Approved for interview', icon: ThumbsUp, row: 'border-l-sky-500 bg-sky-50/70 hover:bg-sky-50', pill: 'bg-sky-600 text-white' },
+  offer: { label: 'Offer stage', icon: Handshake, row: 'border-l-amber-500 bg-amber-50/80 hover:bg-amber-50', pill: 'bg-amber-600 text-white' },
+  accepted: { label: 'Offer accepted', icon: Handshake, row: 'border-l-amber-500 bg-amber-50/80 hover:bg-amber-50', pill: 'bg-amber-600 text-white' },
+  hired: { label: 'Hired', icon: Trophy, row: 'border-l-emerald-600 bg-emerald-50/80 hover:bg-emerald-50', pill: 'bg-emerald-700 text-white' },
+};
+
+function ActivityRow({ activity: a, onOpen }) {
+  const m = MILESTONES[a.milestone];
+  return (
+    <li>
+      <button type="button" onClick={onOpen}
+        className={`block w-full border-l-4 px-4 py-2.5 text-left ${m ? m.row : 'border-l-transparent hover:bg-stone-50'}`}>
+        {m && (
+          <span className={`mb-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tracking-wide uppercase ${m.pill}`}>
+            <m.icon className="size-3" />{m.label}
+          </span>
+        )}
+        <span className={`block text-sm ${m ? 'text-stone-900' : 'text-stone-800'}`}><span className={m ? 'font-semibold' : 'font-medium'}>{a.candidate_name}</span> · {a.detail}</span>
+        <span className="block truncate text-xs text-stone-500">{a.job_title}{a.user_name ? ` · ${a.user_name}` : ''} · {ago(a.created_at)}</span>
+      </button>
+    </li>
+  );
+}
 
 function Nudge({ icon: Icon, to, children }) {
   return (
@@ -155,14 +184,7 @@ export default function Dashboard() {
           <Card>
             <CardHeader title="Recent activity" />
             <ul className="divide-y divide-line">
-              {data.recent.map((a) => (
-                <li key={a.id}>
-                  <button type="button" onClick={() => openCandidate(a.application_id)} className="block w-full px-4 py-2.5 text-left hover:bg-stone-50">
-                    <span className="block text-sm text-stone-800"><span className="font-medium">{a.candidate_name}</span> · {a.detail}</span>
-                    <span className="block truncate text-xs text-stone-500">{a.job_title}{a.user_name ? ` · ${a.user_name}` : ''} · {ago(a.created_at)}</span>
-                  </button>
-                </li>
-              ))}
+              {data.recent.map((a) => <ActivityRow key={a.id} activity={a} onOpen={() => openCandidate(a.application_id)} />)}
               {!data.recent.length && <li className="px-4 py-6 text-center text-sm text-stone-500">No activity yet.</li>}
             </ul>
           </Card>
