@@ -44,7 +44,7 @@ function oldDatabase(dataDir) {
   run(`INSERT INTO candidates (id, client_id, name, email, phone, created_at) VALUES (1, 1, 'Dana Whitlock', 'dana@mail.example', '(416) 555-0101', ?), (2, 1, 'Jonas Brandt', 'jonas@mail.example', NULL, ?)`, T, T);
   run(`INSERT INTO candidate_name_keys (candidate_id, first, last) VALUES (1, 'dana', 'whitlock')`);
   for (const id of [1, 2]) run(`INSERT INTO applications (id, candidate_id, job_id, stage_id, applied_at, stage_entered_at, updated_at, owner_id) VALUES (?, ?, 1, 1, ?, ?, ?, 2)`, id, id, T, T, T);
-  // Three calls in The Oracle: one recorded in the browser, one phone call with everything a phone call carried,
+  // Three calls in Otterview: one recorded in the browser, one phone call with everything a phone call carried,
   // and one phone call that was waiting to be transcribed again when the server last stopped.
   const call = (id, source, status, extra = {}) => {
     const row = { id, recording_id: crypto.randomBytes(16).toString('hex'), title: `Call ${id}`, status, source, created_by: 2, created_at: T, updated_at: T, ...extra };
@@ -113,7 +113,7 @@ test('the app starts on a database that still has the old tables, and nothing in
   });
 });
 
-test('calls that were already in The Oracle still list and open, whatever they came from', async () => {
+test('calls that were already in Otterview still list and open, whatever they came from', async () => {
   const list = (await alex.get('/oracle/calls')).body;
   assert.deepEqual(list.map((c) => [c.id, c.source, c.status]).sort(), [[1, 'recorded', 'ready'], [2, 'phone', 'ready'], [3, 'phone', 'uploaded']]);
   // An old phone call counts as a call made in The Book, so it is on that list and not on Metaview's.
@@ -151,7 +151,7 @@ test('every route of the removed features answers like an address that never exi
   // The phone service's own routes took no sign-in. Now they are behind it like everything else.
   const hook = await fetch(`${server.base}/api/phone/hooks/voice`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'CallSid=x' });
   assert.equal(hook.status, 401);
-  // What The Oracle says about itself no longer mentions either.
+  // What Otterview says about itself no longer mentions either.
   assert.deepEqual(Object.keys((await alex.get('/oracle/status')).body).sort(), ['ai', 'maxRecordingMinutes', 'maxUploadMb', 'transcription']);
   // A recording that still names a calendar event is started as an ordinary one.
   const started = await alex.post('/oracle/recordings', { mimeType: 'audio/webm', consent: { confirmed: true, wording: 'Everyone agreed.' }, event_key: 'event-key-2' });
@@ -210,7 +210,7 @@ test('what people saved for the removed features is only ever cleared by hand, w
     assert.deepEqual(all('SELECT phone, phone_pin_hash, phone_pin_fails, phone_locked_until, phone_lock_level FROM users ORDER BY id'),
       [1, 2, 3].map(() => ({ phone: null, phone_pin_hash: null, phone_pin_fails: 0, phone_locked_until: null, phone_lock_level: 0 })));
     assert.deepEqual(objects(all), before.schema, 'no table, column, index or trigger was dropped');
-    assert.deepEqual(all('SELECT id, source, phone_number, event_key FROM calls ORDER BY id'), before.calls, 'calls in The Oracle are not its business');
+    assert.deepEqual(all('SELECT id, source, phone_number, event_key FROM calls ORDER BY id'), before.calls, 'calls in Otterview are not its business');
   });
   // The sealed link is not left readable in the files either.
   for (const name of fs.readdirSync(oldDir)) {

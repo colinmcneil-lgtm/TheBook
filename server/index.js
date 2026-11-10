@@ -31,7 +31,7 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('X-Frame-Options', 'DENY');
-  // The Oracle records calls: this site's own pages may use the microphone and share a tab's sound; nothing embedded
+  // Otterview records calls: this site's own pages may use the microphone and share a tab's sound; nothing embedded
   // in them may, and nothing here uses the camera or location.
   res.setHeader('Permissions-Policy', 'microphone=(self), display-capture=(self), camera=(), geolocation=()');
   // Browsers ignore this header on plain http, so honouring the proxy's word for "https" is safe even when the proxy is not trusted.

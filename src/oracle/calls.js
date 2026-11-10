@@ -1,19 +1,19 @@
-// Words and small rules about The Oracle's calls and its two tabs, kept apart from the screens so they can be
+// Words and small rules about Otterview's calls and its two tabs, kept apart from the screens so they can be
 // checked on their own.
 
 // ---- the two tabs ---------------------------------------------------------------------------------------------------------
-/** The Oracle's tabs, as they are named in the address: Metaview's calls, and the calls recorded or uploaded in The Book. */
+/** Otterview's tabs, as they are named in the address: Metaview's calls, and the calls recorded or uploaded in The Book. */
 export const ORACLE_TABS = ['metaview', 'record'];
 /** The tab to show: the one the address asks for, else the one this person used last, else the first. */
 export const oracleTab = (asked, last) => (ORACLE_TABS.includes(asked) ? asked : ORACLE_TABS.includes(last) ? last : ORACLE_TABS[0]);
 /** The address of one tab, so each can be linked to. */
-export const oraclePath = (tab) => `/oracle?tab=${tab}`;
+export const oraclePath = (tab) => `/otterview?tab=${tab}`;
 /** The tab a call is listed on, which is where its page goes back to. */
 export const tabOfCall = (call) => (call?.source === 'metaview' ? 'metaview' : 'record');
 
 // ---- words for a call -----------------------------------------------------------------------------------------------------
 /**
- * How a call came to be in The Oracle and who made it: "Recorded by Alex", "Uploaded by Alex", "Brought in from
+ * How a call came to be in Otterview and who made it: "Recorded by Alex", "Uploaded by Alex", "Brought in from
  * Metaview". A Metaview call names nobody: the person it belongs to in The Book is whoever took the call, which is
  * often not the person who brought it in, and many are brought in by The Book itself. A call from an earlier
  * version that came in some other way is simply a recorded call.

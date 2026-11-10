@@ -82,7 +82,7 @@ export default function Layout({ children }) {
     { to: '/jobs', label: 'Jobs', icon: Briefcase },
     { to: '/candidates', label: 'Candidates', icon: Users },
     { to: '/interviews', label: 'Interviews', icon: CalendarDays, count: counts?.scorecards_due },
-    isAgency && { to: '/oracle', label: 'The Oracle', icon: AudioLines, recording },
+    isAgency && { to: '/otterview', label: 'Otterview', icon: AudioLines, recording },
     { to: '/reports', label: 'Reports', icon: ChartColumn },
     isAgency && { to: '/clients', label: 'Clients', icon: Building2 },
     { to: '/settings', label: 'Settings', icon: Settings, count: counts?.pending_accounts },

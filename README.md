@@ -15,7 +15,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Careers pages** | Every client gets a public, branded careers page at `/careers/<client>` listing open roles, each with an application form (résumé upload, custom screening questions, consent). Link to it from the client's website. Add `?src=linkedin`, `?src=job_board` or `?src=referral` to an apply link to track where applicants came from. |
 | **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
-| **The Oracle** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [The Oracle](#the-oracle) and [Metaview in The Oracle](#metaview-in-the-oracle). |
+| **Otterview** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [Otterview](#otterview) and [Metaview in Otterview](#metaview-in-otterview). |
 | **Inbox** | Every new application across all clients lands in one review queue, oldest first. |
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
 | **Shortlist hand-off** | Submit a candidate to the hiring team with your write-up. They approve (the candidate moves to the next interview stage) or decline with a reason, so you can calibrate. |
@@ -160,11 +160,11 @@ The demo data (`npm run seed`) is the one exception to the start date: so that t
 them, the demo counts from a Monday about five months back and is loaded with the moments its made-up history
 would have recorded.
 
-## The Oracle
+## Otterview
 
-The Oracle is where recruiters' calls with candidates are kept: the ones recorded in Metaview (see
-[Metaview in The Oracle](#metaview-in-the-oracle)) and the ones recorded or uploaded in The Book itself. This
-section is about the second kind; once a call is in The Oracle, both kinds work the same way.
+Otterview is where recruiters' calls with candidates are kept: the ones recorded in Metaview (see
+[Metaview in Otterview](#metaview-in-otterview)) and the ones recorded or uploaded in The Book itself. This
+section is about the second kind; once a call is in Otterview, both kinds work the same way.
 
 1. **Record or upload.** A recruiter records the call in the browser, or uploads a recording made elsewhere (MP3,
    M4A, MP4, WAV, WebM or Ogg, up to 200 MB).
@@ -197,7 +197,7 @@ or notes, or the line on a candidate's history that says a call was recorded.
 
 - **Metaview.** The agency's conversations in Metaview, newest first, with a search box and a few filters. Each one
   says which candidate it was with, or offers the people it might have been with. Opening one makes it a call in
-  The Oracle. See [Metaview in The Oracle](#metaview-in-the-oracle).
+  Otterview. See [Metaview in Otterview](#metaview-in-otterview).
 - **Record a live conversation.** For a call on Meet, Zoom or Teams, on speaker, or in person: record it in the
   browser, or upload a recording made elsewhere. The calls recorded or uploaded in The Book are listed underneath.
   See [Recording a call](#recording-a-call).
@@ -206,13 +206,13 @@ A candidate's profile has a Calls tab with their calls of both kinds, in the ord
 
 ### Recording a call
 
-- Press **Record now** on The Oracle, or **Record a call** on the Calls tab of a candidate's profile, which starts
+- Press **Record now** on Otterview, or **Record a call** on the Calls tab of a candidate's profile, which starts
   with that person and job already chosen.
 - By default only the recruiter's microphone is recorded. For a call held in Google Meet, Zoom or Teams in a browser
   tab, press **Add the other side of the call**, choose that tab and tick "Also share tab audio". For a call on a
   phone or in a desktop app, put it on speaker so the microphone hears both sides.
 - A red strip with the time, Pause and Stop stays at the top of every page, so the recruiter can open the
-  candidate's profile or anything else in The Book while the call is recorded. Stop pressed on The Oracle opens the
+  candidate's profile or anything else in The Book while the call is recorded. Stop pressed on Otterview opens the
   call; pressed from the strip anywhere else it saves the call and leaves the recruiter where they are.
 - Closing or reloading the tab ends the recording; the browser asks first. Whatever had been recorded, up to the
   last few seconds, is saved the next time The Book is opened in that browser (or within about twenty seconds, if
@@ -236,7 +236,7 @@ A candidate's profile has a Calls tab with their calls of both kinds, in the ord
 | `ANTHROPIC_API_KEY` | The notes summary and the submission draft, written by Claude from the transcript. This is the same key job autofill uses. | Transcripts still work. The recruiter writes the notes and the write-up by hand. |
 
 Claude cannot listen to audio, which is why transcription needs a service of its own. Optional settings:
-`ORACLE_MODEL` chooses a different Claude model for the Oracle (it otherwise follows `AUTOFILL_MODEL`, then
+`ORACLE_MODEL` chooses a different Claude model for Otterview (it otherwise follows `AUTOFILL_MODEL`, then
 `claude-opus-5-5`); `DEEPGRAM_LANGUAGE` sets the language of the calls (default `en`); `DEEPGRAM_API_URL` points at
 another Deepgram address, for example `https://api.eu.deepgram.com/v1/listen` to have audio processed in the EU.
 A request for notes or a draft that gets no answer is given up on after three minutes and one more try
@@ -261,7 +261,7 @@ size the file is. Transcripts and notes are in the database.
   current job, the advert, the must-haves and ideal profile from your brief). Your fee and the rest of the brief are
   never sent.
 - **To Metaview:** only the key and the requests themselves (which conversations to list or fetch). Nothing about the
-  candidates in The Book goes there. See [Metaview in The Oracle](#metaview-in-the-oracle).
+  candidates in The Book goes there. See [Metaview in Otterview](#metaview-in-otterview).
 
 ### Consent to recording
 
@@ -287,7 +287,7 @@ not quotes; check the providers' pricing pages.
 
 - **Deepgram:** its pricing page could not be read while this was built, and the published figures found elsewhere
   disagree. Plan for roughly $0.26 to $0.38 per hour of audio. Asking Deepgram not to keep or train on the audio,
-  which the Oracle always does, may put the rate up.
+  which Otterview always does, may put the rate up.
 - **Claude:** an hour-long call is about 9,000 words. At the published price of `claude-opus-5-5` ($4 per million
   tokens read, $20 per million written) the notes for such a call should cost in the region of 10 to 20 US cents,
   and each submission draft about the same. This is worked out from the prices, not measured.
@@ -306,11 +306,11 @@ Recording was tested in Chrome only. Edge, Safari, Firefox and phones have not b
 tried, and neither has a real call of an hour or more. The cases where a day or a week passes (the server saving a
 call by itself, a browser coming back later with the rest) were run by putting the clock back, not by waiting.
 
-## Metaview in The Oracle
+## Metaview in Otterview
 
-If your agency records its candidate calls in [Metaview](https://www.metaview.ai), The Oracle can show them. The
+If your agency records its candidate calls in [Metaview](https://www.metaview.ai), Otterview can show them. The
 Metaview tab lists every conversation Metaview has for you, puts each one on the candidate it was with, and opens
-any of them as a call in The Oracle: the transcript with the speakers named, Metaview's own notes as the notes
+any of them as a call in Otterview: the transcript with the speakers named, Metaview's own notes as the notes
 summary, how long it was, when it took place, and a link back to the conversation in Metaview.
 
 From then on it is a call like any other. Speakers can be renamed, the notes edited or written again by The Book's
@@ -325,7 +325,7 @@ Metaview.
    the person who made it and sees what that person sees in Metaview, so make it with an account that can see all
    of the agency's conversations (an admin's).
 2. **Enter it in The Book.** An admin opens **Settings**, **Agency**, and pastes the key into the **Metaview** card
-   (the **Connect Metaview** button on The Oracle's Metaview tab leads there). The Book tries the key against
+   (the **Connect Metaview** button on Otterview's Metaview tab leads there). The Book tries the key against
    Metaview before keeping it: a key Metaview refuses is not saved, and the card says so. Recruiters see whether
    Metaview is connected, but only an admin can connect it, change the key or disconnect it.
 
@@ -365,7 +365,7 @@ the app can be removed in the app.
   +1 647…" here. The number still matches them to their candidate, and once the call is on a candidate it, and
   the speaker in its transcript, carry the candidate's name.
 - **Opening a call brings it in.** The Book fetches that one conversation's transcript and notes and makes the call
-  in The Oracle, on the candidate it was matched to (their most recent job in progress) or the one the recruiter
+  in Otterview, on the candidate it was matched to (their most recent job in progress) or the one the recruiter
   chose. The candidate's history gets the line "Metaview call, 12 min", which client users never see. Opening it
   again opens the same call. The call belongs to the interviewer, if they have a login to The Book, and otherwise
   to whoever opened it.
@@ -410,7 +410,7 @@ conversation there. That happens only for conversations that are brought in.
   needed to list a conversation and to match it, and nothing more is kept. Addresses and numbers are used for
   matching and searching on the server and are not sent to the browser, with one exception: where the number is
   all Metaview has to call somebody by, it is shown as their name, as it is in Metaview.
-- **For a conversation that has been brought in:** its transcript and notes, on the call in The Oracle.
+- **For a conversation that has been brought in:** its transcript and notes, on the call in Otterview.
 - **Never:** audio. Metaview does not give it out.
 - **The key:** sealed with a secret that the server makes on first use and keeps in `DATA_DIR/server-secret`, beside
   the database. It is never shown again, never returned by the server and never written to a log. Back the data
@@ -438,7 +438,7 @@ the people who were only in that job and their calls, but does not do this for e
 
 An admin can **Disconnect** Metaview (Settings, Agency): that removes the key and everything remembered about
 conversations that were never brought in, at once, even if The Book is in the middle of reading Metaview at that
-moment. Calls already in The Oracle stay, and still open. The same care is taken when the key is replaced by one
+moment. Calls already in Otterview stay, and still open. The same care is taken when the key is replaced by one
 for another Metaview workspace: nothing of the first workspace's list is carried into the second.
 
 ### Before you rely on Metaview
@@ -563,12 +563,12 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   billed to that account per use. It uses `claude-opus-5-5`; set `AUTOFILL_MODEL` to use a different Claude model.
   A draft that has not come back after two and a half minutes is given up on and the basics are filled in instead
   (`AUTOFILL_AI_TIMEOUT_MS` changes how long). Without a key, autofill still works in its basic form and nothing is
-  sent anywhere. The same key lets the Oracle
+  sent anywhere. The same key lets Otterview
   write call notes and submission drafts.
-- **Connect call transcription (optional)** by setting `DEEPGRAM_API_KEY`. See [The Oracle](#the-oracle) for what is
+- **Connect call transcription (optional)** by setting `DEEPGRAM_API_KEY`. See [Otterview](#otterview) for what is
   sent, what it costs and what happens without it.
 - **Connect Metaview (optional)** in the app: an admin pastes a Metaview key under Settings, Agency, Metaview. Nothing
-  needs setting on the server, though `METAVIEW_API_KEY` works too. See [Metaview in The Oracle](#metaview-in-the-oracle).
+  needs setting on the server, though `METAVIEW_API_KEY` works too. See [Metaview in Otterview](#metaview-in-otterview).
 - **Tell the app about proxies.** Leave `TRUST_PROXY` unset when the app is reached directly (plain `docker run`).
   Behind a reverse proxy set it to the number of proxies in front, or sign-in and application rate limits will
   either lump every visitor together or be trivially bypassed.
@@ -597,7 +597,7 @@ node server/forget-removed.js --yes    # clears it
 ```
 
 It can be run while the app is running, clears only those four things (written over, not just marked as deleted),
-and leaves every call in The Oracle alone, phone calls included. Anyone who had saved a calendar link can also
+and leaves every call in Otterview alone, phone calls included. Anyone who had saved a calendar link can also
 reset their calendar's private address with their calendar provider, which makes the old link useless everywhere.
 
 ## How it is built
@@ -608,8 +608,8 @@ server/
   api.js     All API routes: auth, careers pages, jobs, pipeline, interviews, reports
   reporting.js  The Individual and Clients reports: the record of submissions, first interviews, placements and searches, and the day counting starts
   autofill.js  Drafting a job and its brief from a job description and intake notes
-  oracle.js  The Oracle: recording and uploading calls, transcription, notes and submission drafts
-  metaview.js         Metaview in The Oracle: the key, reading the list in the background, bringing calls in
+  oracle.js  Otterview: recording and uploading calls, transcription, notes and submission drafts
+  metaview.js         Metaview in Otterview: the key, reading the list in the background, bringing calls in
   metaview-client.js  The connection to Metaview: one request at a time, read-only, and the reading of its answers
   match.js   Which candidate a conversation was with: by address, by phone number, by exact name
   webm.js    Writes a browser recording's length into the file, so the player can seek
@@ -622,7 +622,7 @@ server/
 src/
   App.jsx, state.jsx, lib.js, ui.jsx   App shell, data hooks, helpers, shared components
   components/                           Candidate profile, modals, forms, layout
-  oracle/                               What The Oracle's screens share with the rest of the app (the recorder)
+  oracle/                               What Otterview's screens share with the rest of the app (the recorder)
   pages/                                One file per screen, plus the public careers pages
 ```
 
@@ -647,15 +647,15 @@ they made at that client, their résumé files, and their recorded calls with th
 - Self-service password reset by email. Until then, an agency user deactivates the account and invites the person
   again at the same address (see "Accounts and getting back in").
 - Declining many account requests at once; each is declined on its own, and unanswered ones expire after 14 days.
-- AI-assisted screening of applications. (Calls are summarised by the Oracle; applications and résumés are not.)
-- Joining a video call to record it. The Oracle records in the recruiter's browser, or takes an uploaded recording
+- AI-assisted screening of applications. (Calls are summarised by Otterview; applications and résumés are not.)
+- Joining a video call to record it. Otterview records in the recruiter's browser, or takes an uploaded recording
   (Metaview joins meetings itself, and those conversations arrive through the Metaview tab).
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
 - Automated tests that drive the screens in a browser as part of `npm test`. `npm test` covers the résumé reader,
   job autofill (the plain reader, and the route against a stand-in for the AI service), the recruiter brief, the activity
-  feed's milestones, résumé and photo files, the Oracle's server side, the Oracle's uploader, Metaview in The Oracle
+  feed's milestones, résumé and photo files, Otterview's server side, Otterview's uploader, Metaview in Otterview
   against a stand-in for Metaview, and starting on a database from before phone calls and the calendar were taken
-  out. The Oracle's recording screens were driven end to end in Chrome with a simulated microphone while they were
+  out. Otterview's recording screens were driven end to end in Chrome with a simulated microphone while they were
   built (record, reload and server restart mid-call, a lost connection, two people on one computer, transcript,
   notes, add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude. The two tabs with
   Metaview were driven the same way at computer and phone widths against the stand-in for Metaview (connect, the

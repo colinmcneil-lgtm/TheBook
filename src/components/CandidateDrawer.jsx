@@ -41,7 +41,7 @@ function CandidateView({ data, onClose }) {
     toast(to.kind === 'hired' ? `${firstName(candidate.name)} marked as hired` : `Moved to ${to.name}`);
     bump();
   });
-  // Calls (The Oracle) belong to the agency: the hiring team never sees that they exist.
+  // Calls (Otterview) belong to the agency: the hiring team never sees that they exist.
   // The list is looked at again while a call is being written up.
   const { data: calls, error: callsError, reload: reloadCalls } = useLive(isAgency ? url('/oracle/calls', { candidate_id: candidate.id }) : null,
     (rows) => rows.some((c) => c.status === 'transcribing'));
@@ -482,7 +482,7 @@ function InterviewsTab({ data, onSchedule, onScorecard }) {
 }
 
 /**
- * Calls with this person in The Oracle, for any of the jobs they are being considered for: the ones recorded or
+ * Calls with this person in Otterview, for any of the jobs they are being considered for: the ones recorded or
  * uploaded in The Book and the ones brought in from Metaview. Under them, when Metaview is connected, the Metaview
  * calls that belong to this person and are not in The Book yet, each of which can be added. Agency only.
  */
@@ -522,7 +522,7 @@ function CallsTab({ data, calls, error, reload }) {
   if (error) return <Card><Empty icon={CircleAlert} title="The calls could not be loaded">{error}</Empty></Card>;
   if (!calls) return <Loading />;
   if (!calls.length && !inMetaview.length)
-    return <Card><Empty icon={AudioLines} title="No calls yet" action={record}>Record your conversations with {firstName(candidate.name)} in The Oracle, and they are kept here with their transcript and notes. Only your agency sees them.</Empty></Card>;
+    return <Card><Empty icon={AudioLines} title="No calls yet" action={record}>Record your conversations with {firstName(candidate.name)} in Otterview, and they are kept here with their transcript and notes. Only your agency sees them.</Empty></Card>;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
@@ -532,7 +532,7 @@ function CallsTab({ data, calls, error, reload }) {
       {calls.length > 0 && (
         <Card className="divide-y divide-line overflow-hidden">
           {calls.map((c) => (
-            <Link key={c.id} to={`/oracle/${c.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 hover:bg-stone-50">
+            <Link key={c.id} to={`/otterview/${c.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 hover:bg-stone-50">
               <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700 ring-1 ring-brand-100 ring-inset" aria-hidden="true">
                 {c.source === 'metaview' ? <AudioLines className="size-4" /> : <Mic className="size-4" />}
               </span>
@@ -580,7 +580,7 @@ function CallsTab({ data, calls, error, reload }) {
             ))}
           </Card>
           {waiting.data?.total > waiting.data?.calls.length && (
-            <p className="text-xs text-stone-500">These are the {waiting.data.calls.length} most recent. <Link to={`${oraclePath('metaview')}&who=everyone&q=${encodeURIComponent(candidate.name)}`} className="font-medium text-brand-700 hover:underline">Find the rest in The Oracle</Link></p>
+            <p className="text-xs text-stone-500">These are the {waiting.data.calls.length} most recent. <Link to={`${oraclePath('metaview')}&who=everyone&q=${encodeURIComponent(candidate.name)}`} className="font-medium text-brand-700 hover:underline">Find the rest in Otterview</Link></p>
           )}
         </>
       )}

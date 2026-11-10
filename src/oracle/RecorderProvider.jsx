@@ -57,8 +57,8 @@ export function RecorderProvider({ children }) {
   const navigate = useNavigate();
   const toast = useToast();
   const location = useLocation();
-  const onOracle = useRef(false); // is the recruiter looking at The Oracle right now, or working somewhere else in The Book?
-  onOracle.current = location.pathname.startsWith('/oracle');
+  const onOracle = useRef(false); // is the recruiter looking at Otterview right now, or working somewhere else in The Book?
+  onOracle.current = location.pathname.startsWith('/otterview');
   const rec = useRef(null);
   const recovering = useRef(null);
   const stoppedShort = useRef(false); // a call ended in this page without reaching the server (as opposed to the page closing)
@@ -171,11 +171,11 @@ export function RecorderProvider({ children }) {
     try {
       const result = await r.stop({ interrupted: broke });
       reset();
-      // Stopped from The Oracle, the recruiter goes straight to the call. Stopped from the strip while working somewhere
+      // Stopped from Otterview, the recruiter goes straight to the call. Stopped from the strip while working somewhere
       // else (a candidate's profile, with a note half typed), they stay where they are and are offered the call.
       if (onOracle.current && !atLimit && !broke) {
         toast('Call saved');
-        navigate(`/oracle/${result.call_id}`);
+        navigate(`/otterview/${result.call_id}`);
       } else {
         setRecovered({ call_id: result.call_id, late: true, atLimit, broke });
       }
@@ -284,7 +284,7 @@ export function RecorderStrip() {
     return (
       <div role="region" aria-label="Call recording" className={cx('no-print flex h-11 shrink-0 items-center gap-3 px-3 text-sm text-white sm:px-4', paused ? 'bg-stone-800' : 'bg-red-700')}>
         {/* The dot, the word and the time are together the way back to the recording from any page. */}
-        <Link to={oraclePath('record')} title="Open the recording in The Oracle" className="flex shrink-0 items-center gap-2.5 rounded-md hover:opacity-90">
+        <Link to={oraclePath('record')} title="Open the recording in Otterview" className="flex shrink-0 items-center gap-2.5 rounded-md hover:opacity-90">
           <span className="relative flex size-2.5 shrink-0" aria-hidden="true">
             {state === 'recording' && <span className="absolute inline-flex size-full animate-ping rounded-full bg-white/70" />}
             <span className={cx('relative inline-flex size-2.5 rounded-full', paused ? 'bg-stone-400' : 'bg-white')} />
@@ -324,7 +324,7 @@ export function RecorderStrip() {
             : recovered.late ? 'The call you recorded has been saved.'
             : 'A call you were recording was cut off. What was recorded has been saved.'}
         </span>
-        <Link to={`/oracle/${recovered.call_id}`} onClick={dismissRecovered} className={cx('font-medium underline underline-offset-2', short ? 'text-amber-900 hover:text-amber-950' : 'text-brand-800 hover:text-brand-950')}>Open the call</Link>
+        <Link to={`/otterview/${recovered.call_id}`} onClick={dismissRecovered} className={cx('font-medium underline underline-offset-2', short ? 'text-amber-900 hover:text-amber-950' : 'text-brand-800 hover:text-brand-950')}>Open the call</Link>
         <button type="button" onClick={dismissRecovered} aria-label="Dismiss" className={cx('rounded-md p-1', short ? 'text-amber-700 hover:bg-amber-100' : 'text-brand-700 hover:bg-brand-100')}><X className="size-4" /></button>
       </div>
     );

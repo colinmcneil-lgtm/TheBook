@@ -1,4 +1,4 @@
-// The Oracle: record a call with a candidate, get it written out with who said what, a notes summary, and a draft
+// Otterview: record a call with a candidate, get it written out with who said what, a notes summary, and a draft
 // of the write-up that goes to the client's hiring team.
 //
 // How a call moves through here:
@@ -1118,7 +1118,7 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
   // Confirming consent is part of starting, so a recording cannot exist without it.
   api.post('/oracle/recordings', agencyOnly, async (req, res) => {
     const b = req.body || {};
-    if (!recordFormat(b.mimeType)) bad('This browser records in a format The Oracle cannot keep. Try Chrome, Edge, Firefox or Safari.');
+    if (!recordFormat(b.mimeType)) bad('This browser records in a format Otterview cannot keep. Try Chrome, Edge, Firefox or Safari.');
     // The sentence the recruiter ticked is part of the record, so a start that does not say what was confirmed is refused too.
     const wording = clean(b.consent?.wording, 500);
     if (b.consent?.confirmed !== true || !wording) bad('Confirm that everyone on the call has agreed to be recorded before you start.');
@@ -1346,7 +1346,7 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
     try {
       result = await work();
     } catch (err) {
-      console.error('The Oracle could not reach the AI service:', err?.status ?? '', err?.name ?? '', err?.message ?? err);
+      console.error('Otterview could not reach the AI service:', err?.status ?? '', err?.name ?? '', err?.message ?? err);
       bad(aiProblem(err), 502);
     }
     return result ?? bad(declined, 422);

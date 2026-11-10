@@ -366,7 +366,7 @@ function NotesCard({ data, status, onPatch, reload, awaited, className }) {
             {hasTranscript && call.notes_error ? <Notice tone="bad"><span className="font-medium">The notes could not be written.</span> {call.notes_error}</Notice> : (
               <p className="text-sm text-stone-600">
                 {!hasTranscript ? 'The notes summary is written from the transcript, so there is nothing to summarise yet.'
-                  : status && !status.ai ? 'Notes summaries are not connected yet, so The Oracle cannot write these for you. You can write your own.'
+                  : status && !status.ai ? 'Notes summaries are not connected yet, so Otterview cannot write these for you. You can write your own.'
                   : 'There are no notes for this call yet.'}
               </p>
             )}
@@ -412,7 +412,7 @@ function SubmissionCard({ data, status, onPatch, reload, className }) {
   const blocked = !candidate ? 'Add this call to a candidate first. The draft is written for the hiring team of the job they are being considered for.'
     : !application ? `Choose which of ${firstName(candidate.name)}’s jobs this call is about first (above). The draft is written for that job’s hiring team.`
     : !hasMaterial ? 'There is nothing to draft from until this call has a transcript or notes.'
-    : status && !status.ai ? 'Drafting is not connected yet, so The Oracle cannot write this for you. You can write it yourself.'
+    : status && !status.ai ? 'Drafting is not connected yet, so Otterview cannot write this for you. You can write it yourself.'
     : null;
 
   return (
@@ -450,7 +450,7 @@ function SubmissionCard({ data, status, onPatch, reload, className }) {
           </>
         ) : (
           <>
-            <p className="text-sm text-stone-600">{blocked || `The Oracle can draft the write-up that goes to ${application.client_name} when you submit ${firstName(candidate.name)}: why they are worth meeting, in your words, from what was said on the call.`}</p>
+            <p className="text-sm text-stone-600">{blocked || `Otterview can draft the write-up that goes to ${application.client_name} when you submit ${firstName(candidate.name)}: why they are worth meeting, in your words, from what was said on the call.`}</p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="primary" icon={Sparkles} disabled={Boolean(blocked)} title={blocked || undefined} onClick={draft}>Draft the submission</Button>
               {application && <Button size="sm" icon={NotebookPen} onClick={() => setOpen(true)}>Write it yourself</Button>}
@@ -493,7 +493,7 @@ export default function OracleCall() {
 
   // Back to the list the call was opened from, as it was left (its search, its filter). A call reached some other
   // way goes back to the tab it is listed on.
-  const back = location.state?.back || (data ? oraclePath(tabOfCall(data.call)) : '/oracle');
+  const back = location.state?.back || (data ? oraclePath(tabOfCall(data.call)) : '/otterview');
   const onPatch = async (changes) => set(await api.patch(`/oracle/calls/${id}`, changes));
   const [remove, removing] = useAction(async () => {
     if (!window.confirm(data?.call.source === 'metaview'
@@ -534,7 +534,7 @@ export default function OracleCall() {
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-8 sm:py-8">
-      <Link to={back} className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 hover:text-brand-700"><ArrowLeft className="size-4" />The Oracle</Link>
+      <Link to={back} className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 hover:text-brand-700"><ArrowLeft className="size-4" />Otterview</Link>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 basis-72">
           <Title call={{ ...call, candidate_name: candidate?.name }} onPatch={onPatch} />

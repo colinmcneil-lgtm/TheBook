@@ -1,4 +1,4 @@
-// The Oracle's small readers and writers, on their own: what comes back from the transcription service, a pasted
+// Otterview's small readers and writers, on their own: what comes back from the transcription service, a pasted
 // transcript, the first bytes of an audio file, a recording's length, and the layout of the notes.
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -1,4 +1,4 @@
-// The rules behind The Oracle's screens: which tab opens, what a call is called, what a Metaview call's row says and
+// The rules behind Otterview's screens: which tab opens, what a call is called, what a Metaview call's row says and
 // whose it is in The Book. Run with `npm test`.
 // The screens themselves (React) were checked in a real browser against a stand-in for the Metaview routes; these
 // are the parts that can be checked without one. Everyone named here is invented.
@@ -15,13 +15,13 @@ const call = (more = {}) => ({
 });
 const person = (more = {}) => ({ application_id: 7, candidate_id: 3, name: 'Dana Whitlock', photo: null, job_title: 'Financial Controller', client_name: 'Northwind', how: 'phone', ...more });
 
-test('The Oracle opens on the tab in the address, else the one used last, else Metaview', () => {
+test('Otterview opens on the tab in the address, else the one used last, else Metaview', () => {
   assert.deepEqual(ORACLE_TABS, ['metaview', 'record']);
   assert.equal(oracleTab('record', 'metaview'), 'record');
   assert.equal(oracleTab(null, 'record'), 'record', 'the tab used last');
   assert.equal(oracleTab(null, null), 'metaview', 'the first tab, the first time');
   assert.equal(oracleTab('calendar', 'phone'), 'metaview', 'a tab that no longer exists, in the address or remembered from before');
-  assert.equal(oraclePath('record'), '/oracle?tab=record');
+  assert.equal(oraclePath('record'), '/otterview?tab=record');
 });
 
 test('a call goes back to the tab it is listed on', () => {
@@ -32,7 +32,7 @@ test('a call goes back to the tab it is listed on', () => {
   assert.equal(tabOfCall(null), 'record');
 });
 
-test('a call says how it came to be in The Oracle', () => {
+test('a call says how it came to be in Otterview', () => {
   assert.equal(madeBy({ source: 'recorded', created_by_name: 'Alex Morgan' }), 'Recorded by Alex Morgan');
   assert.equal(madeBy({ source: 'uploaded', created_by_name: 'Alex Morgan' }), 'Uploaded by Alex Morgan');
   assert.equal(madeBy({ source: 'recorded', created_by_name: null }), 'Recorded by someone who has left');

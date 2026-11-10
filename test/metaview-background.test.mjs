@@ -1,4 +1,4 @@
-// What Metaview in The Oracle does with nobody clicking: carrying on after a restart, bringing calls in by itself,
+// What Metaview in Otterview does with nobody clicking: carrying on after a restart, bringing calls in by itself,
 // and staying quick with a few years of conversations and a large workspace. Run with `npm test`.
 //
 // The real server each time, reading the stand-in for Metaview. The real Metaview is never called.
@@ -378,7 +378,7 @@ test('the key can come from where The Book is hosted instead: it connects by its
   await standIn.stop();
 });
 
-test('the whole list is read again from time to time: what was deleted in Metaview leaves the list, a call in The Oracle stays', async () => {
+test('the whole list is read again from time to time: what was deleted in Metaview leaves the list, a call in Otterview stays', async () => {
   const standIn = keep(await metaviewStandIn(PORTS.standInLarge, { count: 60 }));
   const dataDir = keep(tempDir('metaview-again'));
   // "From time to time" is a week; here it is half a second.
@@ -398,7 +398,7 @@ test('the whole list is read again from time to time: what was deleted in Metavi
   await until(() => statusOf(w.owner), (s) => s.known === 59, 20000);
   const list = (await w.owner.get('/metaview/calls?limit=100')).body.calls;
   assert.equal(list.some((call) => call.id === deleted.id), false, 'the one deleted in Metaview is forgotten');
-  assert.equal(list.find((call) => call.id === broughtIn.id).call_id, call_id, 'the one that is a call in The Oracle stays listed');
+  assert.equal(list.find((call) => call.id === broughtIn.id).call_id, call_id, 'the one that is a call in Otterview stays listed');
   assert.equal((await w.owner.get(`/oracle/calls/${call_id}`)).status, 200);
   assert.equal(list.find((call) => call.id === renamed.id).people[0].name, 'Somebody Renamed');
   // It was read a page at a time like the first time, and before forgetting a conversation Metaview was asked for it by its number.

@@ -497,9 +497,9 @@ const adminOnly = (req, res, next) => (req.user.role === 'admin' ? next() : res.
 
 // Drafting a job from a job description and intake notes lives in its own module.
 registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, briefFields: (b) => briefFields(b) });
-// The Oracle (recording calls with candidates, transcripts, notes and submission drafts) lives in its own module too.
+// Otterview (recording calls with candidates, transcripts, notes and submission drafts) lives in its own module too.
 registerOracle(api, { agencyOnly, bad, clean, int, takeHit, logActivity, loadApp: (id, user) => loadApp(id, user) });
-// Metaview in The Oracle (the agency's conversations recorded in Metaview, listed and brought in as calls) is a module of its own as well.
+// Metaview in Otterview (the agency's conversations recorded in Metaview, listed and brought in as calls) is a module of its own as well.
 registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, takeHit });
 // Reporting (the Individual and Clients reports, and the record of the moments they count) is a module of its own too.
 // The routes below tell it when one of those moments happens: each call to `reporting.` is one of them.
@@ -1171,7 +1171,7 @@ api.get('/applications/:id', (req, res) => {
   const notes = q.all(
     `SELECT n.*, u.name AS user_name, u.role AS user_role FROM notes n LEFT JOIN users u ON u.id = n.user_id
      WHERE n.application_id = ? ${agency ? '' : 'AND n.private = 0'} ORDER BY n.created_at DESC`, a.id);
-  // That a call was recorded is the agency's business: clients never see anything of the Oracle, this line included.
+  // That a call was recorded is the agency's business: clients never see anything of Otterview, this line included.
   const activities = q.all(
     `SELECT ac.*, u.name AS user_name FROM activities ac LEFT JOIN users u ON u.id = ac.user_id
      WHERE ac.application_id = ? ${agency ? '' : `AND ac.type != 'call'`} ORDER BY ac.created_at DESC, ac.id DESC`, a.id);
