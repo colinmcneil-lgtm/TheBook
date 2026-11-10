@@ -6,13 +6,14 @@
 //
 // Three rules shape everything here.
 //  1. A list belongs to one person. Every route acts on the signed-in person's own items; an item's number sent by
-//     anybody else answers "Not found", exactly as a number that does not exist. Agency only: client users are
-//     refused on every route.
+//     anybody else is answered exactly as a number that does not exist. Agency only: client users are refused on
+//     every route.
 //  2. The Book fills the two people lists by itself from the interviews scheduled in it. A candidate goes on the To
 //     prep list of the recruiter who owns them in that job (failing that, of whoever scheduled the interview) from
 //     seven days before the interview starts. When the interview's end has passed, their prep is ticked and they go
 //     on that person's To debrief list. A cancelled interview takes its items with it, and a moved one keeps them
-//     (they show the new time).
+//     (they show the new time). An item The Book takes off is set aside, not deleted: if the same interview brings
+//     it back (moved back within the week, un-cancelled, the candidate handed back), it comes back with its note.
 //  3. What a person took off their list, or ticked, is theirs to decide: The Book never puts the same person back
 //     for the same interview. That is why a removed item is kept as a row and only marked removed.
 //
@@ -22,8 +23,10 @@
 // candidate or job, and the database removes those items by itself (see the table in db.js).
 import { q, tx, now, getSetting, setSetting } from './db.js';
 
-const DAY = 86400000;
+const HOUR = 3600000;
+const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
+const MONTH = 30 * DAY;
 const PEOPLE = ['prep', 'debrief'];
 const KINDS = ['job', ...PEOPLE];
 const NOTE_MAX = 300;
@@ -41,6 +44,19 @@ const stamp = () => clock().toISOString();
 const SINCE = 'todos_since';
 if (!getSetting(SINCE)) setSetting(SINCE, new Date().toISOString());
 const since = Date.parse(getSetting(SINCE));
+
+// When the lists were last brought up to date. Somebody whose interview ended while nobody was looking (the week
+// the office was shut) is still to debrief when The Book is next opened, though it ended over seven days ago. It
+// is written down at most once an hour: being a little behind only means looking at a few interviews twice.
+const SEEN = 'todos_seen';
+let seen = Date.parse(getSetting(SEEN) || '') || since;
+let seenSaved = seen;
+function sawAt(at) {
+  seen = at;
+  if (Math.abs(at - seenSaved) < HOUR) return;
+  setSetting(SEEN, new Date(at).toISOString());
+  seenSaved = at;
+}
 
 // ---------- interviews, as the lists see them ----------
 /** A candidate's interviews in a job, earliest first, each with when it starts and ends and whether it is over. */
@@ -77,15 +93,29 @@ function place(item, position) {
   order.forEach((id, n) => q.run('UPDATE todos SET position = ? WHERE id = ?', n, id));
 }
 
+/**
+ * Where The Book puts somebody on To prep: above the first person on the list whose interview is later than
+ * theirs, so that tomorrow's interview is not at the bottom of a long list. After everybody when nobody's is later.
+ * The order the person has put the others in is left alone.
+ */
+function placeByTime(item, start) {
+  const others = q.all(
+    `SELECT (SELECT starts_at FROM interviews i WHERE i.id = todos.interview_id AND i.status != 'cancelled') AS starts_at
+     FROM todos WHERE user_id = ? AND kind = 'prep' AND ${OPEN} AND id != ? ORDER BY position, id`, item.user_id, item.id);
+  const later = others.findIndex((o) => o.starts_at && Date.parse(o.starts_at) > start);
+  place(item, later === -1 ? others.length : later);
+}
+
 // ---------- what The Book does by itself ----------
 /**
  * Bring the people lists up to date with one candidate's interviews in a job, for the time it is now. It can be run
  * any number of times: it only changes what no longer matches.
  *
  * To prep follows the next interview that has not been held, from seven days before it starts; To debrief follows
- * the latest one that has, for seven days after it ended. One at a time for each, so two interviews in a week do not
- * put the same person on a list twice. The item goes to the recruiter who owns the candidate in that job, or to
- * whoever scheduled the interview when nobody on the team owns them.
+ * the latest one that has, for seven days after it ended (longer when nobody opened The Book in that time, see
+ * `seen`). One at a time for each, so two interviews in a week do not put the same person on a list twice. The item
+ * goes to the recruiter who owns the candidate in that job, or to whoever scheduled the interview when nobody on
+ * the team owns them.
  */
 function settle(applicationId) {
   const app = q.get('SELECT id, owner_id, status FROM applications WHERE id = ?', applicationId);
@@ -96,20 +126,24 @@ function settle(applicationId) {
   // Somebody rejected or withdrawn has nothing to be prepared for; what already happened can still be debriefed.
   const next = app.status === 'active' || app.status === 'hired' ? nextUp(interviews) : undefined;
   const last = lastOver(interviews);
-  let rows = q.all('SELECT * FROM todos WHERE application_id = ?', app.id);
+  const rows = q.all('SELECT * FROM todos WHERE application_id = ?', app.id);
   const open = (r) => !r.done_at && !r.removed_at;
   // Each change is written and made to the copy in hand, so that the steps below see what the steps above did.
   const set = (r, fields) => {
     q.run(`UPDATE todos SET ${Object.keys(fields).map((key) => `${key} = ?`).join(', ')} WHERE id = ?`, ...Object.values(fields), r.id);
     Object.assign(r, fields);
   };
-  const remove = (r) => { q.run('DELETE FROM todos WHERE id = ?', r.id); rows = rows.filter((x) => x !== r); };
+  // Taken off by The Book, not by the person. The row is kept, marked as set aside, so that the note on it is
+  // still there if this interview brings the item back.
+  const setAside = (r) => set(r, { removed_at: t, set_aside: 1 });
   const owner = onTeam(app.owner_id);
   const schedulers = new Map();
   const scheduler = (userId) => { if (!schedulers.has(userId)) schedulers.set(userId, onTeam(userId)); return schedulers.get(userId); };
 
   for (const i of interviews) {
-    const wanted = { prep: i === next && at >= i.start - WEEK, debrief: i === last && at < i.end + WEEK && i.end >= since };
+    // To debrief for a week after it ended, or, when nobody has opened The Book since it ended, for a month.
+    const fresh = at < i.end + WEEK || (i.end > seen && at < i.end + MONTH);
+    const wanted = { prep: i === next && at >= i.start - WEEK, debrief: i === last && fresh && i.end >= since };
     const who = owner ?? scheduler(i.created_by);
 
     // What is already on somebody's list for this interview.
@@ -117,29 +151,38 @@ function settle(applicationId) {
       // A prep The Book ticked because the time had passed is to do again if the interview turns out not to have
       // been held: it was moved to a later time afterwards.
       const twin = rows.some((x) => x !== r && x.user_id === r.user_id && x.kind === r.kind && open(x));
-      if (r.done_at && r.kind === 'prep' && r.auto_done && !i.over && !i.cancelled && !twin) set(r, { done_at: null, auto_done: 0, position: endOf(r.user_id, 'prep') });
+      if (r.done_at && r.kind === 'prep' && r.auto_done && !i.over && !i.cancelled && !twin) {
+        set(r, { done_at: null, auto_done: 0, position: endOf(r.user_id, 'prep') });
+        placeByTime(r, i.start);
+      }
       if (r.done_at) continue;
       // An item the person added themselves stays on their list without the interview; one The Book added goes.
-      const letGo = () => (r.auto ? remove(r) : set(r, { interview_id: null }));
+      const letGo = () => (r.auto ? setAside(r) : set(r, { interview_id: null }));
       if (r.kind === 'prep') {
         if (i.over) set(r, { done_at: t, auto_done: 1 });   // too late to prepare them: it comes off, as done
         else if (i.cancelled) letGo();
         // Moved to more than a week away, or the candidate now belongs to somebody else: it is added again, to
         // the right list, when it is due.
-        else if (r.auto && (!wanted.prep || (who && r.user_id !== who))) remove(r);
+        else if (r.auto && (!wanted.prep || (who && r.user_id !== who))) setAside(r);
       } else if (!i.over) letGo();                           // cancelled, or moved to a time that has not come yet
-      else if (r.auto && wanted.debrief && who && r.user_id !== who) remove(r);
+      else if (r.auto && wanted.debrief && who && r.user_id !== who) setAside(r);
     }
 
     for (const kind of PEOPLE) {
       if (!wanted[kind]) continue;
       // Anybody who put this candidate on their own list with no interview to go by now has one.
       for (const r of rows.filter((x) => x.kind === kind && open(x) && !x.interview_id)) set(r, { interview_id: i.id });
-      // Already there, or dealt with: ticked or taken off for this interview, it is not put back.
-      if (!who || rows.some((x) => x.user_id === who && x.kind === kind && x.interview_id === i.id)) continue;
+      // Already there, or dealt with: ticked or taken off by the person for this interview, it is not put back.
+      const forThis = (x) => x.user_id === who && x.kind === kind && x.interview_id === i.id;
+      if (!who || rows.some((x) => forThis(x) && !x.set_aside)) continue;
       const theirs = rows.find((x) => x.user_id === who && x.kind === kind && open(x));
-      if (theirs) set(theirs, { interview_id: i.id });       // on their list for an earlier interview: it follows this one now
-      else rows.push(q.get('SELECT * FROM todos WHERE id = ?', insert({ userId: who, kind, applicationId: app.id, interviewId: i.id, auto: 1 })));
+      if (theirs) { set(theirs, { interview_id: i.id }); continue; } // on their list for an earlier interview: it follows this one now
+      // The item The Book set aside for this interview comes back as it was, note and all; otherwise a new one.
+      let item = rows.find((x) => forThis(x) && x.set_aside);
+      if (item) set(item, { removed_at: null, set_aside: 0, position: endOf(who, kind) });
+      else rows.push(item = q.get('SELECT * FROM todos WHERE id = ?', insert({ userId: who, kind, applicationId: app.id, interviewId: i.id, auto: 1 })));
+      // Somebody to prep goes in by the time of their interview. Somebody to debrief goes last: longest waiting first.
+      if (kind === 'prep') placeByTime(item, i.start);
     }
   }
 }
@@ -157,19 +200,27 @@ export const interviewChanged = (applicationId) => settleQuietly(applicationId);
 
 /**
  * Bring everybody's people lists up to date for the time it is now: interviews that have come within a week, and
- * interviews whose end has passed. Looks only at candidates with an interview near today or with an item that is
- * tied to one, so it stays quick however much history there is.
+ * interviews whose end has passed. Looks only at candidates with an interview near today or with an item that
+ * could still change, so it stays quick however much history there is and however many old items are never ticked.
  */
 export function catchUp() {
   const at = clock().getTime();
   const iso = (ms) => new Date(ms).toISOString();
-  // An interview lasts eight hours at most, so one that ended within the last week started within the last eight days.
+  // Back to a week ago, or to when the lists were last brought up to date if that is longer ago (a month at most).
+  // An interview lasts eight hours at most, so one that ended since then started at most a day before it.
+  const from = iso(Math.max(Math.min(at - WEEK, seen), at - MONTH) - DAY);
   // Soonest first, so that when several people are added at once they arrive in the order of their interviews.
   const near = q.all(
     `SELECT application_id AS id, MIN(CASE WHEN starts_at >= ? THEN starts_at END) AS coming FROM interviews WHERE starts_at >= ? AND starts_at <= ?
-     GROUP BY application_id ORDER BY coming IS NULL, coming, MIN(starts_at), application_id`, iso(at), iso(at - WEEK - DAY), iso(at + WEEK));
-  const tied = q.all(`SELECT DISTINCT application_id AS id FROM todos WHERE interview_id IS NOT NULL AND ${OPEN}`);
+     GROUP BY application_id ORDER BY coming IS NULL, coming, MIN(starts_at), application_id`, iso(at), from, iso(at + WEEK));
+  // Items tied to an interview outside those days that may still have to change: a prep whose interview has passed
+  // or gone, and anything about a cancelled interview. A debrief about an interview held longer ago is left out:
+  // nothing changes it but its owner, and there can be any number of those.
+  const tied = q.all(
+    `SELECT DISTINCT t.application_id AS id FROM todos t JOIN interviews i ON i.id = t.interview_id
+     WHERE t.done_at IS NULL AND t.removed_at IS NULL AND (t.kind = 'prep' OR i.status = 'cancelled' OR i.starts_at > ?)`, iso(at + WEEK));
   for (const id of new Set([...near, ...tied].map((r) => r.id))) settleQuietly(id);
+  sawAt(at);
 }
 
 /** How many things this person still has to do, for the count in the menu. */
@@ -204,12 +255,13 @@ function listsOf(userId) {
      FROM todos t JOIN jobs j ON j.id = t.job_id JOIN clients cl ON cl.id = j.client_id
      WHERE t.kind = 'job' AND ${shown} ${order}`, ...p);
   const people = q.all(
-    `SELECT t.id, t.kind, t.note, t.done_at, t.auto, t.interview_id, a.id AS application_id, a.status, c.id AS candidate_id, c.name, substr(c.photo_file, 1, 8) AS photo,
+    `SELECT t.id, t.kind, t.note, t.done_at, t.auto, t.auto_done, t.interview_id, a.id AS application_id, a.status, c.id AS candidate_id, c.name, substr(c.photo_file, 1, 8) AS photo,
        j.id AS job_id, j.title AS job_title, cl.name AS client_name, cl.brand_color, s.name AS stage_name, s.kind AS stage_kind
      FROM todos t JOIN applications a ON a.id = t.application_id JOIN candidates c ON c.id = a.candidate_id
      JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id JOIN stages s ON s.id = a.stage_id
      WHERE t.kind != 'job' AND ${shown} ${order}`, ...p)
-    .map(({ interview_id, auto, ...row }) => ({ ...row, auto: Boolean(auto), interview: interviewFor({ ...row, interview_id }, at) }));
+    // auto: The Book added it. auto_done: The Book ticked it, because the interview passed, not the person.
+    .map(({ interview_id, auto, auto_done, ...row }) => ({ ...row, auto: Boolean(auto), auto_done: Boolean(auto_done), interview: interviewFor({ ...row, interview_id }, at) }));
   const split = (rows) => ({ open: rows.filter((r) => !r.done_at), done: rows.filter((r) => r.done_at) });
   const lists = { job: split(jobs), prep: split(people.filter((r) => r.kind === 'prep')), debrief: split(people.filter((r) => r.kind === 'debrief')) };
   const counts = Object.fromEntries(KINDS.map((kind) => [kind, lists[kind].open.length]));
@@ -218,10 +270,13 @@ function listsOf(userId) {
 
 // ---------- routes ----------
 export function registerTodos(api, { agencyOnly, bad, clean, text, int }) {
-  /** The item a request names, if it is on the signed-in person's own list. Anybody else's is "Not found". */
+  /**
+   * The item a request names, if it is on the signed-in person's own list. Anything else gets one and the same
+   * answer, whether it was taken off, never existed or is on somebody else's list, so the answer tells nothing.
+   */
   const mine = (req) => {
     const item = q.get('SELECT * FROM todos WHERE id = ? AND user_id = ? AND removed_at IS NULL', int(req.params.id), req.user.id);
-    if (!item) bad('Not found', 404);
+    if (!item) bad('That is no longer on your list.', 404);
     return item;
   };
   const onList = (userId, kind, column, id) => q.get(`SELECT 1 AS x FROM todos WHERE user_id = ? AND kind = ? AND ${column} = ? AND ${OPEN}`, userId, kind, id);
@@ -309,24 +364,31 @@ export function registerTodos(api, { agencyOnly, bad, clean, text, int }) {
     if (b.done !== undefined && typeof b.done !== 'boolean') bad('done must be true or false.');
     const noteId = tx(() => {
       if (b.note !== undefined) q.run('UPDATE todos SET note = ? WHERE id = ?', clean(b.note, NOTE_MAX), item.id);
-      if (b.done === true && !item.done_at) {
-        q.run('UPDATE todos SET done_at = ?, auto_done = 0 WHERE id = ?', stamp(), item.id);
+      if (b.done === true) {
+        if (!item.done_at) q.run('UPDATE todos SET done_at = ?, auto_done = 0 WHERE id = ?', stamp(), item.id);
+        // What the candidate said is saved even when the debrief was already ticked (on a phone, say, before the
+        // notes were typed into a page still open on a laptop): what somebody typed is never quietly dropped.
         const said = item.kind === 'debrief' ? text(b.debrief, 10000) : null;
         if (!said) return null;
         const interview = interviewFor(item, clock().getTime());
+        const body = `${interview ? `Debrief after ${interview.title}` : 'Debrief'}:\n${said}`;
+        // The same words sent again for a debrief already ticked are one note, not two: the first answer was lost
+        // on the way back and the person pressed the button again.
+        const sent = item.done_at ? q.get('SELECT id FROM notes WHERE application_id = ? AND user_id = ? AND private = 1 AND body = ?', item.application_id, req.user.id, body) : null;
+        if (sent) return sent.id;
         q.run('UPDATE applications SET updated_at = ? WHERE id = ?', now(), item.application_id);
-        return q.insert('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)',
-          item.application_id, req.user.id, `${interview ? `Debrief after ${interview.title}` : 'Debrief'}:\n${said}`, now());
+        return q.insert('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', item.application_id, req.user.id, body, now());
       }
       if (b.done === false && item.done_at) {
         if (onList(req.user.id, item.kind, item.kind === 'job' ? 'job_id' : 'application_id', item.job_id ?? item.application_id)) {
           bad(item.kind === 'job' ? 'This job is already on your list again.' : 'This person is already on this list again.', 409);
         }
         q.run('UPDATE todos SET done_at = NULL, auto_done = 0, position = ? WHERE id = ?', endOf(req.user.id, item.kind), item.id);
-        // A prep for an interview that has been held (or cancelled) would be ticked again at once. Un-ticked by
-        // hand, it is the person's own item from here on, with no interview behind it.
-        const held = item.kind === 'prep' && item.interview_id ? interviewsOf(item.application_id, clock().getTime()).find((i) => i.id === item.interview_id) : null;
-        if (held && (held.over || held.cancelled)) q.run('UPDATE todos SET interview_id = NULL, auto = 0 WHERE id = ?', item.id);
+        // A prep for an interview that has been held (or cancelled) would be ticked again at once, and a debrief
+        // about one that was since moved to a later time (or cancelled) would be taken off. Un-ticked by hand, it
+        // is the person's own item from here on, with no interview behind it.
+        const about = item.interview_id ? interviewsOf(item.application_id, clock().getTime()).find((i) => i.id === item.interview_id) : null;
+        if (about && (item.kind === 'prep' ? about.over || about.cancelled : !about.over)) q.run('UPDATE todos SET interview_id = NULL, auto = 0 WHERE id = ?', item.id);
       }
       return null;
     });
@@ -344,7 +406,8 @@ export function registerTodos(api, { agencyOnly, bad, clean, text, int }) {
     res.json({ ok: true });
   });
 
-  // Take an item off the list. The row stays, marked as removed, so that The Book does not put it back by itself.
+  // Take an item off the list. The row stays, marked as removed (and not as set aside: this was the person's own
+  // doing), so that The Book does not put it back by itself.
   api.delete('/todos/:id', agencyOnly, (req, res) => {
     const item = mine(req);
     q.run('UPDATE todos SET removed_at = ? WHERE id = ?', stamp(), item.id);

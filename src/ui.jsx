@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { X, Star, LoaderCircle, RefreshCw } from 'lucide-react';
 
 const cx = (...parts) => parts.filter(Boolean).join(' ');
@@ -307,21 +307,32 @@ export function Drawer({ onClose, children, label }) {
   );
 }
 
-/** Button that opens a small menu. `items` is a list of { label, onClick, icon, danger } or null for a divider. */
+/**
+ * Button that opens a small menu. `items` is a list of { label, onClick, icon, danger } or null for a divider.
+ * The menu opens below its button, or above it when it would otherwise run off the bottom of the window.
+ */
 export function Menu({ trigger, items, align = 'right', className }) {
   const [open, setOpen] = useState(false);
+  const [above, setAbove] = useState(false);
   const ref = useRef(null);
+  const list = useRef(null);
   useEffect(() => {
     if (!open) return;
     const close = (e) => !ref.current?.contains(e.target) && setOpen(false);
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [open]);
+  // Measured before the menu is first seen, so it never jumps from below to above.
+  useLayoutEffect(() => {
+    if (!open) { setAbove(false); return; }
+    const menu = list.current.getBoundingClientRect(), button = ref.current.getBoundingClientRect();
+    setAbove(menu.bottom > window.innerHeight - 8 && button.top - menu.height > 8);
+  }, [open]);
   return (
     <div ref={ref} className={cx('relative', className)}>
       {React.cloneElement(trigger, { onClick: () => setOpen((o) => !o), 'aria-expanded': open, 'aria-haspopup': 'menu' })}
       {open && (
-        <div role="menu" className={cx('animate-pop-in absolute z-40 mt-1 min-w-48 overflow-hidden rounded-lg border border-line bg-white py-1 shadow-lg', align === 'right' ? 'right-0' : 'left-0')}>
+        <div ref={list} role="menu" className={cx('animate-pop-in absolute z-40 min-w-48 overflow-hidden rounded-lg border border-line bg-white py-1 shadow-lg', above ? 'bottom-full mb-1' : 'mt-1', align === 'right' ? 'right-0' : 'left-0')}>
           {items.filter((i) => i !== false).map((item, i) =>
             item === null ? (
               <div key={i} className="my-1 border-t border-line" />

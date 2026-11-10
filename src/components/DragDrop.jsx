@@ -29,6 +29,10 @@ export function useDragDrop({ accepts, onDrop }) {
   /** The box under the pointer that takes this row, and the place in it the row would land. */
   const landing = (x, y) => {
     const d = live.current;
+    // Only what can be seen counts. A box scrolled out of sight still has a place on the page, under the bar across
+    // the top or past the edge of the window, and a row let go there must not land in it.
+    const seen = d.scroller.getBoundingClientRect();
+    if (x < Math.max(seen.left, 0) || x > Math.min(seen.right, window.innerWidth) || y < Math.max(seen.top, 0) || y > Math.min(seen.bottom, window.innerHeight)) return null;
     for (const zone of document.querySelectorAll('[data-drop-zone]')) {
       const box = zone.getBoundingClientRect();
       if (x < box.left || x > box.right || y < box.top || y > box.bottom) continue;
@@ -61,12 +65,12 @@ export function useDragDrop({ accepts, onDrop }) {
     e.currentTarget.focus();
     const row = e.currentTarget.closest('[data-drop-row], [data-drag-row]');
     const box = row.getBoundingClientRect();
-    live.current = { item, from, row, id: e.pointerId, x: e.clientX, y: e.clientY, dx: e.clientX - box.left, dy: e.clientY - box.top, over: null };
+    const scroller = row.closest('main') || document.scrollingElement;
+    live.current = { item, from, row, scroller, id: e.pointerId, x: e.clientX, y: e.clientY, dx: e.clientX - box.left, dy: e.clientY - box.top, over: null };
     live.current.over = landing(e.clientX, e.clientY);
     setDrag({ item, from, width: box.width, height: box.height, x: box.left, y: box.top, over: live.current.over });
 
     // The page scrolls by itself while the row is held near its top or bottom edge, so a list further down can be reached.
-    const scroller = row.closest('main') || document.scrollingElement;
     let frame = requestAnimationFrame(function nudge() {
       const d = live.current;
       if (!d) return;
@@ -80,6 +84,9 @@ export function useDragDrop({ accepts, onDrop }) {
 
     const move = (ev) => {
       if (ev.pointerId !== live.current?.id) return;
+      // The mouse is moving with no button held: it was let go where the page could not see (over another window,
+      // say). Nothing is dropped; otherwise the row would follow the pointer until the next click.
+      if (ev.pointerType === 'mouse' && ev.buttons === 0) { end(false); return; }
       live.current.x = ev.clientX;
       live.current.y = ev.clientY;
       follow();
@@ -92,11 +99,16 @@ export function useDragDrop({ accepts, onDrop }) {
     const up = (ev) => { if (ev.pointerId === live.current?.id) end(true); };
     const cancel = (ev) => { if (ev.pointerId === live.current?.id) end(false); };
     const key = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); end(false); } };
+    const away = () => end(false); // another window or tab was switched to in the middle of a drag
     // Listened for on the window, not on the grip: the row the grip is in is taken out of the list while it is dragged.
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', cancel);
     window.addEventListener('keydown', key, true);
+    window.addEventListener('blur', away);
+    // The wheel or the trackpad scrolls the page under a row that is being held still: the place it would land
+    // has moved though the pointer has not. (Scrolling is not heard from below, so it is listened for on the way down.)
+    window.addEventListener('scroll', follow, { capture: true, passive: true });
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'grabbing';
     stop.current = () => {
@@ -105,6 +117,8 @@ export function useDragDrop({ accepts, onDrop }) {
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', cancel);
       window.removeEventListener('keydown', key, true);
+      window.removeEventListener('blur', away);
+      window.removeEventListener('scroll', follow, { capture: true });
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
       live.current = null;
@@ -129,11 +143,14 @@ export const Grip = React.forwardRef(function Grip({ label, dragging, className,
   );
 });
 
-/** The gap that opens where the dragged row would land. */
-export function DropSlot({ height, children }) {
+/**
+ * The gap that opens where the dragged row would land: as tall as the row, within reason. With `fill` it covers the
+ * whole of its list instead, for a list with nothing on it, so that the list is no taller or shorter for it.
+ */
+export function DropSlot({ height, fill, children }) {
   return (
-    <li aria-hidden="true" data-drop-slot="" style={{ height: Math.max(40, Math.min(height || 0, 96)) }}
-      className="flex items-center justify-center rounded-lg border-2 border-dashed border-brand-400 bg-brand-50 text-[13px] font-medium text-brand-700">
+    <li aria-hidden="true" data-drop-slot="" style={fill ? undefined : { height: Math.max(40, Math.min(height || 0, 96)) }}
+      className={cx('flex items-center justify-center rounded-lg border-2 border-dashed border-brand-400 bg-brand-50 text-[13px] font-medium text-brand-700', fill && 'absolute inset-1.5')}>
       {children}
     </li>
   );

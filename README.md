@@ -88,11 +88,19 @@ Interviews scheduled in The Book fill the two people lists without anybody doing
 - From **seven days before** an interview starts, the candidate is on the To prep list of the recruiter who owns
   them in that job. If nobody on the team owns them, it is the person who scheduled the interview; if that was the
   client's hiring team, nobody's, until somebody takes the candidate on.
+- Somebody The Book adds to To prep goes **above the first person on the list whose interview is later** than
+  theirs, so tomorrow's interview is never at the bottom of a long list. The order you have put everybody else in
+  is left alone. On To debrief a new person goes last: whoever has waited longest stays first.
 - When the interview's **end has passed** (or a scorecard has marked it completed), the candidate goes on that
-  person's To debrief list, and their prep comes off as done.
-- A **moved** interview keeps its items, which show the new time. Moved to more than a week away, the prep waits
-  until it is a week away again. A **cancelled** interview takes its items with it, and so does rejecting or
-  withdrawing the candidate. A person you added by hand stays on your list; only the time goes.
+  person's To debrief list, and their prep comes off as done. In Done it says "Interview passed", so a prep The
+  Book ticked is not mistaken for one you did.
+- A **moved** interview keeps its items, which show the new time. Moved to more than a week away, the prep comes
+  off the list and is back when the interview is a week away again. A **cancelled** interview takes its items with
+  it, and so does rejecting or withdrawing the candidate. A person you added by hand stays on your list; only the
+  time goes.
+- An item The Book takes off is **set aside, not thrown away**. If the same interview brings it back (moved back
+  within the week, set back to scheduled, the candidate handed back to you), it is the same item, with the note
+  you wrote on it.
 - One at a time: with two interviews in a week, the candidate is to prep for the next one, and to debrief once,
   about the latest.
 - **What you took off, or ticked, is not put back** for the same interview. A later interview for the same
@@ -100,7 +108,9 @@ Interviews scheduled in The Book fill the two people lists without anybody doing
 - If the candidate changes hands, the item The Book added moves to the new owner's list (a note the first owner
   wrote on it is theirs and does not go with it).
 - Nobody is put on a debrief list for an interview that ended more than seven days ago, or before the day To do
-  first ran on your workspace: the lists start with what is coming up, not with last month.
+  first ran on your workspace: the lists start with what is coming up, not with last month. The one exception is
+  a break: if nobody opened The Book for a while (the office was shut), then the first time anybody does, everyone
+  whose interview ended since it was last open goes on To debrief, up to a month back.
 
 The lists are brought up to date whenever somebody opens the page or the menu is drawn, and at once when an
 interview is scheduled, changed or cancelled.
@@ -109,18 +119,25 @@ interview is scheduled, changed or cancelled.
 
 A job or a prep is simply done. Ticking a debrief offers one box, **What did they say?** Whatever is typed there is
 saved on the candidate's profile as an agency-only note, so the debrief is not lost in a to-do list; the client's
-hiring team never sees it. The box can be left empty.
+hiring team never sees it. The box can be left empty. It stays open, with your words in it, until The Book has
+answered that they are saved, and the page only says "Saved on their profile" when they are. If the debrief had
+already been ticked somewhere else (on your phone, before you typed it up on a laptop), what you typed is saved
+all the same.
 
 Done items move to **Done** at the bottom of their list, can be un-ticked, and leave the page after seven days (they
-stay in the database).
+stay in the database). A prep or a debrief un-ticked after its interview has changed (held, cancelled, or moved to
+a later time) stays on your list as your own item.
 
 ### Mouse, finger or keyboard
 
 Rows are dragged by the grip on their left, with a mouse or with a finger, and a gap opens where the row will land.
 Drag within a list to put it in a new order, from a picker into a list to add, and from a list back onto its picker
-to take it off. Everything can also be done without dragging: **+**, **To prep** and **To debrief** add; the up and
-down arrow keys move a row while its grip has the focus, and so does the row's menu; **×** takes it off; the tick
-box takes Space. On a phone the lists come first and each picker opens behind **Add jobs** or **Add people**.
+to take it off. The wheel or trackpad can be used to scroll while a row is held. Everything can also be done
+without dragging: **+**, **To prep** and **To debrief** add; the up and down arrow keys move a row while its grip
+has the focus, and so does the row's menu; **×** takes it off; the tick box takes Space. After each of these the
+keyboard's focus stays where the work is (the next row, the next **+**), not back at the top of the page. In a
+window under 1100 wide (a phone, a tablet, a small laptop window) the lists come first, at full width, and each
+picker opens behind **Add jobs** or **Add people**.
 
 Deleting a job or a candidate removes their items from every list. Merging two records of one person keeps them.
 

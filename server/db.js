@@ -548,9 +548,11 @@ CREATE TABLE IF NOT EXISTS todos (
   created_at TEXT NOT NULL,
   done_at TEXT,                                      -- when it was ticked; done items are shown for seven days and then only kept
   auto_done INTEGER NOT NULL DEFAULT 0,              -- 1 = The Book ticked it itself, because the interview's end had passed
-  -- When the person took it off their list. The row is kept, so that The Book does not put the same person back
-  -- for the same interview.
-  removed_at TEXT
+  -- When it was taken off the list. The row is kept: taken off by the person, so that The Book does not put the same
+  -- person back for the same interview; taken off by The Book (set_aside), so that the note on it is still there if
+  -- the same interview brings it back.
+  removed_at TEXT,
+  set_aside INTEGER NOT NULL DEFAULT 0               -- 1 = The Book took it off by itself: the interview was moved over a week away or cancelled, or the candidate changed hands
 );
 CREATE INDEX IF NOT EXISTS idx_todos_list ON todos(user_id, kind);
 CREATE INDEX IF NOT EXISTS idx_todos_job ON todos(job_id);
@@ -560,6 +562,8 @@ CREATE INDEX IF NOT EXISTS idx_todos_interview ON todos(interview_id);
 -- prep and the debrief list). Items that are done or removed do not count.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_job_once ON todos(user_id, job_id) WHERE kind = 'job' AND done_at IS NULL AND removed_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_person_once ON todos(user_id, kind, application_id) WHERE kind != 'job' AND done_at IS NULL AND removed_at IS NULL;`);
+// A to-do table made before items could be set aside gets the column; its rows are left as they are.
+addColumn('todos', 'set_aside', 'INTEGER NOT NULL DEFAULT 0');
 // ---------- end of to do ----------
 
 export const q = {

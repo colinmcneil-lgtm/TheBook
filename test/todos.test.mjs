@@ -232,7 +232,8 @@ test('one person cannot read or change another person\'s list, whatever ids they
   assert.ok(ok(await sam.get('/todos/jobs')).every((j) => !j.on_list));
   // Every way of changing an item answers as if Priya's did not exist, for a recruiter and for the admin alike.
   for (const who of [sam, olive]) {
-    refused(await who.patch(`/todos/${backend}`, { note: 'mine now' }), 404, /Not found/);
+    refused(await who.patch(`/todos/${backend}`, { note: 'mine now' }), 404, /no longer on your list/);
+    assert.deepEqual((await who.patch(`/todos/${backend}`, { note: 'mine now' })).body, (await who.patch('/todos/999999', { note: 'mine now' })).body); // the same answer as for a number that does not exist
     refused(await who.patch(`/todos/${backend}`, { done: true }), 404);
     refused(await who.patch(`/todos/${backend}`, { done: true, debrief: 'What she said' }), 404);
     refused(await who.post(`/todos/${designer}/move`, { position: 0 }), 404);
@@ -330,7 +331,7 @@ test('a person is put on To prep and To debrief by hand, can be on both, and eac
   const { id, ...ben } = mine.prep.open[1];
   assert.equal(id, prep);
   assert.deepEqual(ben, { kind: 'prep', note: 'Send the portfolio brief', done_at: null, application_id: apps.ben, status: 'active', candidate_id: ben.candidate_id, name: 'Ben Okoro', photo: null,
-    job_id: jobs.designer, job_title: 'Product Designer', client_name: 'Lumen', brand_color: ben.brand_color, stage_name: 'Recruiter screen', stage_kind: 'interview', auto: false, interview: null });
+    job_id: jobs.designer, job_title: 'Product Designer', client_name: 'Lumen', brand_color: ben.brand_color, stage_name: 'Recruiter screen', stage_kind: 'interview', auto: false, auto_done: false, interview: null });
   // The picker says which lists each person is already on.
   assert.deepEqual(ok(await priya.get('/todos/people')).map((p) => [p.name, p.on_prep, p.on_debrief]), [['Ana Reyes', false, false], ['Ben Okoro', true, true]]);
   assert.deepEqual(ok(await sam.get('/todos/people')).map((p) => [p.name, p.on_prep, p.on_debrief]), [['Cy Marsh', false, false]]); // on Priya's list, not on Sam's
@@ -399,33 +400,39 @@ test('with no owner the person who scheduled it gets the item; scheduled by the 
   // And when a candidate changes hands, the item The Book added changes lists with them.
   ok(await olive.patch(`/applications/${apps.hal}`, { owner_id: ok(await priya.get('/me')).user.id }));
   assert.deepEqual(await people(sam), { prep: [], debrief: [] });
-  assert.deepEqual(await people(priya), { prep: ['Ana Reyes', 'Hal Unowned'], debrief: [] });
+  // He goes above Ana, not under her: his interview is on day 4 and hers on day 10.
+  assert.deepEqual(await people(priya), { prep: ['Hal Unowned', 'Ana Reyes'], debrief: [] });
 });
 
 test('a moved interview keeps its item, which shows the new time; moved more than a week away, the item waits', async () => {
   const later = at(9, 3 * HOUR);
   ok(await sam.patch(`/interviews/${apps.anaInterview}`, { starts_at: later }));
   let mine = await lists(priya);
-  assert.deepEqual(titles(mine.prep), ['Ana Reyes', 'Hal Unowned']);
-  assert.equal(mine.prep.open[0].interview.starts_at, later);
-  // A note written on it, and its place in the list, survive the move.
-  ok(await priya.patch(`/todos/${mine.prep.open[0].id}`, { note: 'Walk her through the system design round' }));
-  ok(await priya.post(`/todos/${mine.prep.open[0].id}/move`, { position: 1 }));
+  assert.deepEqual(titles(mine.prep), ['Hal Unowned', 'Ana Reyes']);
+  assert.equal(mine.prep.open[1].interview.starts_at, later);
+  // A note written on it, and the place the person put it in, survive the move.
+  const ana = mine.prep.open[1].id;
+  ok(await priya.patch(`/todos/${ana}`, { note: 'Walk her through the system design round' }));
+  ok(await priya.post(`/todos/${ana}/move`, { position: 0 }));
   ok(await sam.patch(`/interviews/${apps.anaInterview}`, { starts_at: at(9) }));
   mine = await lists(priya);
-  assert.deepEqual(mine.prep.open.map((x) => [x.name, x.note, x.interview.starts_at]), [['Hal Unowned', null, at(4)], ['Ana Reyes', 'Walk her through the system design round', at(9)]]);
-  // Put off to a month away: nothing to prepare for yet. Brought back within the week: on the list again.
+  assert.deepEqual(mine.prep.open.map((x) => [x.name, x.note, x.interview.starts_at]), [['Ana Reyes', 'Walk her through the system design round', at(9)], ['Hal Unowned', null, at(4)]]);
+  // Put off to a month away: nothing to prepare for yet. Brought back within the week: on the list again, the same
+  // item with the note still on it, and after Hal, whose interview is sooner.
   ok(await sam.patch(`/interviews/${apps.anaInterview}`, { starts_at: at(30) }));
   assert.deepEqual(await people(priya), { prep: ['Hal Unowned'], debrief: [] });
+  assert.equal(await menuCount(priya), 4);                                   // three jobs and Hal: an item set aside is not counted
+  refused(await priya.patch(`/todos/${ana}`, { note: 'Still mine?' }), 404);  // nor can it be changed while it is off the list
   ok(await sam.patch(`/interviews/${apps.anaInterview}`, { starts_at: at(9) }));
-  assert.deepEqual(await people(priya), { prep: ['Hal Unowned', 'Ana Reyes'], debrief: [] });
+  mine = await lists(priya);
+  assert.deepEqual(mine.prep.open.map((x) => [x.id, x.name, x.note, x.auto]), [[mine.prep.open[0].id, 'Hal Unowned', null, true], [ana, 'Ana Reyes', 'Walk her through the system design round', true]]);
 });
 
 test('a cancelled interview takes its item with it, and a rejected candidate\'s too; an item added by hand stays', async () => {
   ok(await sam.patch(`/interviews/${apps.anaInterview}`, { status: 'cancelled' }));
   assert.deepEqual(await people(priya), { prep: ['Hal Unowned'], debrief: [] });
-  ok(await sam.patch(`/interviews/${apps.anaInterview}`, { status: 'scheduled' }));   // back on
-  assert.deepEqual(await people(priya), { prep: ['Hal Unowned', 'Ana Reyes'], debrief: [] });
+  ok(await sam.patch(`/interviews/${apps.anaInterview}`, { status: 'scheduled' }));   // back on, and the note with it
+  assert.deepEqual((await lists(priya)).prep.open.map((x) => [x.name, x.note]), [['Hal Unowned', null], ['Ana Reyes', 'Walk her through the system design round']]);
 
   // Jo was put on the list by hand before any interview existed. Scheduling one gives her item its time; cancelling
   // it leaves the item, without a time.
@@ -470,7 +477,7 @@ test('an item the person took off or ticked is not put back for the same intervi
   await clock(at(4, 2 * HOUR));                                           // Hal's first interview (day 4, one hour) is over
   await schedule(priya, apps.hal, at(6));
   mine = await lists(priya);
-  assert.deepEqual(mine.prep.open.map((x) => [x.name, x.interview.starts_at]), [['Ana Reyes', at(9)], ['Hal Unowned', at(6)]]);
+  assert.deepEqual(mine.prep.open.map((x) => [x.name, x.interview.starts_at]), [['Hal Unowned', at(6)], ['Ana Reyes', at(9)]]);   // soonest interview first
   assert.deepEqual(titles(mine.debrief), ['Hal Unowned']);               // and the first is to debrief
 });
 
@@ -564,6 +571,19 @@ test('what the candidate said at a debrief is saved on their profile as an agenc
   await untick(priya, ana.id);
   await tick(priya, ana.id, { debrief: 'Called back: she accepts.' });
   assert.deepEqual(ok(await sam.get(`/applications/${apps.ana}`)).notes.map((n) => n.private), [1, 1]);
+  // Ticked on the phone, and the notes then typed into a page on the laptop that still showed it un-ticked: the
+  // item is already done when the words arrive, and they are saved all the same.
+  const late = await tick(priya, ana.id, { debrief: 'Typed up afterwards: start date is the 1st.' });
+  assert.ok(late.note_id);
+  const notes = ok(await sam.get(`/applications/${apps.ana}`)).notes;
+  assert.equal(notes.length, 3);
+  assert.deepEqual(notes.find((n) => n.id === late.note_id).body, 'Debrief after Hiring manager interview:\nTyped up afterwards: start date is the 1st.');
+  assert.deepEqual(ok(await maya.get(`/applications/${apps.ana}`)).notes, []);
+  // Sent a second time (the answer was lost on the way back and she pressed again), the same words are one note.
+  assert.equal((await tick(priya, ana.id, { debrief: 'Typed up afterwards: start date is the 1st.' })).note_id, late.note_id);
+  // Ticking what is ticked with nothing typed still makes no note, and says so by sending no note back.
+  assert.equal('note_id' in (await tick(priya, ana.id)), false);
+  assert.equal(ok(await sam.get(`/applications/${apps.ana}`)).notes.length, 3);
 });
 
 test('two interviews in one week put a candidate on To prep once, for the next one', async () => {
@@ -644,6 +664,115 @@ test('merging two records of one person keeps their items; deleting a candidate 
   assert.equal(await menuCount(priya), (await lists(priya)).counts.total);
 });
 
+// ---------- the order people are added in, and what is kept when The Book takes somebody off ----------
+
+const cast = ['Quin Later', 'Rae Sooner', 'Sol Soonest', 'Tess Byhand', 'Uma Today'];
+/** One person's item on one of somebody's lists, by name. */
+const itemOf = async (who, kind, name) => (await lists(who))[kind].open.find((x) => x.name === name);
+
+test('somebody The Book adds to To prep goes above the people whose interviews are later than theirs', async () => {
+  await clock(at(20));
+  for (const name of cast) apps[name] = await candidate(priya, 'backend', name, 'Hiring manager interview');
+  // The story has left other people on Priya's list by now: only these five are looked at.
+  const prep = async () => (await lists(priya)).prep.open.filter((x) => cast.includes(x.name)).map((x) => x.name);
+  // Booked in any order, they stand in the order of their interviews, soonest first.
+  await schedule(priya, apps['Quin Later'], at(25));
+  await schedule(priya, apps['Rae Sooner'], at(22));
+  await schedule(priya, apps['Sol Soonest'], at(21));
+  assert.deepEqual(await prep(), ['Sol Soonest', 'Rae Sooner', 'Quin Later']);
+  // The order the person chose is kept: somebody put at the top by hand, with no interview, stays there, and
+  // somebody moved to the top stays above the rest. A new arrival goes above the first one whose interview is later.
+  await addPerson(priya, 'prep', apps['Tess Byhand'], { position: 0 });
+  ok(await priya.post(`/todos/${(await itemOf(priya, 'prep', 'Sol Soonest')).id}/move`, { position: 99 }));
+  assert.deepEqual(await prep(), ['Tess Byhand', 'Rae Sooner', 'Quin Later', 'Sol Soonest']);
+  await schedule(priya, apps['Uma Today'], at(20, 2 * HOUR));
+  assert.deepEqual(await prep(), ['Tess Byhand', 'Uma Today', 'Rae Sooner', 'Quin Later', 'Sol Soonest']);
+  // To debrief is the other way about: whoever has waited longest stays first, and a new one goes last.
+  await clock(at(20, 4 * HOUR));
+  const debrief = (await lists(priya)).debrief.open;
+  assert.equal(debrief.at(-1).name, 'Uma Today');
+});
+
+test('an item The Book takes off keeps its note for when the same interview brings it back', async () => {
+  const idOf = async (who) => ok(await who.get('/me')).user.id;
+  const rae = await itemOf(priya, 'prep', 'Rae Sooner');
+  ok(await priya.patch(`/todos/${rae.id}`, { note: 'Send her the case study' }));
+  // Rae is handed to Sam: she leaves Priya's list for his. Priya's note is hers and does not go with the candidate.
+  ok(await olive.patch(`/applications/${apps['Rae Sooner']}`, { owner_id: await idOf(sam) }));
+  assert.equal(await itemOf(priya, 'prep', 'Rae Sooner'), undefined);
+  const sams = await itemOf(sam, 'prep', 'Rae Sooner');
+  assert.deepEqual([sams.note, sams.auto], [null, true]);
+  ok(await sam.patch(`/todos/${sams.id}`, { note: 'Ask about notice period' }));
+  // Handed back, Priya has the same item again with her note on it, and Sam's is off his list.
+  ok(await olive.patch(`/applications/${apps['Rae Sooner']}`, { owner_id: await idOf(priya) }));
+  const back = await itemOf(priya, 'prep', 'Rae Sooner');
+  assert.deepEqual([back.id, back.note, back.auto], [rae.id, 'Send her the case study', true]);
+  assert.equal(await itemOf(sam, 'prep', 'Rae Sooner'), undefined);
+  assert.equal(await menuCount(sam), (await lists(sam)).counts.total);
+  // While it is off his list Sam cannot reach it, and neither can anybody else.
+  for (const who of [sam, priya, olive]) refused(await who.patch(`/todos/${sams.id}`, { note: 'x' }), 404);
+  // What a person took off themselves is another matter: it stays off, wherever the candidate goes and comes back from.
+  await remove(priya, rae.id);
+  ok(await olive.patch(`/applications/${apps['Rae Sooner']}`, { owner_id: await idOf(sam) }));
+  assert.equal((await itemOf(sam, 'prep', 'Rae Sooner')).note, 'Ask about notice period');   // his own, back with its note
+  ok(await olive.patch(`/applications/${apps['Rae Sooner']}`, { owner_id: await idOf(priya) }));
+  assert.equal(await itemOf(priya, 'prep', 'Rae Sooner'), undefined);
+  // One row each, however often she changed hands: nothing was deleted and nothing was added twice.
+  assert.equal(rows(`SELECT COUNT(*) AS n FROM todos WHERE application_id = ? AND kind = 'prep'`, apps['Rae Sooner'])[0].n, 2);
+});
+
+test('a debrief un-ticked after its interview was moved to a later time stays on the list', async () => {
+  await clock(at(21, 2 * HOUR));                                           // Sol's interview (day 21, one hour) is over
+  const sol = await itemOf(priya, 'debrief', 'Sol Soonest');
+  assert.equal(sol.auto, true);
+  await tick(priya, sol.id, { debrief: 'Went well, she thinks.' });
+  // It then turns out the interview was put off until day 23, and Priya un-ticks the debrief to keep it in view.
+  ok(await priya.patch(`/interviews/${sol.interview.id}`, { starts_at: at(23) }));
+  await untick(priya, sol.id);
+  for (let n = 0; n < 3; n++) {                                           // still there however often anybody looks
+    const item = await itemOf(priya, 'debrief', 'Sol Soonest');
+    assert.deepEqual([item?.id, item?.auto, item?.interview], [sol.id, false, null]);   // her own item now, with no interview held yet
+    await menuCount(sam);
+  }
+  // When the moved interview has been held it is about that one, and she is on the list once.
+  await clock(at(23, 2 * HOUR));
+  const after = (await lists(priya)).debrief.open.filter((x) => x.name === 'Sol Soonest');
+  assert.deepEqual(after.map((x) => [x.id, x.interview.id, x.interview.starts_at]), [[sol.id, sol.interview.id, at(23)]]);
+});
+
+test('an interview that ended while nobody opened The Book is still to debrief when somebody next does', async () => {
+  // Quin's interview is on day 25. The office shuts on day 24 and nobody opens The Book again until day 36.
+  await clock(at(24));
+  assert.ok(await itemOf(priya, 'prep', 'Quin Later'));
+  await clock(at(36));
+  let mine = await lists(priya);
+  const quin = mine.debrief.open.find((x) => x.name === 'Quin Later');
+  assert.deepEqual([quin?.auto, quin?.interview.starts_at], [true, at(25)]);
+  // Her prep was never ticked by Priya. The Book ticked it because the interview had passed, and the list says so;
+  // one Priya ticks herself is marked as hers.
+  assert.equal(mine.prep.open.some((x) => x.name === 'Quin Later'), false);
+  assert.equal(mine.prep.done.find((x) => x.name === 'Quin Later').auto_done, true);
+  await tick(priya, (await itemOf(priya, 'prep', 'Tess Byhand')).id);
+  assert.equal((await lists(priya)).prep.done.find((x) => x.name === 'Tess Byhand').auto_done, false);
+  // An un-ticked debrief stays until its owner deals with it, however long that is.
+  await clock(at(45));
+  for (let n = 0; n < 2; n++) assert.equal((await itemOf(priya, 'debrief', 'Quin Later')).id, quin.id);
+  assert.equal(await menuCount(priya), (await lists(priya)).counts.total);
+  // An interview recorded after the fact, which ended over a week before, is not chased: somebody was looking then.
+  apps.vic = await candidate(priya, 'backend', 'Vic Recorded', 'Final interview');
+  await schedule(priya, apps.vic, at(30));
+  assert.equal(await itemOf(priya, 'debrief', 'Vic Recorded'), undefined);
+  // Nor is one that ended more than a month before The Book was next opened. Its prep is still ticked off.
+  apps.wes = await candidate(priya, 'backend', 'Wes Longshut', 'Final interview');
+  await schedule(priya, apps.wes, at(46));
+  assert.ok(await itemOf(priya, 'prep', 'Wes Longshut'));
+  await clock(at(78));
+  mine = await lists(priya);
+  assert.equal(mine.debrief.open.some((x) => x.name === 'Wes Longshut'), false);
+  assert.equal(mine.prep.open.some((x) => x.name === 'Wes Longshut'), false);
+  assert.deepEqual(rows('SELECT kind, auto_done, done_at IS NOT NULL AS done FROM todos WHERE application_id = ?', apps.wes).map((r) => ({ ...r })), [{ kind: 'prep', auto_done: 1, done: 1 }]);
+});
+
 // ---------- starting on a live database ----------
 
 test('starting on a database from before To do adds the table and leaves every existing row as it was; starting again changes nothing', async () => {
@@ -674,7 +803,7 @@ test('starting on a database from before To do adds the table and leaves every e
     const since = db.prepare(`SELECT value FROM settings WHERE key = 'todos_since'`).get().value;
     assert.ok(Math.abs(Date.now() - new Date(since)) < 60000);
     const settled = dump();
-    assert.deepEqual({ ...settled, settings: settled.settings.filter((s) => s.key !== 'todos_since') }, old);   // one setting added; nothing else touched
+    assert.deepEqual({ ...settled, settings: settled.settings.filter((s) => !s.key.startsWith('todos_')) }, old);   // one setting added; nothing else touched
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM todos').get().n, 0);                                     // nothing is put on a list just by starting
     const shape = () => db.prepare(`SELECT name, sql FROM sqlite_master WHERE tbl_name = 'todos' ORDER BY name`).all();
     const made = shape();
@@ -697,7 +826,7 @@ test('starting on a database from before To do adds the table and leaves every e
     assert.deepEqual(shape(), made);
     assert.equal(db.prepare(`SELECT value FROM settings WHERE key = 'todos_since'`).get().value, since);        // noted once, not again
     const final = dump();
-    assert.deepEqual({ ...final, settings: final.settings.filter((s) => s.key !== 'todos_since') }, old);
+    assert.deepEqual({ ...final, settings: final.settings.filter((s) => !s.key.startsWith('todos_')) }, old);
     db.close();
   } finally {
     await api.stop().catch(() => {});
