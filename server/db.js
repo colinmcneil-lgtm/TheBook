@@ -566,7 +566,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_person_once ON todos(user_id, kind, 
 addColumn('todos', 'set_aside', 'INTEGER NOT NULL DEFAULT 0');
 // ---------- end of to do ----------
 
-// ---------- our job board ----------
+// ---------- our website's jobs page ----------
 // The agency's own, confidential adverts for its clients' jobs, shown on a public board in the agency's name (see
 // board.js). Everything here is new: no existing row is rewritten.
 db.exec(`
@@ -642,7 +642,7 @@ addColumn('board_posts', 'round_salary', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('board_posts', 'renew', 'INTEGER NOT NULL DEFAULT 0');
 // When somebody who came through the post first applied for the same job on the client's careers page (see board.js).
 addColumn('board_applications', 'direct_applied_at', 'TEXT');
-// ---------- end of our job board ----------
+// ---------- end of our website's jobs page ----------
 
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
@@ -715,7 +715,7 @@ if (!q.get('SELECT 1 AS x FROM email_templates LIMIT 1')) {
 // agency's e-mail, not the client's: it names the agency and the title the public saw, and never the employer.
 // A workspace that already has its templates is given this one too; one that somebody has edited is left alone.
 export const BOARD_CONFIRMATION = {
-  key: 'board_application_received', name: 'Application received (our job board)',
+  key: 'board_application_received', name: 'Application received (our website)',
   subject: 'Thanks for applying through {{agency_name}}',
   body: 'Hi {{candidate_first_name}},\n\nThanks for applying through {{agency_name}} for the {{job_title}} role. We have your application and one of our recruiters will read it shortly.\n\nWe are recruiting for this role on behalf of a client, and the employer’s name is kept confidential at this stage. If your experience looks like a match, we will be in touch to talk it through and tell you more.\n\nBest,\n{{agency_name}}',
 };

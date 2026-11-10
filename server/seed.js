@@ -534,7 +534,7 @@ tx(() => {
   const firstPrep = q.get(`SELECT id FROM todos WHERE user_id = ? AND kind = 'prep' AND done_at IS NULL ORDER BY position LIMIT 1`, priya);
   if (firstPrep) q.run('UPDATE todos SET note = ? WHERE id = ?', 'Send the interview pack and confirm the time', firstPrep.id);
 
-  // Our job board: two confidential posts, so the agency's public board (/board) has something on it. Each is saved
+  // Jobs on our website: two confidential posts, so the agency's public board (/board) has something on it. Each is saved
   // the way the form saves it, so each has been through the check.
   //   - Lumen's senior engineer, written again so that nothing points to Lumen, with two people who applied through it.
   //   - A job at a fourth client, called North. "North" is also an ordinary word, so the check stops at "North

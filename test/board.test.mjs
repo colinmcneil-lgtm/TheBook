@@ -1,4 +1,4 @@
-// Our job board, end to end: the agency's confidential posts, the check that keeps the client out of them, the
+// Jobs on our website, end to end: the agency's confidential posts, the check that keeps the client out of them, the
 // public board and its feed, applying, the e-mails that follow, and who may show the board inside their website.
 // Run with `npm test`.
 //
@@ -690,7 +690,7 @@ test('an e-mail written by hand that names the client is only sent once the recr
 test('if the confirmation template is ever edited to name the client, the wording The Book came with is sent instead', async () => {
   const templates = ok(await alex.get('/templates'));
   const mine = templates.find((t) => t.key === 'board_application_received');
-  assert.equal(mine.name, 'Application received (our job board)');
+  assert.equal(mine.name, 'Application received (our website)');
   ok(await alex.putJson(`/templates/${mine.id}`, { name: mine.name, subject: 'Thanks for applying to Lumen Health', body: 'Hi {{candidate_first_name}}, the team at Lumen will read it.' }));
   ok(await apply(token, { name: 'Grace Adeyemi', email: 'grace@mail.example' }));
   const [sent] = mail.to('grace@mail.example');
@@ -749,7 +749,7 @@ test('a later edit to the post that names the client takes it down until it is f
   refused(await visit(`/api/public/board/posts/${token}`), 404);
   refused(await apply(token, { name: 'Too Late', email: 'too.late@mail.example' }), 404);
   // The agency is told by e-mail: the admin, and the recruiter who last saved the post. Nobody at the client is.
-  const told = mail.sent.filter((m) => m.subject === 'A confidential post has come down from your job board');
+  const told = mail.sent.filter((m) => m.subject === 'A confidential post has come down from your website');
   assert.deepEqual(told.at(-1).to.sort(), ['alex@harbourtalent.example', 'priya@harbourtalent.example']);
   assert.match(told.at(-1).text, /^The confidential post “Senior Backend Engineer” \(the job Senior Backend Engineer, Scheduling at Lumen Health\) is no longer public\./);
   assert.match(told.at(-1).text, /- “Lumen” reads as part of the client’s name \(Lumen Health\)\. It is in the location: “the Lumen office”\./);
@@ -835,7 +835,7 @@ test('somebody new at the client, or a changed name, is looked for at once', asy
   assert.deepEqual(ok(await session(server.base).post(`/invites/${invite}/accept`, { name: 'Avery Mentor', password: 'demo1234' })), { ok: true });
   assert.deepEqual(await onTheBoard(), [northToken]);
   assert.deepEqual((await post(priya, job)).check.problems.map((p) => [p.kind, p.found]), [['person', 'Mentor']]);
-  assert.deepEqual(mail.sent.map((m) => [m.subject, [...m.to].sort()]), [['A confidential post has come down from your job board', ['alex@harbourtalent.example', 'priya@harbourtalent.example']]]);
+  assert.deepEqual(mail.sent.map((m) => [m.subject, [...m.to].sort()]), [['A confidential post has come down from your website', ['alex@harbourtalent.example', 'priya@harbourtalent.example']]]);
   assert.equal(ok(await alex.get('/nav')).board_down, 1);
   const avery = ok(await alex.get(`/users?client_id=${lumen}`)).find((u) => u.name === 'Avery Mentor');
   assert.deepEqual(ok(await alex.patch(`/users/${avery.id}`, { name: 'Avery Stone' })), { ok: true });

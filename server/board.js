@@ -1,4 +1,4 @@
-// Our job board: the agency's own, confidential adverts for its clients' jobs.
+// Jobs on our website: the agency's own, confidential adverts for its clients' jobs.
 //
 // A client's careers page (/careers/<client>) advertises a job in the client's name. A confidential post is a second
 // advert for the same job, in the agency's name, on a public board the agency can link to or show inside its own
@@ -553,7 +553,7 @@ function tellTheAgency(post, job, client, result) {
   const to = q.all(`SELECT email FROM users WHERE active = 1 AND pending = 0 AND (role = 'admin' OR (role = 'recruiter' AND id = ?))`, post.updated_by ?? 0).map((u) => u.email);
   const where = appUrl() ? `${appUrl()}/jobs/${job.id}?tab=post` : 'the job’s Confidential post tab';
   notify({
-    to, subject: 'A confidential post has come down from your job board',
+    to, subject: 'A confidential post has come down from your website',
     body: `The confidential post “${post.title}” (the job ${job.title} at ${client.name}) is no longer public. The check that keeps the client from being recognised found something in it after a change to the post, the job or the client:\n\n`
       + `${result.problems.map((p) => `- ${p.message}`).join('\n')}\n\nIt stays down until that is dealt with, and then goes public again by itself, at a new address.\n\nOpen the post: ${where}\n`,
   });
@@ -1102,7 +1102,7 @@ export function registerBoard(api, { agencyOnly, adminOnly, bad, clean, text, in
       .map(({ problems, ...p }) => ({ ...p, problems: json(problems, []).length })));
   });
 
-  // ----- the board's settings (Settings, Agency, Our job board) -----
+  // ----- the board's settings (Settings, Agency, Jobs on our website) -----
   const settingsView = () => {
     const b = boardSettings();
     return { name: b.name, intro: b.intro, color: b.color, logo: b.logo_file ? b.logo_file.slice(0, 8) : null, privacy_url: b.privacy_url, sites: b.sites,

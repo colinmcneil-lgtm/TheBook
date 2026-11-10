@@ -34,13 +34,13 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'same-origin');
   // No page of The Book may be shown inside another website's page, with one exception: the agency's job board
   // (/board and the posts under it), which the agency shows inside its own website. Those pages, and only those,
-  // may be framed, and only by the websites the agency has listed (Settings, Agency, Our job board). The old
+  // may be framed, and only by the websites the agency has listed (Settings, Agency, Jobs on our website). The old
   // X-Frame-Options header can only say "nobody", so the board's pages leave it out and name who may in the policy below.
   const framedBy = board.isBoardPage(req.path) ? board.frameAncestors() : "'none'";
   if (framedBy === "'none'") res.setHeader('X-Frame-Options', 'DENY');
   // A client's careers page is at the same web address as the agency's board. While the board has posts, search
   // engines are asked not to list the careers pages, so that a search of this address does not set every client
-  // out beside the board (Settings, Agency, Our job board). The pages work as ever for anybody given their link.
+  // out beside the board (Settings, Agency, Jobs on our website). The pages work as ever for anybody given their link.
   if (/^\/careers(\/|$)/.test(req.path) && board.careersUnlisted()) res.setHeader('X-Robots-Tag', 'noindex');
   // Otterview records calls: this site's own pages may use the microphone and share a tab's sound; nothing embedded
   // in them may, and nothing here uses the camera or location.

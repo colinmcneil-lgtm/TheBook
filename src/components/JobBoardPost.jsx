@@ -117,11 +117,11 @@ export default function JobBoardPost({ job }) {
           <CardHeader title="Confidential post" action={state.live ? <Badge tone="green" icon={CircleCheck}>Public</Badge> : <Badge tone={post.enabled ? 'amber' : 'gray'}>Not public</Badge>} />
           <div className="space-y-4 p-4">
             <p className="text-sm leading-relaxed text-stone-600">
-              Your own advert for this job, on your job board, in your agency’s name. The public sees only what is on this page: nothing is taken from {job.client_name}, and applicants are not told who the employer is.
+              Your own advert for this job, on your website, in your agency’s name. The public sees only what is on this page: nothing is taken from {job.client_name}, and applicants are not told who the employer is.
             </p>
             {state.live ? (
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm text-brand-900">
-                <span className="min-w-0 flex-1 basis-56">Public on your job board{post.posted_at ? ` since ${fmtDate(post.posted_at)}` : ''}.</span>
+                <span className="min-w-0 flex-1 basis-56">Public on your website{post.posted_at ? ` since ${fmtDate(post.posted_at)}` : ''}.</span>
                 <Button size="sm" icon={Copy} onClick={() => copyText(address, toast, 'Link copied')}>Copy link</Button>
                 <a href={address} target="_blank" rel="noreferrer"><Button size="sm" icon={ExternalLink}>Open</Button></a>
                 <button type="button" disabled={readdressing} onClick={newAddress} className="basis-full text-left text-xs text-brand-900/80 underline hover:text-brand-900">Give it a new address, so the old link stops working</button>
@@ -244,7 +244,7 @@ export default function JobBoardPost({ job }) {
             {current.applied ? `${plural(current.applied, 'person has', 'people have')} applied through this post.` : 'Nobody has applied through this post yet.'}
             {' '}They land in this job like any other applicant, with the source “Our website” and no owner until a recruiter takes them, and they are sent your own confirmation e-mail, which does not name {job.client_name}.
           </p>
-          <p className="mt-2 text-[13px] text-stone-500">The board’s name, colour and the websites it can be shown on are under <Link to="/settings?tab=agency#board" className="font-medium text-brand-700 hover:underline">Settings, Agency, Our job board</Link>.</p>
+          <p className="mt-2 text-[13px] text-stone-500">The board’s name, colour and the websites it can be shown on are under <Link to="/settings?tab=agency#board" className="font-medium text-brand-700 hover:underline">Settings, Agency, Jobs on our website</Link>.</p>
         </Card>
         {current.log.length > 0 && (
           <Card className="p-4">

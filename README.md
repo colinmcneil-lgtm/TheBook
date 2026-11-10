@@ -13,7 +13,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | --- | --- |
 | **Clients** | Each company you embed in has its own jobs, candidates, hiring-team logins, brand colour and engagement terms (retainer, fee per hire, or both). A switcher scopes the whole workspace to one client or all of them. |
 | **Careers pages** | Every client gets a public, branded careers page at `/careers/<client>` listing open roles, each with an application form (résumé upload, custom screening questions, consent). Link to it from the client's website. Add `?src=linkedin`, `?src=job_board` or `?src=referral` to an apply link to track where applicants came from. |
-| **Our job board** | Your agency's own public job board, in your name, for the jobs you choose to advertise yourselves without saying who the employer is. Each post is written for the purpose and checked for anything that would give the client away before it can go public. Link to the board, show it inside a page of your own website, or read it as data. See [Our job board (confidential posts)](#our-job-board-confidential-posts). |
+| **Jobs on our website** | Your agency's own public job board, in your name, for the jobs you choose to advertise yourselves without saying who the employer is. Each post is written for the purpose and checked for anything that would give the client away before it can go public. Link to the board, show it inside a page of your own website, or read it as data. See [Jobs on our website (confidential posts)](#jobs-on-our-website-confidential-posts). |
 | **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **Otterview** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [Otterview](#otterview) and [Metaview in Otterview](#metaview-in-otterview). |
@@ -142,9 +142,9 @@ picker opens behind **Add jobs** or **Add people**.
 
 Deleting a job or a candidate removes their items from every list. Merging two records of one person keeps them.
 
-## Our job board (confidential posts)
+## Jobs on our website (confidential posts)
 
-A client's careers page (`/careers/<client>`) advertises a job in the client's name. **Our job board** is the other
+A client's careers page (`/careers/<client>`) advertises a job in the client's name. **Jobs on our website** is the other
 public face: a board in your agency's name, at `/board`, listing the jobs you have chosen to advertise yourselves
 without saying who the employer is. The two are kept apart on purpose. Nothing on the board comes from the client,
 and nothing on a client's careers page mentions the board.
@@ -166,7 +166,7 @@ about it). On it you switch on **Post on our website (confidential)** and fill i
 
 That is everything the public is ever given about the job. The tab shows a preview drawn by the same code as the
 public page, the post's public link, how many people have applied through it, and a history of when it went public
-or came down and why. **Jobs, Our job board** lists every post with whether it is public.
+or came down and why. **Jobs, Jobs on our website** lists every post with whether it is public.
 
 A post is public while three things are true: it is switched on, its job is open, and the check below finds
 nothing. Switching it off, pausing or closing the job, or ending the work with the client takes it down, and its
@@ -252,7 +252,7 @@ are the job's own on both, and both come down at the same moment when the job cl
 **Clients' careers pages and search engines.** While any post is switched on, clients' careers pages are sent
 with a request to search engines not to list them, so that a search of your workspace's address does not set your
 clients out beside the board. The pages work as ever for anybody given their link. An admin can switch this off in
-Settings, Agency, Our job board. `/robots.txt` lets search engines read the pages and the board's own data, and
+Settings, Agency, Jobs on our website. `/robots.txt` lets search engines read the pages and the board's own data, and
 nothing else under `/api`.
 
 ### The public board
@@ -282,7 +282,7 @@ is linked beside it. The client's own screening questions and privacy notice are
 - **The client's hiring team sees the applicant on their job as they see any other**, as soon as they apply, and
   nothing about the post. Bear that in mind for a search the client's own staff are not meant to know about.
 - The candidate's confirmation is **your agency's own** ("Thanks for applying through ..."), under the title on the
-  post, and names nobody else. It is the template "Application received (our job board)" in Settings; if an edit
+  post, and names nobody else. It is the template "Application received (our website)" in Settings; if an edit
   ever makes it name the client, the original wording is sent instead.
 - Each such candidate has a tick on their profile, **Knows who the client is**, which starts off. While it is off:
   - what The Book sends by itself (the interview invitation, the "not moving forward" e-mail) uses the title they
@@ -303,7 +303,7 @@ is linked beside it. The client's own screening questions and privacy notice are
 ### Getting it onto your own website
 
 The Book cannot put a page on a website it does not run, so the board is offered three ways. All three are under
-**Settings, Agency, Our job board**, each with a copy button.
+**Settings, Agency, Jobs on our website**, each with a copy button.
 
 1. **Link to it.** The board's own address, `https://<your workspace>/board`.
 2. **Show it inside a page of your website.** A snippet to paste where the jobs should appear: a frame that shows
@@ -330,7 +330,7 @@ leads.
 
 **The owner's steps**, once this version is live:
 
-1. Open **Settings, Agency, Our job board**. Check the name, add your logo and colour, paste the link to your
+1. Open **Settings, Agency, Jobs on our website**. Check the name, add your logo and colour, paste the link to your
    agency's candidate privacy notice, and check that the list of websites holds the address of your website as
    visitors see it (with and without `www`). Save.
 2. If the workspace is reached at a domain of your own rather than the host's, set `APP_URL` to it where The Book
@@ -923,7 +923,7 @@ server/
   api.js     All API routes: auth, careers pages, jobs, pipeline, interviews, reports
   reporting.js  The Individual and Clients reports: the record of submissions, first interviews, placements and searches, and the day counting starts
   todos.js   To do: each person's own lists of jobs to work on and people to prep and debrief, and what interviews add to them
-  board.js   Our job board: the agency's confidential posts, the check that keeps the client out of them, the public board and its feed
+  board.js   Jobs on our website: the agency's confidential posts, the check that keeps the client out of them, the public board and its feed
   autofill.js  Drafting a job and its brief from a job description and intake notes
   oracle.js  Otterview: recording and uploading calls, transcription, notes and submission drafts
   metaview.js         Metaview in Otterview: the key, reading the list in the background, bringing calls in
@@ -987,7 +987,7 @@ they made at that client, their résumé files, and their recorded calls with th
   against another's list, a client user, deletion and merging, and starting on a database from before it); the page
   was driven in Chrome on the demo data at 1280 wide with a mouse and at 390 wide with touch input, and with the
   keyboard alone at both widths. It has not been tried on a real phone, or in Safari or Firefox.
-  Our job board is tested through a story acted out against the real server with stand-ins for the AI and mail
+  Jobs on our website is tested through a story acted out against the real server with stand-ins for the AI and mail
   services (everything the check must and must not find, posts coming down, the exact fields the public is given,
   applying, every e-mail's whole text, which websites may frame which pages, and starting on a database made by the
   version before it); the agency's screens, the public board and the board inside a stand-in for the agency's

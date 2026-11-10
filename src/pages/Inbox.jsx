@@ -39,7 +39,7 @@ export default function Inbox() {
       {!rows ? <Pending error={tab === 'new' ? error : reviewError} /> : rows.length === 0 ? (
         <Card>
           <Empty icon={tab === 'new' ? InboxIcon : Hourglass} title={tab === 'new' ? 'You are all caught up' : 'Nothing waiting for review'}>
-            {tab === 'new' ? (isAgency ? 'New applications from your clients’ careers pages and from your own job board land here.' : 'New applications land here.') : isAgency ? 'Candidates you submit to a hiring team appear here until they respond.' : 'When your recruiter shortlists someone, they will appear here for your decision.'}
+            {tab === 'new' ? (isAgency ? 'New applications from your clients’ careers pages and from your own website land here.' : 'New applications land here.') : isAgency ? 'Candidates you submit to a hiring team appear here until they respond.' : 'When your recruiter shortlists someone, they will appear here for your decision.'}
           </Empty>
         </Card>
       ) : (

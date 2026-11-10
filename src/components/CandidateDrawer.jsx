@@ -344,7 +344,7 @@ function Overview({ data, onOffer, onFee, onResume }) {
         {data.board && (
           <Card className="space-y-2 p-4">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-stone-900"><EyeOff className="size-4 text-violet-700" />Confidential post</h3>
-            <p className="text-[13px] leading-relaxed text-stone-600">Applied through your job board, as “{data.board.title}”. They were not told who the employer is.</p>
+            <p className="text-[13px] leading-relaxed text-stone-600">Applied through your website, as “{data.board.title}”. They were not told who the employer is.</p>
             <Checkbox checked={data.board.client_known} disabled={savingKnown} onChange={(e) => setKnown(e.target.checked)} label="Knows who the client is"
               hint={data.board.client_known
                 ? `Ticked${data.board.client_known_by_name ? ` by ${data.board.client_known_by_name}` : ''}, ${fmtDate(data.board.client_known_at)}. They are now written to like any other candidate.`

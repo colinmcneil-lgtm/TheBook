@@ -50,7 +50,7 @@ function BoardPosts() {
     return (
       <Card>
         <Empty icon={EyeOff} title="No confidential posts yet">
-          To advertise a job on your own job board without naming the client, open the job and go to its Confidential post tab.
+          To advertise a job on your own website without naming the client, open the job and go to its Confidential post tab.
         </Empty>
       </Card>
     );
@@ -98,7 +98,7 @@ export default function Jobs() {
       actions={isAgency && <Button variant="primary" icon={Plus} onClick={() => setCreating(true)} disabled={!clients.length}>New job</Button>}>
       <Tabs className="mb-4" value={status} onChange={setStatus}
         tabs={[{ id: 'open', label: 'Open', count: count('open') }, { id: 'draft', label: 'Drafts', count: count('draft') }, { id: 'paused', label: 'Paused', count: count('paused') }, { id: 'closed', label: 'Closed', count: count('closed') }, { id: 'all', label: 'All' },
-          isAgency && { id: 'board', label: 'Our job board' }].filter(Boolean)} />
+          isAgency && { id: 'board', label: 'On our website' }].filter(Boolean)} />
       {status === 'board' ? <BoardPosts /> : !jobs ? <Pending error={error} /> : jobs.length ? <JobList jobs={jobs} /> : (
         <Card>
           <Empty icon={Briefcase} title={status === 'open' ? 'No open jobs' : 'Nothing here'}

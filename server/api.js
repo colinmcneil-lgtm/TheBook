@@ -541,7 +541,7 @@ reporting.registerReporting(api, { agencyOnly, adminOnly, bad, int, loadApp: (id
 // To do (each agency user's own list of jobs to work on and people to prep and debrief) is a module of its own as well.
 // The routes below tell it when an interview is scheduled, changed or cancelled: each call to `todos.` is one of those.
 todos.registerTodos(api, { agencyOnly, bad, clean, text, int });
-// Our job board (the agency's confidential adverts and what the agency does with them) is a module of its own too.
+// Jobs on our website (the agency's confidential adverts and what the agency does with them) is a module of its own too.
 // The routes below tell it when a job, a client or somebody at a client changes, because a post has to be checked
 // again each time, and ask it before anything is e-mailed to somebody who applied through a post.
 board.registerBoard(api, { agencyOnly, adminOnly, bad, clean, text, int, takeHit, linkField, candidateUpload, acceptPhoto, removeUpload, logActivity,

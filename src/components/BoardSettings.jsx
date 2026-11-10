@@ -5,7 +5,7 @@ import { api, copyText, plural } from '../lib.js';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { Badge, Button, Card, CardHeader, Checkbox, Field, Input, Textarea, useAction, useToast } from '../ui.jsx';
 
-// Settings, Agency, "Our job board": how the agency's public job board looks, and the three ways to get it onto the
+// Settings, Agency, "Jobs on our website": how the agency's public job board looks, and the three ways to get it onto the
 // agency's own website. Admins change it; the rest of the team reads it and can copy the link, the snippet and the feed.
 
 const escAttr = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -100,13 +100,13 @@ export default function BoardSettings() {
   });
   const [removeLogo] = useAction(async () => { await api.del('/board/logo'); toast('Logo removed'); bump(); });
 
-  if (!data || !form) return <Card id="board"><CardHeader title="Our job board" /><Pending error={error} /></Card>;
+  if (!data || !form) return <Card id="board"><CardHeader title="Jobs on our website" /><Pending error={error} /></Card>;
   const origin = data.address || window.location.origin;
   const bind = (key) => ({ value: form[key], disabled: !isAdmin, onChange: (e) => setForm((f) => ({ ...f, [key]: e.target.value })) });
 
   return (
     <Card id="board" className="scroll-mt-4">
-      <CardHeader title="Our job board" action={<Badge tone={data.live ? 'green' : 'gray'}>{data.live ? `${plural(data.live, 'post')} public` : 'No posts public'}</Badge>} />
+      <CardHeader title="Jobs on our website" action={<Badge tone={data.live ? 'green' : 'gray'}>{data.live ? `${plural(data.live, 'post')} public` : 'No posts public'}</Badge>} />
       {data.down > 0 && (
         <p className="mx-4 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
           {plural(data.down, 'post is', 'posts are')} switched on but not public. <Link to="/jobs?view=board" className="font-medium underline">See why</Link>.
