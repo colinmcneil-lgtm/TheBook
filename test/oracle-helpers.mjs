@@ -20,6 +20,7 @@ export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-c
 
 // Ports: every test file's ports are counted from ORACLE_TEST_PORT (3610 unless set), thirty in a row in all.
 //   +0 to +4    Otterview tests: three for servers, then one for each stand-in
+//   +5 to +8    the job board tests: two servers, then a stand-in each for the AI and mail services
 //   +12, +13    the workspace tests: a server and a stand-in
 //   +16, +17    the reporting tests: two servers
 //   +18, +19    the to-do tests: two servers

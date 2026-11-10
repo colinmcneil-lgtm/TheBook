@@ -13,6 +13,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | --- | --- |
 | **Clients** | Each company you embed in has its own jobs, candidates, hiring-team logins, brand colour and engagement terms (retainer, fee per hire, or both). A switcher scopes the whole workspace to one client or all of them. |
 | **Careers pages** | Every client gets a public, branded careers page at `/careers/<client>` listing open roles, each with an application form (résumé upload, custom screening questions, consent). Link to it from the client's website. Add `?src=linkedin`, `?src=job_board` or `?src=referral` to an apply link to track where applicants came from. |
+| **Our job board** | Your agency's own public job board, in your name, for the jobs you choose to advertise yourselves without saying who the employer is. Each post is written for the purpose and checked for anything that would give the client away before it can go public. Link to the board, show it inside a page of your own website, or read it as data. See [Our job board (confidential posts)](#our-job-board-confidential-posts). |
 | **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **Otterview** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [Otterview](#otterview) and [Metaview in Otterview](#metaview-in-otterview). |
@@ -140,6 +141,179 @@ window under 1100 wide (a phone, a tablet, a small laptop window) the lists come
 picker opens behind **Add jobs** or **Add people**.
 
 Deleting a job or a candidate removes their items from every list. Merging two records of one person keeps them.
+
+## Our job board (confidential posts)
+
+A client's careers page (`/careers/<client>`) advertises a job in the client's name. **Our job board** is the other
+public face: a board in your agency's name, at `/board`, listing the jobs you have chosen to advertise yourselves
+without saying who the employer is. The two are kept apart on purpose. Nothing on the board comes from the client,
+and nothing on a client's careers page mentions the board.
+
+### A confidential post
+
+Every job has a **Confidential post** tab (agency only; the client's hiring team has no such tab and is sent nothing
+about it). On it you switch on **Post on our website (confidential)** and fill in what the public will see:
+
+- a **title**, which starts as the job's title;
+- a **location as it should be shown**, such as "Greater Toronto Area". It starts empty and is never copied from
+  the client;
+- the **working pattern and contract**, which are the job's own;
+- whether to **show the salary range**;
+- the **advert text**, written for the purpose.
+
+That is everything the public is ever given about the job. The tab shows a preview drawn by the same code as the
+public page, the post's public link, how many people have applied through it, and a history of when it went public
+or came down and why. **Jobs, Our job board** lists every post with whether it is public.
+
+A post is public while three things are true: it is switched on, its job is open, and the check below finds
+nothing. Switching it off, pausing or closing the job, or ending the work with the client takes it down. Its address
+stays the same if it comes back.
+
+### Drafting the advert
+
+With an AI key connected (the same `ANTHROPIC_API_KEY` as job autofill), **Draft it for me** sends the job's own
+advert to the AI service and asks for it to be written again with everything that could identify the employer taken
+out: the name and anything made from it, products and brand names, founders and other named people, addresses and
+neighbourhoods, exact headcount or funding figures, awards, slogans, links, and unusual phrases that could be
+searched for. The employer is described only in general terms ("a Series B health-tech company"). The client's name,
+website and the names of its people are sent too, so that the service knows what to keep out. The draft lands in the
+form, with a list of what was taken out; nothing is saved until you save it. A draft that has not come back after two
+and a half minutes is given up on (`BOARD_AI_TIMEOUT_MS` changes how long). Without a key, you write the advert
+yourself.
+
+**The draft is a help, not the safeguard.** It is checked like anything you type.
+
+### The check
+
+Before a post can go public, and again whenever the post, the job or the client is changed, the title, the location
+and the text are searched for:
+
+- the client's **name**, and each **distinctive word** of it. Words that say what kind of company it is ("Health",
+  "Logistics", "Group", "Inc") are not looked for on their own; the whole name always is;
+- the client's **careers address** (the part after `/careers/`), its **website** and the name in the website's
+  address;
+- the names of **everybody with a login at the client**, whether or not they still work there. The job's hiring
+  manager is among them, unless the hiring manager is one of your own team, whose name gives no client away. A full name is found however it is written; a first name or surname on its own is found where it
+  is written with a capital, because "may", "will" and "grace" are also ordinary words;
+- the **domains of their e-mail addresses** (not the public ones such as gmail.com);
+- **any link, e-mail address or phone number at all**, whoever it belongs to.
+
+Capitals and accents make no difference ("LUMEN", "Lümen"), a name broken up with punctuation or spaces is still
+found ("L.u.m.e.n", "Lumen-Health", "L u m e n"), and so is a word of the name at the start of a longer one
+("Lumens", "TeamLumen"). Each thing found is shown in a sentence that says what it is and where, and the check also
+lists what it looked for.
+
+**A post that fails cannot go public, and a public post that starts to fail comes down** until it is fixed: a
+client is renamed to a word that is in the advert, somebody whose name is in it joins the client's hiring team. This
+does not depend on every screen remembering to ask: before anything is shown to the public, the posts that are
+switched on are checked again if anything at all has been saved since the last look.
+
+**Overruling a false alarm.** A client called North will be found in "North America". An admin can overrule a
+single word of a name that is plainly a false alarm. It is recorded with their name and the date, shown on the tab,
+and holds for that word with the same words either side of it only: "North" anywhere else in the post is found
+again. A whole name spelt out, a link or an address can never be overruled.
+
+**What the check cannot do.** It finds names and addresses. It cannot tell that "the company behind the city's
+blue rental bikes" gives a client away, or that a street name does. Read each advert as a stranger would.
+
+**Matching the two adverts.** While a job is open, the client's own advert is public on the client's careers
+page. The tab says so, and warns when the post shares a sentence word for word with that page (anybody who searches
+for the sentence finds both), or when the title and the salary range shown are the same on both. These are
+warnings; they do not stop the post. A post is only public while its job is open, and an open job is on the
+client's careers page: there is not yet a way to advertise a job on your board alone.
+
+### The public board
+
+- `/board` lists the public posts, newest first, with a search box and filters for location and working pattern.
+  `/board/<token>` is one post, with its application form.
+- A post's address is a **random token**. It is not the job's number and cannot be turned into it; no public route
+  takes a job's number and returns a post, or the other way round.
+- The pages and the feed are built from a **list of allowed fields**: the token, title, location, working pattern,
+  contract, the salary range if you chose to show it, the day it was posted, and the text. Never the client, its
+  colour or careers address, the job's number, who wrote the post, how many applied, or any other date.
+- An address that was never a post, a post that is switched off, one that came down and one whose job was deleted
+  all answer the same: "This role is no longer open."
+- The pages tell search engines and link previews the board's name and the role, and each post carries job-posting
+  data that gives **your agency as the organisation hiring** and says the employer is confidential.
+
+### Applying, and what the candidate is sent
+
+The form asks for a name, e-mail address, phone, LinkedIn profile, résumé and a note, and for agreement that your
+agency may hold the person's details and share the application with the employer. Your **agency's privacy notice**
+is linked beside it. The client's own screening questions and privacy notice are never shown there.
+
+- The application lands on the job like any other, with the source **Our website**, owned by nobody until a
+  recruiter takes it, and it is in the Inbox. "Our website" appears wherever sources are listed and in the reports
+  (to the client's hiring team it reads "Agency website"), and it is only ever an application made on the board.
+- **The client's hiring team sees the applicant on their job as they see any other**, as soon as they apply, and
+  nothing about the post. Bear that in mind for a search the client's own staff are not meant to know about.
+- The candidate's confirmation is **your agency's own** ("Thanks for applying through ..."), under the title on the
+  post, and names nobody else. It is the template "Application received (our job board)" in Settings; if an edit
+  ever makes it name the client, the original wording is sent instead.
+- Each such candidate has a tick on their profile, **Knows who the client is**, which starts off. While it is off:
+  - what The Book sends by itself (the interview invitation, the "not moving forward" e-mail) uses the title they
+    applied under and says "our client" where the company's name would be. If the finished e-mail would name the
+    client all the same (an interview's location, an edited template), it is **not sent**, and whoever clicked is
+    told why;
+  - an e-mail a recruiter writes by hand shows a warning beside the send button when it names the client ("This
+    candidate applied through your confidential post. This message names ..."), and the button becomes "Send
+    anyway". Sent that way and delivered, the tick is made for you.
+- Somebody already in the job who applies again on the board, and somebody who came through the board and then
+  applies on the client's careers page, is answered exactly as a new applicant would be, confirmation included.
+  A different answer would tell them which employer the post was for.
+
+### Getting it onto your own website
+
+The Book cannot put a page on a website it does not run, so the board is offered three ways. All three are under
+**Settings, Agency, Our job board**, each with a copy button.
+
+1. **Link to it.** The board's own address, `https://<your workspace>/board`.
+2. **Show it inside a page of your website.** A snippet to paste where the jobs should appear: a frame that shows
+   the board, and a few lines of script that size the frame to its contents, so the page scrolls as one. Visitors
+   search, open a post and apply without leaving your page. No cookies are involved.
+3. **Read it as data.** `https://<your workspace>/board/feed.json`: every public post as plain JSON (`id`, `url`,
+   `title`, `location`, `working_pattern`, `contract`, `salary`, `posted`, `text`), for a web developer who wants to
+   draw the list themselves. Any website may read it. People still apply on the post's page on the board.
+
+The board's pages, and only they, may be shown inside another website's page, and only by the websites listed in
+that setting (`otterbrook.ca` and `www.otterbrook.ca` to begin with). Every other page of The Book still refuses to
+be shown inside any page. A page opened at a board address shows the board and nothing else, wherever a link in it
+leads.
+
+**The owner's steps**, once this version is live:
+
+1. Open **Settings, Agency, Our job board**. Check the name, add your logo and colour, paste the link to your
+   agency's candidate privacy notice, and check that the list of websites holds the address of your website as
+   visitors see it (with and without `www`). Save.
+2. If the workspace is reached at a domain of your own rather than the host's, set `APP_URL` to it where The Book
+   is hosted, so that the links in the feed and the addresses given to search engines use it. (Railway's own
+   address is detected by itself.)
+3. On each job you want to advertise: open its **Confidential post** tab, write the advert or have it drafted,
+   give it a location, deal with whatever the check finds, tick **Post on our website (confidential)** and save.
+   Read the preview as a stranger would.
+4. On your website, add a page (or open your careers page) and either link to the board or paste the snippet:
+   in Squarespace into a **Code** block, in Webflow into an **Embed** element, in WordPress into a **Custom HTML**
+   block, in plain HTML anywhere in the page. Publish the page and look at it: the board should appear, and grow
+   and shrink as you search and open a post.
+5. Send one application through it yourself and check that it arrives in the Inbox with the source "Our website"
+   and that the confirmation e-mail reads as you want.
+
+If the board does not appear inside your page, the browser's console says which website was refused: add that
+address to the list. **Wix** is the likely case: it shows pasted code (Embed Code, Embed HTML) inside a frame of its
+own, served from an address of Wix's rather than yours, and that address has to be in the list too. Wix's "Embed a
+site" with the board's address followed by `?embed=1` needs only your own address in the list, but has a fixed
+height.
+
+### Before you rely on it
+
+- The snippet was tried in Chromium, at computer and phone widths, pasted into a plain page served from another
+  address standing in for otterbrook.ca: the board showed, sized itself, listed, opened a post and took an
+  application inside the frame; the same page at an address that was not on the list was refused; and a page of The
+  Book that is not the board was refused even from the listed address. **It has not been tried on Squarespace, Wix,
+  Webflow or WordPress, on the real otterbrook.ca, or in Safari or Firefox.**
+- "Draft it for me" was only run against a stand-in for the AI service, so read the first real drafts closely.
+- Whether search engines list the posts, and how link previews look in a given app, was not checked: the details
+  are in the pages, in the form those services document.
 
 ## Reporting
 
@@ -590,7 +764,7 @@ npm run seed
 npm run dev
 ```
 
-Open http://localhost:3000. `npm run seed` loads a demo agency with three fictional clients; skip it to start
+Open http://localhost:3000. `npm run seed` loads a demo agency with four fictional clients; skip it to start
 empty, in which case the first visit asks you to create your owner account.
 
 Settings are read from real environment variables, or from a `.env` file in the project folder if you create one
@@ -605,6 +779,9 @@ Demo sign-ins (password `demo1234` for all):
 | Client hiring manager | `maya@lumenhealth.example` | Lumen Health only |
 
 Public careers page for the demo: http://localhost:3000/careers/lumen-health
+
+The demo's own job board: http://localhost:3000/board. It has two confidential posts. One is for a client called
+North, whose advert says "North America": the job's Confidential post tab shows the word overruled by an admin.
 
 To wipe the database and reload the demo: `npm run seed -- --reset`. This deletes every record, invitation link and uploaded résumé
 in `DATA_DIR`, so it refuses to run when `NODE_ENV=production` unless you add `--force`.
@@ -690,6 +867,7 @@ server/
   api.js     All API routes: auth, careers pages, jobs, pipeline, interviews, reports
   reporting.js  The Individual and Clients reports: the record of submissions, first interviews, placements and searches, and the day counting starts
   todos.js   To do: each person's own lists of jobs to work on and people to prep and debrief, and what interviews add to them
+  board.js   Our job board: the agency's confidential posts, the check that keeps the client out of them, the public board and its feed
   autofill.js  Drafting a job and its brief from a job description and intake notes
   oracle.js  Otterview: recording and uploading calls, transcription, notes and submission drafts
   metaview.js         Metaview in Otterview: the key, reading the list in the background, bringing calls in
@@ -706,14 +884,15 @@ src/
   App.jsx, state.jsx, lib.js, ui.jsx   App shell, data hooks, helpers, shared components
   components/                           Candidate profile, modals, forms, layout
   oracle/                               What Otterview's screens share with the rest of the app (the recorder)
-  pages/                                One file per screen, plus the public careers pages
+  pages/                                One file per screen, plus the public careers pages and the agency's public job board
 ```
 
 Security basics in place: salted scrypt password hashing, HTTP-only same-site session cookies, every
 request checked against the signed-in user's client, rate limiting per visitor on sign-in, sign-up,
 invitations and public applications, a content security policy, résumé uploads restricted by type and size and only
 ever served back as downloads, length limits on everything the public form accepts, and a honeypot field on
-application forms. The code was reviewed by independent reviewers across authorization, web security, server
+application forms. No page may be shown inside another website's page, except the agency's job board inside the
+websites the agency lists. The code was reviewed by independent reviewers across authorization, web security, server
 logic, front end and deployment, and the confirmed findings were fixed.
 
 Candidate privacy: each application records when consent was given, each client can link its own privacy
@@ -752,4 +931,9 @@ they made at that client, their résumé files, and their recorded calls with th
   against another's list, a client user, deletion and merging, and starting on a database from before it); the page
   was driven in Chrome on the demo data at 1280 wide with a mouse and at 390 wide with touch input, and with the
   keyboard alone at both widths. It has not been tried on a real phone, or in Safari or Firefox.
+  Our job board is tested through a story acted out against the real server with stand-ins for the AI and mail
+  services (everything the check must and must not find, posts coming down, the exact fields the public is given,
+  applying, every e-mail's whole text, which websites may frame which pages, and starting on a database made by the
+  version before it); the agency's screens, the public board and the board inside a stand-in for the agency's
+  website were driven in Chrome at 1280 and 390 wide on the demo data.
   The other screens were verified by hand.

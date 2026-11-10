@@ -122,6 +122,14 @@ export const SOURCES = {
   careers_page: 'Careers page', agency_sourced: 'Agency sourced', referral: 'Referral',
   linkedin: 'LinkedIn', job_board: 'Job board', other: 'Other',
 };
+/** Somebody who applied on the agency's own job board. It is never chosen by hand, so it is not among the sources above. */
+export const BOARD_SOURCE = 'our_website';
+/** A source as this person reads it. "Our website" is the agency's; to a client's hiring team it is the agency's website, not theirs. */
+export const sourceName = (source, isAgency) => (source === BOARD_SOURCE ? (isAgency ? 'Our website' : 'Agency website') : SOURCES[source] || source);
+/** Copy something to the clipboard; where the browser will not, show it to be copied by hand. */
+export async function copyText(text, toast, done = 'Copied') {
+  try { await navigator.clipboard.writeText(text); toast(done); } catch { window.prompt('Copy this', text); }
+}
 export const WORK_MODES = { onsite: 'On-site', hybrid: 'Hybrid', remote: 'Remote' };
 export const EMPLOYMENT = { full_time: 'Full-time', part_time: 'Part-time', contract: 'Contract' };
 export const JOB_STATUS = {

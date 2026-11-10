@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ArrowRight, Inbox as InboxIcon, Hourglass } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
-import { api, url, ago, firstName, SOURCES } from '../lib.js';
+import { api, url, ago, firstName, sourceName, BOARD_SOURCE } from '../lib.js';
 import { Badge, Button, Card, Empty, Page, Tabs, useAction, useToast } from '../ui.jsx';
 import { CandidateCell, ClientName } from '../components/bits.jsx';
 
@@ -39,7 +39,7 @@ export default function Inbox() {
       {!rows ? <Pending error={tab === 'new' ? error : reviewError} /> : rows.length === 0 ? (
         <Card>
           <Empty icon={tab === 'new' ? InboxIcon : Hourglass} title={tab === 'new' ? 'You are all caught up' : 'Nothing waiting for review'}>
-            {tab === 'new' ? 'New applications from your clients’ careers pages land here.' : isAgency ? 'Candidates you submit to a hiring team appear here until they respond.' : 'When your recruiter shortlists someone, they will appear here for your decision.'}
+            {tab === 'new' ? (isAgency ? 'New applications from your clients’ careers pages and from your own job board land here.' : 'New applications land here.') : isAgency ? 'Candidates you submit to a hiring team appear here until they respond.' : 'When your recruiter shortlists someone, they will appear here for your decision.'}
           </Empty>
         </Card>
       ) : (
@@ -54,7 +54,7 @@ export default function Inbox() {
                 <div className="flex items-center gap-2 text-stone-500"><ClientName name={a.client_name} color={a.brand_color} /></div>
               </div>
               <div className="flex basis-36 flex-col items-start gap-1 text-[13px] text-stone-500">
-                <Badge tone="gray">{SOURCES[a.source] || a.source}</Badge>
+                <Badge tone={a.source === BOARD_SOURCE && isAgency ? 'violet' : 'gray'}>{sourceName(a.source, isAgency)}</Badge>
                 <span>{tab === 'new' ? `Applied ${ago(a.applied_at)}` : a.stage_name}</span>
               </div>
               <div className="flex gap-2">

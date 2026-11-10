@@ -11,6 +11,7 @@ import { registerMetaview, conversationsWith, forgetConversations } from './meta
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
 import * as reporting from './reporting.js';
 import * as todos from './todos.js';
+import * as board from './board.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -223,7 +224,12 @@ const logActivity = (applicationId, userId, type, detail) =>
 const SOURCE_LABELS = {
   careers_page: 'Careers page', agency_sourced: 'Agency sourced', referral: 'Referral',
   linkedin: 'LinkedIn', job_board: 'Job board', other: 'Other',
+  // The agency's own job board (see board.js). Only an application made there carries it: it is not offered when a
+  // candidate is added by hand.
+  [board.SOURCE]: 'Our website',
 };
+/** A source as this person reads it. "Our website" is the agency's; to a client's hiring team it is the agency's website, not theirs. */
+const sourceLabel = (source, user) => (source === board.SOURCE && !isAgency(user) ? 'Agency website' : SOURCE_LABELS[source] || source);
 
 // ---------- session ----------
 function readSession(req) {
@@ -380,6 +386,7 @@ api.post('/invites/:token/accept', rateLimit('invite', 40, 10 * 60000), (req, re
       email, hashPassword(b.password), name, inv.role, clientId, clean(b.title, 120), now());
   });
   startSession(req, res, id);
+  if (clientId) board.clientChanged(clientId); // somebody new at a client: their name must not be in a confidential post either
   res.json({ ok: true });
 });
 
@@ -408,6 +415,51 @@ api.get('/public/careers/:slug/jobs/:id', (req, res) => {
 
 const PUBLIC_SOURCES = ['careers_page', 'linkedin', 'job_board', 'referral'];
 
+/**
+ * Save an application made on a public form: the client's careers page, or the agency's own job board. Resolves to
+ * { appId }, or to { duplicate: <the application's id> } when this address is already in the job, in which case
+ * nothing is saved. `detail` is the line for the candidate's history; `also` runs with the new application's id
+ * before the save is final, for a caller that has something of its own to store with it.
+ */
+function receiveApplication({ client, job, name, email, phone, linkedin, location, answers, coverNote, file, source, detail, also }) {
+  return tx(() => {
+    let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', client.id, email);
+    const existing = cand;
+    if (cand) {
+      const already = q.get('SELECT id FROM applications WHERE candidate_id = ? AND job_id = ?', cand.id, job.id);
+      if (already) return { duplicate: already.id };
+      // An anonymous form must never change an existing person's record: nobody has shown they own this address.
+    } else {
+      const id = q.insert('INSERT INTO candidates (client_id, name, email, phone, linkedin, location, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        client.id, name, email, phone, linkedin, location, now());
+      cand = { id };
+    }
+    const stage = q.get(`SELECT id FROM stages WHERE job_id = ? AND kind = 'applied'`, job.id);
+    const t = now();
+    const appId = q.insert(
+      `INSERT INTO applications (candidate_id, job_id, stage_id, source, answers, cover_note, resume_file, resume_name, consent_at, applied_at, stage_entered_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      cand.id, job.id, stage.id, source, JSON.stringify(answers), coverNote,
+      file?.filename ?? null, clean(file?.originalname, 200), t, t, t, t);
+    q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
+    logActivity(appId, null, 'applied', detail);
+    // Anyone can type any link here, so it never joins this applicant to an existing record. If it is the profile
+    // link of someone already on file, both records are kept and the team is told, so a person can decide.
+    const key = existing ? null : identityKey(linkedin);
+    const twin = key && q.get('SELECT name FROM candidates WHERE client_id = ? AND linkedin = ? AND id != ? ORDER BY id LIMIT 1', client.id, key, cand.id);
+    if (twin) logActivity(appId, null, 'applied', `Possible duplicate of ${twin.name} (same LinkedIn link)`);
+    if (existing) {
+      const given = [existing.name !== name && `name “${name}”`, phone && phone !== existing.phone && `phone ${phone}`,
+        linkedin && linkedin !== existing.linkedin && `link ${linkedin}`, location && location !== existing.location && `location ${location}`].filter(Boolean);
+      if (given.length) logActivity(appId, null, 'applied', `Details typed on this application differ from the record and were not applied (unverified): ${given.join(', ')}`);
+    }
+    also?.(appId);
+    return { appId };
+  });
+}
+/** How many e-mails this address has been sent in the last hour. The address on a public form is unverified, so confirmations to any one address are capped. */
+const recentlyMailed = (email) => q.get('SELECT COUNT(*) AS n FROM emails WHERE to_email = ? AND created_at > ?', email, new Date(Date.now() - 3600000).toISOString()).n;
+
 api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 60000), upload.single('resume'), async (req, res) => {
   let stored = false; // true once the uploaded résumé belongs to a saved application
   try {
@@ -431,47 +483,21 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
       answers.push({ question: question.label, answer: answer || '' });
     }
     const source = PUBLIC_SOURCES.includes(b.source) ? b.source : 'careers_page';
-    const phone = clean(b.phone, 40), linkedin = profileUrl(b.linkedin), location = clean(b.location, 120);
 
-    const result = tx(() => {
-      let cand = q.get('SELECT * FROM candidates WHERE client_id = ? AND email = ?', client.id, email);
-      const existing = cand;
-      if (cand) {
-        if (q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ? AND job_id = ?', cand.id, job.id)) return { duplicate: true };
-        // An anonymous form must never change an existing person's record: nobody has shown they own this address.
-      } else {
-        const id = q.insert('INSERT INTO candidates (client_id, name, email, phone, linkedin, location, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          client.id, name, email, phone, linkedin, location, now());
-        cand = { id };
-      }
-      const stage = q.get(`SELECT id FROM stages WHERE job_id = ? AND kind = 'applied'`, job.id);
-      const t = now();
-      const appId = q.insert(
-        `INSERT INTO applications (candidate_id, job_id, stage_id, source, answers, cover_note, resume_file, resume_name, consent_at, applied_at, stage_entered_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        cand.id, job.id, stage.id, source, JSON.stringify(answers), text(b.cover_note, 6000),
-        req.file?.filename ?? null, clean(req.file?.originalname, 200), t, t, t, t);
-      q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
-      logActivity(appId, null, 'applied', `Applied via ${SOURCE_LABELS[source].toLowerCase()}`);
-      // Anyone can type any link here, so it never joins this applicant to an existing record. If it is the profile
-      // link of someone already on file, both records are kept and the team is told, so a person can decide.
-      const key = existing ? null : identityKey(linkedin);
-      const twin = key && q.get('SELECT name FROM candidates WHERE client_id = ? AND linkedin = ? AND id != ? ORDER BY id LIMIT 1', client.id, key, cand.id);
-      if (twin) logActivity(appId, null, 'applied', `Possible duplicate of ${twin.name} (same LinkedIn link)`);
-      if (existing) {
-        const given = [existing.name !== name && `name “${name}”`, phone && phone !== existing.phone && `phone ${phone}`,
-          linkedin && linkedin !== existing.linkedin && `link ${linkedin}`, location && location !== existing.location && `location ${location}`].filter(Boolean);
-        if (given.length) logActivity(appId, null, 'applied', `Details typed on this application differ from the record and were not applied (unverified): ${given.join(', ')}`);
-      }
-      return { appId };
+    const result = receiveApplication({
+      client, job, name, email, phone: clean(b.phone, 40), linkedin: profileUrl(b.linkedin), location: clean(b.location, 120),
+      answers, coverNote: text(b.cover_note, 6000), file: req.file, source, detail: `Applied via ${SOURCE_LABELS[source].toLowerCase()}`,
     });
     stored = Boolean(result.appId);
 
+    // Somebody already in this job is not written to again, with one exception: a person who came through the
+    // agency's confidential post has not been told that it is this job, so this form answers them exactly as it
+    // would a new applicant. Otherwise the missing confirmation would tell them which employer the post was for.
+    const confirm = result.appId ?? board.appliedAgainDirectly(result.duplicate, logActivity);
     // The address is unverified, so cap how many confirmations any one address can be sent.
-    const recent = q.get('SELECT COUNT(*) AS n FROM emails WHERE to_email = ? AND created_at > ?', email, new Date(Date.now() - 3600000).toISOString()).n;
-    if (result.appId && recent < 3) {
+    if (confirm && recentlyMailed(email) < 3) {
       await sendTemplate('application_received', {
-        applicationId: result.appId, to: email,
+        applicationId: confirm, to: email,
         vars: { candidate_first_name: greetingName(name), candidate_name: name, job_title: job.title, company: client.name, sender_name: client.name },
       });
     }
@@ -480,6 +506,9 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
     if (!stored) removeUpload(req.file?.filename);
   }
 });
+
+// The agency's own job board: its public pages, feed and application form. No sign-in, like the careers pages above.
+board.registerPublicBoard(api, { bad, clean, text, emailOf, validEmail, greetingName, rateLimit, upload, removeUpload, logActivity, receiveApplication, recentlyMailed, profileUrl, PHOTO_TYPES });
 
 // ---------- everything below requires a signed-in user ----------
 api.use((req, res, next) => {
@@ -508,6 +537,11 @@ reporting.registerReporting(api, { agencyOnly, adminOnly, bad, int, loadApp: (id
 // To do (each agency user's own list of jobs to work on and people to prep and debrief) is a module of its own as well.
 // The routes below tell it when an interview is scheduled, changed or cancelled: each call to `todos.` is one of those.
 todos.registerTodos(api, { agencyOnly, bad, clean, text, int });
+// Our job board (the agency's confidential adverts and what the agency does with them) is a module of its own too.
+// The routes below tell it when a job, a client or somebody at a client changes, because a post has to be checked
+// again each time, and ask it before anything is e-mailed to somebody who applied through a post.
+board.registerBoard(api, { agencyOnly, adminOnly, bad, clean, text, int, takeHit, linkField, candidateUpload, acceptPhoto, removeUpload, logActivity,
+  loadJob: (id, user) => loadJob(id, user), loadApp: (id, user) => loadApp(id, user) });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);
@@ -674,6 +708,7 @@ api.patch('/users/:id', agencyOnly, (req, res) => {
   if (b.password !== undefined || b.active === false) q.run('DELETE FROM sessions WHERE user_id = ?', target.id);
   // Links this person handed out stop working with them, so nobody can be let in on their say-so after they have left.
   if (b.active === false) q.run('DELETE FROM invites WHERE created_by = ? AND used_at IS NULL', target.id);
+  if (target.client_id) board.clientChanged(target.client_id); // a changed name is checked for in that client's confidential posts
   res.json({ ok: true });
 });
 
@@ -745,7 +780,8 @@ api.put('/clients/:id', agencyOnly, (req, res) => {
     `UPDATE clients SET name = ?, slug = ?, brand_color = ?, website = ?, privacy_url = ?, industry = ?, location = ?, tagline = ?, about = ?, status = ?,
        engagement_model = ?, monthly_retainer = ?, fee_percent = ?, currency = ?, started_at = ? WHERE id = ?`,
     f.name, slug, f.brand_color, f.website, f.privacy_url, f.industry, f.location, f.tagline, f.about, f.status, f.engagement_model, f.monthly_retainer, f.fee_percent, f.currency, f.started_at, id);
-  res.json({ ok: true });
+  // A new name, careers address or website is looked for in this client's confidential posts at once; one that now gives the client away comes down.
+  res.json({ ok: true, ...board.clientChanged(id) });
 });
 
 // ---------- jobs ----------
@@ -921,7 +957,8 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
       q.run(`UPDATE stages SET position = ? WHERE job_id = ? AND kind = 'hired'`, wanted.length + 2, job.id);
     }
   });
-  res.json({ ok: true });
+  // The job's confidential post, if it has one, is checked again: a new hiring manager's name may be in it, and a job that is no longer open is not advertised.
+  res.json({ ok: true, ...board.jobChanged(job.id) });
 });
 
 // The recruiter brief is saved on its own, from the job's Brief page. It belongs to whoever created the job:
@@ -953,7 +990,7 @@ api.patch('/jobs/:id/status', agencyOnly, (req, res) => {
   q.run('UPDATE jobs SET status = ?, opened_at = ?, closed_at = ? WHERE id = ?',
     status, job.opened_at ?? (status === 'open' ? t : null), status === 'closed' ? t : null, job.id);
   reporting.searchOpened(job.id, status, job);
-  res.json({ ok: true });
+  res.json({ ok: true, ...board.jobChanged(job.id) });
 });
 
 api.delete('/jobs/:id', adminOnly, (req, res) => {
@@ -1020,7 +1057,9 @@ function loadApp(id, user) {
   if (!a || !canSee(user, a.client_id)) bad('Not found', 404);
   return a;
 }
-const mailVars = (a, user) => ({
+// Somebody who applied through the agency's confidential post and has not been told who the client is gets the
+// title they saw and no company name (see board.js); everybody else gets the job and the client as they are.
+const mailVars = (a, user) => board.mailVars(a, {
   candidate_first_name: greetingName(a.candidate_name), candidate_name: a.candidate_name,
   job_title: a.job_title, company: a.client_name, sender_name: user.name,
 });
@@ -1069,7 +1108,7 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
     if (!c.name) bad('A name is required.');
     if (email && !validEmail(email)) bad('That email address does not look right.');
     if (!email && !c.linkedin) bad('Add an email address or a profile link, so this person can be told apart from others.');
-    const source = isStr(b.source) && Object.hasOwn(SOURCE_LABELS, b.source) ? b.source : 'agency_sourced';
+    const source = isStr(b.source) && Object.hasOwn(SOURCE_LABELS, b.source) && b.source !== board.SOURCE ? b.source : 'agency_sourced';
     const result = tx(() => {
       // The same person is recognised by email, or failing that by a LinkedIn profile link. No other kind of link
       // identifies anyone, and a link alone is not trusted when the name on the record is plainly someone else's
@@ -1178,9 +1217,10 @@ api.get('/applications/:id', (req, res) => {
     `SELECT n.*, u.name AS user_name, u.role AS user_role FROM notes n LEFT JOIN users u ON u.id = n.user_id
      WHERE n.application_id = ? ${agency ? '' : 'AND n.private = 0'} ORDER BY n.created_at DESC`, a.id);
   // That a call was recorded is the agency's business: clients never see anything of Otterview, this line included.
+  // The same goes for what the agency notes about its own confidential post (whether the candidate knows who the client is).
   const activities = q.all(
     `SELECT ac.*, u.name AS user_name FROM activities ac LEFT JOIN users u ON u.id = ac.user_id
-     WHERE ac.application_id = ? ${agency ? '' : `AND ac.type != 'call'`} ORDER BY ac.created_at DESC, ac.id DESC`, a.id);
+     WHERE ac.application_id = ? ${agency ? '' : `AND ac.type NOT IN ('call', 'board')`} ORDER BY ac.created_at DESC, ac.id DESC`, a.id);
   const interviews = q.all('SELECT * FROM interviews WHERE application_id = ? ORDER BY starts_at DESC', a.id).map((i) => ({
     ...i,
     panel: q.all(`SELECT u.id, u.name, u.title, u.role FROM interview_panel p JOIN users u ON u.id = p.user_id WHERE p.interview_id = ?`, i.id),
@@ -1207,6 +1247,7 @@ api.get('/applications/:id', (req, res) => {
     application: { ...application, answers: json(a.answers, []), submitted_by_name: names(a.submitted_by), reviewed_by_name: names(a.reviewed_by), owner_name: names(a.owner_id) },
     candidate, job, client, stages, notes, activities, interviews, offer, emails, others, duplicates,
     ...(agency ? { placement: reporting.placementOf(a.id) } : {}), // the fee recorded when they were hired: the agency's business only
+    ...(agency ? { board: board.applicationFacts(a.id) } : {}),     // came through the agency's confidential post, and whether they know who the client is
   });
 });
 
@@ -1263,8 +1304,9 @@ api.post('/applications/:id/reject', async (req, res) => {
     cancelUpcomingInterviews(a.id, req.user.id);
     reporting.leftPipeline(a.id);
   });
-  if (req.body?.send_email === true && a.candidate_email) await sendTemplate('rejection', { applicationId: a.id, to: a.candidate_email, vars: mailVars(a, req.user), userId: req.user.id });
-  res.json({ ok: true });
+  const sent = req.body?.send_email === true && a.candidate_email
+    ? await sendTemplate('rejection', { applicationId: a.id, to: a.candidate_email, vars: mailVars(a, req.user), userId: req.user.id, allow: board.mayBeSent(a) }) : null;
+  res.json({ ok: true, ...board.heldNotice(sent, req.user) });
 });
 
 api.post('/applications/:id/restore', (req, res) => {
@@ -1361,8 +1403,12 @@ api.post('/applications/:id/emails', async (req, res) => {
   const body = text(req.body?.body, 20000);
   if (!subject || !body) bad('Subject and message are required.');
   if (!a.candidate_email) bad('There is no email address on file for this candidate. Add one under Edit details first.');
+  // A message that names the client, to somebody who applied through the confidential post and has not been told
+  // who the client is, is only sent when the recruiter has seen the warning and said so.
+  const tells = board.handWritten(a, `${subject}\n${body}`, req.user, req.body?.names_client_ok === true, bad);
   const result = await sendMail({ applicationId: a.id, to: a.candidate_email, subject, body, userId: req.user.id });
   logActivity(a.id, req.user.id, 'email', `Emailed candidate: ${subject}`);
+  if (tells && result.delivery === 'sent') board.clientNowKnown(a.id, req.user.id, 'Told who the client is, by e-mail', logActivity);
   res.json(result);
 });
 
@@ -1560,11 +1606,11 @@ api.post('/interviews', async (req, res) => {
     todos.interviewChanged(a.id);
     return iid;
   });
-  if (b.notify && a.candidate_email) await sendTemplate('interview_invite', {
-    applicationId: a.id, to: a.candidate_email, userId: req.user.id,
+  const sent = b.notify && a.candidate_email ? await sendTemplate('interview_invite', {
+    applicationId: a.id, to: a.candidate_email, userId: req.user.id, allow: board.mayBeSent(a),
     vars: { ...mailVars(a, req.user), interview_time: clean(b.time_label, 120) || starts.toUTCString(), interview_format: KIND_LABELS[kind], interview_location: clean(b.location, 300) || 'Details to follow' },
-  });
-  res.json({ id });
+  }) : null;
+  res.json({ id, ...board.heldNotice(sent, req.user) });
 });
 
 api.patch('/interviews/:id', async (req, res) => {
@@ -1592,14 +1638,15 @@ api.patch('/interviews/:id', async (req, res) => {
     todos.interviewChanged(i.application_id);
   });
   // Asked for, the candidate is sent the invitation again with the details as they now are.
+  let sent = null;
   if (changed && b.notify) {
     const a = loadApp(i.application_id, req.user);
-    if (a.candidate_email) await sendTemplate('interview_invite', {
-      applicationId: a.id, to: a.candidate_email, userId: req.user.id,
+    if (a.candidate_email) sent = await sendTemplate('interview_invite', {
+      applicationId: a.id, to: a.candidate_email, userId: req.user.id, allow: board.mayBeSent(a),
       vars: { ...mailVars(a, req.user), interview_time: clean(b.time_label, 120) || new Date(changed.starts_at).toUTCString(), interview_format: KIND_LABELS[changed.kind], interview_location: changed.location || 'Details to follow' },
     });
   }
-  res.json({ ok: true });
+  res.json({ ok: true, ...board.heldNotice(sent, req.user) });
 });
 
 api.get('/interviews/:id/ics', (req, res) => {
@@ -1673,7 +1720,7 @@ api.get('/dashboard', (req, res) => {
        END AS milestone
      FROM activities ac JOIN applications a ON a.id = ac.application_id JOIN candidates c ON c.id = a.candidate_id
      JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = ac.user_id
-     WHERE ${isAgency(req.user) ? '1 = 1' : `ac.type != 'call'`} ${w} ORDER BY ac.created_at DESC, ac.id DESC LIMIT 15`, ...p);
+     WHERE ${isAgency(req.user) ? '1 = 1' : `ac.type NOT IN ('call', 'board')`} ${w} ORDER BY ac.created_at DESC, ac.id DESC LIMIT 15`, ...p);
   const stale = q.all(
     `${appSelect} WHERE a.status = 'active' AND s.kind IN ('interview', 'offer') AND a.stage_entered_at < ? ${w}
      AND NOT EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = a.id AND i.status = 'scheduled' AND i.starts_at >= ?)
@@ -1718,7 +1765,7 @@ api.get('/reports', (req, res) => {
 
   const bySource = {};
   for (const a of apps) {
-    const row = (bySource[a.source] ||= { source: a.source, label: SOURCE_LABELS[a.source] || a.source, applicants: 0, interviewed: 0, hired: 0 });
+    const row = (bySource[a.source] ||= { source: a.source, label: sourceLabel(a.source, req.user), applicants: 0, interviewed: 0, hired: 0 });
     row.applicants++;
     if (at(a.id).rank >= 1) row.interviewed++;
     if (a.status === 'hired') row.hired++;
@@ -1737,7 +1784,7 @@ api.get('/reports', (req, res) => {
      LEFT JOIN offers o ON o.application_id = a.id
      WHERE a.status = 'hired' AND a.hired_at >= ? ${scope} ORDER BY a.hired_at DESC`, since, ...p)
     .map((h) => ({
-      ...h, source: SOURCE_LABELS[h.source] || h.source,
+      ...h, source: sourceLabel(h.source, req.user),
       days_to_hire: Math.max(0, Math.round((new Date(h.hired_at) - new Date(h.applied_at)) / DAY)),
       fee: h.salary && h.fee_percent ? Math.round((h.salary * h.fee_percent) / 100) : 0,
     }))

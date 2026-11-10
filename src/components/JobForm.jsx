@@ -138,8 +138,10 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
     // The plain reader's one "job title to search" is the title it read. If the title was corrected here, the brief follows it.
     const title = form.title.trim().replace(/\s*\(.*\)$/, '');
     if (draft?.source === 'basic' && form.brief?.search_titles?.length === 1 && title) body.brief = { ...form.brief, search_titles: [title] };
-    const id = job ? (await api.put(`/jobs/${job.id}`, body), job.id) : (await api.post('/jobs', body)).id;
+    const saved = job ? await api.put(`/jobs/${job.id}`, body) : await api.post('/jobs', body);
+    const id = job ? job.id : saved.id;
     toast(job ? 'Job saved' : form.status === 'open' ? 'Job created and published. Add the recruiter brief next.' : 'Job saved as a draft. Add the recruiter brief next.');
+    if (saved.board_notice) toast(saved.board_notice, 'error'); // the change took the job's confidential post down
     bump();
     onClose();
     onSaved?.(id);

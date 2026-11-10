@@ -21,6 +21,7 @@ import Oracle from './pages/Oracle.jsx';
 import OracleCall from './pages/OracleCall.jsx';
 import { RecorderProvider } from './oracle/RecorderProvider.jsx';
 import { Careers, CareersJob } from './pages/Careers.jsx';
+import { Board, BoardPost, BoardMissing } from './pages/Board.jsx';
 
 /**
  * A page that fails to draw must not take the rest of the workspace down with it. Without this, one broken page
@@ -121,10 +122,28 @@ function Workspace() {
   );
 }
 
+// The agency's job board is the one part of The Book that another website may show inside its own page. A page that
+// was opened at a board address therefore shows the board and nothing else, wherever a link inside it leads: the
+// workspace and the clients' careers pages can never be reached inside that frame.
+const openedOnBoard = /^\/board(\/|$)/i.test(window.location.pathname);
+
 export default function App() {
+  if (openedOnBoard) {
+    return (
+      <ToastProvider>
+        <Routes>
+          <Route path="/board" element={<Board />} />
+          <Route path="/board/:token" element={<BoardPost />} />
+          <Route path="*" element={<BoardMissing />} />
+        </Routes>
+      </ToastProvider>
+    );
+  }
   return (
     <ToastProvider>
       <Routes>
+        <Route path="/board" element={<Board />} />
+        <Route path="/board/:token" element={<BoardPost />} />
         <Route path="/careers/:slug" element={<Careers />} />
         <Route path="/careers/:slug/:jobId" element={<CareersJob />} />
         <Route path="/join/:token" element={<Join />} />

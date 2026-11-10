@@ -8,6 +8,7 @@ import { ApproveForm, InviteForm } from '../components/Forms.jsx';
 import { Notice } from '../oracle/bits.jsx';
 import { knownLine, readingLine } from '../oracle/calls.js';
 import { problemOf, useMetaview } from '../oracle/metaview.jsx';
+import BoardSettings from '../components/BoardSettings.jsx';
 
 /** A link such as /settings?tab=agency#metaview lands on that card, not at the top of the page. */
 function useScrollToHash(ready) {
@@ -198,6 +199,8 @@ function Agency() {
           {isAdmin && <Button type="submit" variant="primary" busy={busy}>Save</Button>}
         </form>
       </Card>
+      {/* The agency's public job board: how it looks, and the three ways onto the agency's own website. */}
+      <BoardSettings />
       <AiCard metaview={metaview.status} />
       {/* Connecting Metaview takes its key, so it is for admins. Everyone else sees whether it is connected, above. */}
       {isAdmin && <MetaviewCard metaview={metaview} />}
@@ -394,6 +397,7 @@ function Templates() {
           <p className="text-xs leading-relaxed text-stone-500">
             Filled in for you when sending: {MERGE_FIELDS.map((f) => <code key={f} className="mr-1.5 rounded bg-stone-100 px-1 py-0.5">{`{{${f}}}`}</code>)}
             {editing.key === 'interview_invite' && <>and <code className="rounded bg-stone-100 px-1 py-0.5">{'{{interview_time}}'}</code> <code className="rounded bg-stone-100 px-1 py-0.5">{'{{interview_format}}'}</code> <code className="rounded bg-stone-100 px-1 py-0.5">{'{{interview_location}}'}</code></>}
+            {editing.key === 'board_application_received' && <>and <code className="rounded bg-stone-100 px-1 py-0.5">{'{{agency_name}}'}</code>. This one goes to people who applied through your own job board, who have not been told who the employer is: here <code className="rounded bg-stone-100 px-1 py-0.5">{'{{company}}'}</code> is your agency and <code className="rounded bg-stone-100 px-1 py-0.5">{'{{job_title}}'}</code> the title on the post. Keep clients’ names out of it; if it ever names the client, the original wording is sent instead.</>}
           </p>
         </Modal>
       )}

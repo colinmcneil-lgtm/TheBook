@@ -73,9 +73,16 @@ export async function notify({ to, subject, body }) {
   }
 }
 
-/** Send one of the built-in templates (application_received, rejection, interview_invite). */
-export async function sendTemplate(key, { applicationId, to, vars, userId = null }) {
+/**
+ * Send one of the built-in templates (application_received, rejection, interview_invite). `allow`, when given, is
+ * shown the finished subject and message and can hold the e-mail back: nothing is sent or recorded, and the answer
+ * is { held: true }. It is how an e-mail that would name the client is kept from somebody who applied through a
+ * confidential post (see board.js).
+ */
+export async function sendTemplate(key, { applicationId, to, vars, userId = null, allow = null }) {
   const tpl = q.get('SELECT * FROM email_templates WHERE key = ?', key);
   if (!tpl) return null;
-  return sendMail({ applicationId, to, userId, subject: renderTemplate(tpl.subject, vars), body: renderTemplate(tpl.body, vars) });
+  const subject = renderTemplate(tpl.subject, vars), body = renderTemplate(tpl.body, vars);
+  if (allow && !allow(subject, body)) return { held: true };
+  return sendMail({ applicationId, to, userId, subject, body });
 }

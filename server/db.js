@@ -566,6 +566,64 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_person_once ON todos(user_id, kind, 
 addColumn('todos', 'set_aside', 'INTEGER NOT NULL DEFAULT 0');
 // ---------- end of to do ----------
 
+// ---------- our job board ----------
+// The agency's own, confidential adverts for its clients' jobs, shown on a public board in the agency's name (see
+// board.js). Everything here is new: no existing row is rewritten.
+db.exec(`
+-- One row for a job the agency has written its own advert for. It holds only what the public is shown, written for
+-- that purpose: nothing is copied here from the client. The job's working pattern, contract and salary range are
+-- read from the job when the post is shown.
+CREATE TABLE IF NOT EXISTS board_posts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE,                        -- the post's public address: random, so it says nothing about the job or the client
+  enabled INTEGER NOT NULL DEFAULT 0,                -- the switch "Post on our website (confidential)"
+  title TEXT, location TEXT, description TEXT,       -- as the public sees them
+  show_salary INTEGER NOT NULL DEFAULT 0,
+  -- 1 = on the public board now: switched on, the job is open and the check found nothing. Worked out again
+  -- whenever the post, the job or the client changes, and before anything is shown to the public.
+  live INTEGER NOT NULL DEFAULT 0,
+  problems TEXT NOT NULL DEFAULT '[]',               -- JSON: what the last check found, for the recruiter
+  checked_at TEXT,
+  posted_at TEXT,                                    -- when it last went public: the only date the public is given
+  created_by INTEGER, created_at TEXT NOT NULL,
+  updated_by INTEGER, updated_at TEXT NOT NULL
+);
+-- A word the check found that an admin has said is a false alarm (a client called North, in "North America"). It
+-- holds for that word in those surroundings only: the same word anywhere else in the post is found again.
+CREATE TABLE IF NOT EXISTS board_overrules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_id INTEGER NOT NULL REFERENCES board_posts(id) ON DELETE CASCADE,
+  word TEXT NOT NULL,                                -- what was found, as the check compares it (lower case, no accents)
+  phrase TEXT NOT NULL,                              -- the words around it, compared the same way
+  shown TEXT NOT NULL,                               -- the phrase as it was written, for the record
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (post_id, word, phrase)
+);
+-- What happened to each post, and who did it: published, taken down (and why), a word overruled, switched off.
+CREATE TABLE IF NOT EXISTS board_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_id INTEGER NOT NULL REFERENCES board_posts(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,                                -- published | taken_down | overruled | overrule_withdrawn
+  detail TEXT,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, -- empty when The Book did it by itself
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_board_log_post ON board_log(post_id);
+-- One row for each application that came through a confidential post. It is kept apart from the application itself
+-- so that nothing about the post travels with the application to the client's hiring team. Until the candidate has
+-- been told who the client is, nothing The Book sends them by itself may name it (see board.js).
+CREATE TABLE IF NOT EXISTS board_applications (
+  application_id INTEGER PRIMARY KEY REFERENCES applications(id) ON DELETE CASCADE,
+  post_id INTEGER NOT NULL REFERENCES board_posts(id) ON DELETE CASCADE,
+  public_title TEXT NOT NULL,                        -- the title the candidate saw when they applied, for e-mails to them
+  client_known_at TEXT,                              -- when somebody ticked "Knows who the client is"
+  client_known_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_board_applications_post ON board_applications(post_id);`);
+// ---------- end of our job board ----------
+
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
   get: (sql, ...p) => db.prepare(sql).get(...p),
@@ -631,4 +689,16 @@ const DEFAULT_TEMPLATES = [
 
 if (!q.get('SELECT 1 AS x FROM email_templates LIMIT 1')) {
   for (const t of DEFAULT_TEMPLATES) q.run('INSERT INTO email_templates (key, name, subject, body) VALUES (?, ?, ?, ?)', ...t);
+}
+
+// The confirmation sent to somebody who applied through the agency's own job board (see board.js). It is the
+// agency's e-mail, not the client's: it names the agency and the title the public saw, and never the employer.
+// A workspace that already has its templates is given this one too; one that somebody has edited is left alone.
+export const BOARD_CONFIRMATION = {
+  key: 'board_application_received', name: 'Application received (our job board)',
+  subject: 'Thanks for applying through {{agency_name}}',
+  body: 'Hi {{candidate_first_name}},\n\nThanks for applying through {{agency_name}} for the {{job_title}} role. We have your application and one of our recruiters will read it shortly.\n\nWe are recruiting for this role on behalf of a client, and the employer’s name is kept confidential at this stage. If your experience looks like a match, we will be in touch to talk it through and tell you more.\n\nBest,\n{{agency_name}}',
+};
+if (!q.get('SELECT 1 AS x FROM email_templates WHERE key = ?', BOARD_CONFIRMATION.key)) {
+  q.run('INSERT INTO email_templates (key, name, subject, body) VALUES (?, ?, ?, ?)', BOARD_CONFIRMATION.key, BOARD_CONFIRMATION.name, BOARD_CONFIRMATION.subject, BOARD_CONFIRMATION.body);
 }
