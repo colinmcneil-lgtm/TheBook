@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { CircleAlert } from 'lucide-react';
-import { api } from './lib.js';
+import { api, remember, remembered } from './lib.js';
 import { AppContext } from './state.jsx';
 import { ToastProvider, Loading, Empty, Button } from './ui.jsx';
 import Layout from './components/Layout.jsx';
@@ -19,12 +19,7 @@ import Settings from './pages/Settings.jsx';
 import Oracle from './pages/Oracle.jsx';
 import OracleCall from './pages/OracleCall.jsx';
 import { RecorderProvider } from './oracle/RecorderProvider.jsx';
-import { PhoneProvider } from './oracle/phone.jsx';
-import { CalendarProvider } from './oracle/calendar.jsx';
 import { Careers, CareersJob } from './pages/Careers.jsx';
-
-const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
-const store = (key, value) => { try { value == null ? localStorage.removeItem(key) : localStorage.setItem(key, value); } catch { /* storage unavailable */ } };
 
 /**
  * A page that fails to draw must not take the rest of the workspace down with it. Without this, one broken page
@@ -52,15 +47,10 @@ function Pages({ children }) {
   return <PageBoundary at={pathname}>{children}</PageBoundary>;
 }
 
-/** The recorder, the phone line and the calendar reminders, each of which the next one needs to know about. */
-function OracleProviders({ children }) {
-  return <RecorderProvider><PhoneProvider><CalendarProvider>{children}</CalendarProvider></PhoneProvider></RecorderProvider>;
-}
-
 function Workspace() {
   const [me, setMe] = useState(undefined); // undefined = loading, null = signed out
   const [version, setVersion] = useState(0);
-  const [scope, setScopeState] = useState(() => Number(stored('embed.scope')) || null);
+  const [scope, setScopeState] = useState(() => Number(remembered('embed.scope')) || null);
   const navigate = useNavigate();
 
   const reloadMe = useCallback(() => api.get('/me').then(setMe).catch(() => setMe(null)), []);
@@ -79,7 +69,7 @@ function Workspace() {
       me, user: me.user, isAgency, isAdmin: me.user.role === 'admin', clients: me.clients, agencyName: me.agencyName, mailConfigured: me.mailConfigured, clientPhotos: me.clientPhotos,
       scope: activeScope,
       scopeClient: me.clients.find((c) => c.id === activeScope) || null,
-      setScope: (id) => { setScopeState(id); store('embed.scope', id); },
+      setScope: (id) => { setScopeState(id); remember('embed.scope', id); },
       version,
       bump: () => setVersion((v) => v + 1),
       reloadMe,
@@ -92,9 +82,8 @@ function Workspace() {
   if (!me) return <Login onDone={reloadMe} />;
 
   // The call recorder sits above the pages, so a recording carries on while the recruiter moves around the workspace.
-  // So do the phone line (a call under way is followed from any page) and the day's reminders.
-  // Client hiring teams have no part in The Oracle, so they get none of the three and no routes to it.
-  const Providers = ctx.isAgency ? OracleProviders : React.Fragment;
+  // Client hiring teams have no part in The Oracle, so they get no recorder and no routes to it.
+  const Providers = ctx.isAgency ? RecorderProvider : React.Fragment;
   return (
     <AppContext.Provider value={ctx}>
       <Providers>

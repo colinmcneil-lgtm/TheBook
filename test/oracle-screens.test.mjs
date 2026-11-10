@@ -1,158 +1,115 @@
-// The rules behind The Oracle's phone and calendar screens: when a reminder is due, what a call is called at each
-// stage, how numbers are shown. Run with `npm test`.
-// The screens themselves (React, the browser's notifications) were checked in a real browser against a stand-in for
-// the phone and calendar routes; these are the parts that can be checked without one.
+// The rules behind The Oracle's screens: which tab opens, what a call is called, what a Metaview call's row says and
+// whose it is in The Book. Run with `npm test`.
+// The screens themselves (React) were checked in a real browser against a stand-in for the Metaview routes; these
+// are the parts that can be checked without one. Everyone named here is invented.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LEAD, MINUTE, SOON, dayLabel, dueNow, endsAt, isDue, isNear, lengthOf, reminderOf, shiftDay } from '../src/oracle/day.js';
-import { followed, headline, isOver, madeBy, personFor, showNumber, telHref, typedNumber } from '../src/oracle/calls.js';
+import {
+  ORACLE_TABS, callWhen, fmtLength, kindLine, knownLine, madeBy, nameList, oraclePath, oracleTab, peopleLine, readingLine, tabOfCall, whoseCall,
+} from '../src/oracle/calls.js';
+import { telHref } from '../src/lib.js';
 
-const START = Date.parse('2026-11-10T19:00:00Z');
-const event = (more = {}) => ({ key: 'e1', title: 'Call Kevin', start: new Date(START).toISOString(), end: new Date(START + 30 * MINUTE).toISOString(), all_day: false, added: true, call_id: null, ...more });
+const call = (more = {}) => ({
+  id: 9001, url: 'https://app.metaview.example/notes/9001', started_at: '2026-11-09T21:40:00.000Z', title: 'Call with Dana Whitlock', kind: 'Job Interview', channel: 'Phone',
+  minutes: 25, people: [{ name: 'Dana Whitlock', role: 'candidate' }, { name: 'Alex Morgan', role: 'interviewer' }], has_transcript: true, call_id: null, match: null, suggestions: [], ...more,
+});
+const person = (more = {}) => ({ application_id: 7, candidate_id: 3, name: 'Dana Whitlock', photo: null, job_title: 'Financial Controller', client_name: 'Northwind', how: 'phone', ...more });
 
-test('a reminder is due from two minutes before an added event until it ends', () => {
-  const e = event();
-  assert.equal(isDue(e, START - LEAD - 1000), false, 'not yet, a second before the two minutes');
-  assert.equal(isDue(e, START - LEAD), true, 'two minutes before');
-  assert.equal(isDue(e, START + 10 * MINUTE), true, 'while it is under way');
-  assert.equal(isDue(e, START + 30 * MINUTE), false, 'not once it is over');
+test('The Oracle opens on the tab in the address, else the one used last, else Metaview', () => {
+  assert.deepEqual(ORACLE_TABS, ['metaview', 'record']);
+  assert.equal(oracleTab('record', 'metaview'), 'record');
+  assert.equal(oracleTab(null, 'record'), 'record', 'the tab used last');
+  assert.equal(oracleTab(null, null), 'metaview', 'the first tab, the first time');
+  assert.equal(oracleTab('calendar', 'phone'), 'metaview', 'a tab that no longer exists, in the address or remembered from before');
+  assert.equal(oraclePath('record'), '/oracle?tab=record');
 });
 
-test('no reminder for an event that was not added, lasts all day, or already has its call', () => {
-  assert.equal(isDue(event({ added: false }), START), false);
-  assert.equal(isDue(event({ all_day: true }), START), false);
-  assert.equal(isDue(event({ call_id: 7 }), START), false);
-});
-
-test('an event with no length is treated as five minutes long, so its reminder does not vanish at once', () => {
-  const e = event({ end: new Date(START).toISOString() });
-  assert.equal(endsAt(e), START + 5 * MINUTE);
-  assert.equal(isDue(e, START + 4 * MINUTE), true);
-  assert.equal(isDue(e, START + 5 * MINUTE), false);
-});
-
-test('reminders come soonest first, without the ones closed or being dealt with', () => {
-  const later = event({ key: 'later', start: new Date(START + MINUTE).toISOString(), end: new Date(START + 20 * MINUTE).toISOString() });
-  const first = event({ key: 'first' });
-  const closed = event({ key: 'closed' });
-  const calling = event({ key: 'calling' });
-  const due = dueNow([later, first, closed, calling], START, { closed: new Set([reminderOf(closed)]), busyWith: 'calling' });
-  assert.deepEqual(due.map((e) => e.key), ['first', 'later']);
-  assert.deepEqual(dueNow(undefined, START), [], 'no day loaded yet');
-});
-
-test('Record and Call are offered from a quarter of an hour before an event until a quarter of an hour after it', () => {
-  const e = event();
-  assert.equal(isNear(e, START - SOON - 1000), false);
-  assert.equal(isNear(e, START - SOON), true);
-  assert.equal(isNear(e, START + 30 * MINUTE + SOON - 1000), true);
-  assert.equal(isNear(e, START + 30 * MINUTE + SOON), false);
-  assert.equal(isNear(event({ all_day: true }), START), false);
-});
-
-test('moving a day at a time crosses months, years and clock changes', () => {
-  assert.equal(shiftDay('2026-11-30', 1), '2026-12-01');
-  assert.equal(shiftDay('2026-12-31', 1), '2027-01-01');
-  assert.equal(shiftDay('2027-01-01', -1), '2026-12-31');
-  assert.equal(shiftDay('2028-02-28', 1), '2028-02-29');
-  // The days around the autumn and spring clock changes in Ontario: each step is exactly one day wherever this runs.
-  assert.equal(shiftDay('2026-10-31', 1), '2026-11-01');
-  assert.equal(shiftDay('2026-11-01', 1), '2026-11-02');
-  assert.equal(shiftDay('2027-03-13', 1), '2027-03-14');
-  assert.equal(shiftDay('2027-03-15', -1), '2027-03-14');
-});
-
-test('the day is named Today, Tomorrow or Yesterday when it is one of them', () => {
-  assert.match(dayLabel('2026-11-10', '2026-11-10'), /^Today, /);
-  assert.match(dayLabel('2026-11-11', '2026-11-10'), /^Tomorrow, /);
-  assert.match(dayLabel('2026-11-09', '2026-11-10'), /^Yesterday, /);
-  assert.doesNotMatch(dayLabel('2026-11-13', '2026-11-10'), /Today|Tomorrow|Yesterday/);
-  assert.match(dayLabel('2026-11-13', '2026-11-10'), /13/);
-});
-
-test('how long an event is', () => {
-  const lasting = (minutes) => lengthOf(event({ end: new Date(START + minutes * MINUTE).toISOString() }));
-  assert.equal(lasting(15), '15 min');
-  assert.equal(lasting(60), '1 h');
-  assert.equal(lasting(90), '1 h 30 min');
-});
-
-test('numbers are shown the way people write them, and anything else is left alone', () => {
-  assert.equal(showNumber('+14165550142'), '(416) 555-0142');
-  assert.equal(showNumber('+442079460958'), '+442079460958');
-  assert.equal(showNumber('(416) 555 0142'), '(416) 555 0142');
-  assert.equal(showNumber(null), '');
-  assert.equal(telHref('+1 (416) 555-0142'), 'tel:+14165550142');
-  assert.equal(telHref('416.555.0142 ext'), 'tel:4165550142');
-});
-
-test('what is typed is offered as a number to call only when it reads as one', () => {
-  assert.equal(typedNumber(' 647 555 0199 '), '647 555 0199');
-  assert.equal(typedNumber('+1 (647) 555-0199'), '+1 (647) 555-0199');
-  assert.equal(typedNumber('555-01'), null, 'too short to be a number: it is a search');
-  assert.equal(typedNumber('kevin 647'), null);
-  assert.equal(typedNumber(''), null);
-});
-
-test('each stage of a call has its few words', () => {
-  const call = (status, more = {}) => ({ status, outcome: null, candidate_name: 'Kevin Tremblay', to_display: '(647) 555-0199', ...more });
-  assert.equal(headline(call('ringing_you')), 'Ringing your phone…');
-  assert.equal(headline(call('waiting_for_you')), 'Answer and press 1');
-  assert.equal(headline(call('calling_them')), 'Calling Kevin…');
-  assert.equal(headline(call('calling_them', { candidate_name: null })), 'Calling (647) 555-0199…');
-  assert.equal(headline(call('in_call')), 'On the call');
-  assert.equal(headline(call('ended', { outcome: 'completed' })), 'Call ended');
-  assert.equal(headline(call('ended', { outcome: 'busy' })), 'Busy');
-  assert.equal(headline(call('ended', { outcome: 'no_answer' })), 'No answer');
-  assert.equal(headline(call('ended', { outcome: 'you_did_not_answer' })), 'Nobody was called');
-  assert.equal(headline(call('ended', { outcome: 'cancelled' })), 'Call cancelled');
-  assert.equal(headline(call('failed', { outcome: 'failed' })), 'The call was not made');
-  assert.equal(headline(call('failed')), 'The call was not made', 'a failure with no outcome given');
-  // A call this page did not place: one that came in, and one rung in from the recruiter's own phone.
-  assert.equal(headline(call('ringing_you', { direction: 'inbound' })), 'A call is coming in');
-  assert.equal(headline(call('waiting_for_you', { direction: 'switchboard' })), 'Calling from your phone');
-  assert.equal(isOver(call('ended')), true);
-  assert.equal(isOver(call('failed')), true);
-  assert.equal(isOver(call('in_call')), false);
-});
-
-test('the clock on a call counts from when this page saw the two connected', () => {
-  const placed = { id: 1, status: 'calling_them', talkingSince: null, target: { to: '647 555 0199' } };
-  const talking = followed(placed, { id: 1, status: 'in_call', message: 'You are talking to Kevin.' }, 5000);
-  assert.equal(talking.talkingSince, 5000);
-  assert.deepEqual(talking.target, placed.target, 'what was asked for is kept, so the call can be placed again');
-  assert.equal(followed(talking, { id: 1, status: 'in_call' }, 9000).talkingSince, 5000, 'and does not start again on the next look');
-  assert.equal(followed({ ...talking, lost: true }, { id: 1, status: 'in_call' }, 9000).lost, false, 'an answer means touch is back');
-  // A call first seen when it was already under way (found after a reload) has no clock rather than a wrong one.
-  assert.equal(followed({ id: 2, status: 'in_call', talkingSince: null }, { id: 2, status: 'in_call' }, 9000).talkingSince, null);
+test('a call goes back to the tab it is listed on', () => {
+  assert.equal(tabOfCall({ source: 'metaview' }), 'metaview');
+  assert.equal(tabOfCall({ source: 'recorded' }), 'record');
+  assert.equal(tabOfCall({ source: 'uploaded' }), 'record');
+  assert.equal(tabOfCall({ source: 'phone' }), 'record', 'a call from an earlier version is with the recorded ones');
+  assert.equal(tabOfCall(null), 'record');
 });
 
 test('a call says how it came to be in The Oracle', () => {
   assert.equal(madeBy({ source: 'recorded', created_by_name: 'Alex Morgan' }), 'Recorded by Alex Morgan');
   assert.equal(madeBy({ source: 'uploaded', created_by_name: 'Alex Morgan' }), 'Uploaded by Alex Morgan');
-  assert.equal(madeBy({ source: 'phone', direction: 'outbound', created_by_name: 'Alex Morgan' }), 'Phone call placed by Alex Morgan');
-  assert.equal(madeBy({ source: 'phone', direction: 'inbound', created_by_name: 'Alex Morgan' }), 'Phone call taken by Alex Morgan');
-  assert.equal(madeBy({ source: 'phone', direction: null, created_by_name: null }), 'Phone call made by someone who has left');
+  assert.equal(madeBy({ source: 'recorded', created_by_name: null }), 'Recorded by someone who has left');
+  assert.equal(madeBy({ source: 'metaview', created_by_name: 'Alex Morgan' }), 'Brought in from Metaview by Alex Morgan');
+  assert.equal(madeBy({ source: 'metaview', created_by_name: null }), 'Brought in from Metaview', 'brought in by The Book itself');
+  // A call left over from an earlier version still reads as a call, with nothing about how it was placed.
+  assert.equal(madeBy({ source: 'phone', direction: 'outbound', created_by_name: 'Alex Morgan' }), 'Recorded by Alex Morgan');
 });
 
-test('a reminder that was closed comes back when its event is moved to a later time', () => {
-  const two = event();
-  const closed = new Set([reminderOf(two)]);
-  assert.deepEqual(dueNow([two], START - MINUTE, { closed }), [], 'closed for the time it was set for');
-  // The candidate asks for an hour later: the same event (and key), a new start.
-  const three = event({ start: new Date(START + 60 * MINUTE).toISOString(), end: new Date(START + 90 * MINUTE).toISOString() });
-  assert.equal(three.key, two.key);
-  assert.deepEqual(dueNow([three], START - MINUTE, { closed }), [], 'not yet due at the old time');
-  assert.deepEqual(dueNow([three], START + 59 * MINUTE, { closed }).map((e) => e.key), ['e1'], 'due again at the new one');
-  assert.notEqual(reminderOf(three), reminderOf(two));
+test('a Metaview call is dated by when it took place, any other call by when it was recorded', () => {
+  assert.equal(callWhen({ created_at: '2026-11-10T15:00:00Z', took_place_at: '2026-11-09T21:40:00Z' }), '2026-11-09T21:40:00Z');
+  assert.equal(callWhen({ created_at: '2026-11-10T15:00:00Z', took_place_at: null }), '2026-11-10T15:00:00Z');
+  assert.equal(callWhen({ created_at: '2026-11-10T15:00:00Z' }), '2026-11-10T15:00:00Z');
 });
 
-test('an event with nobody matched has no person to look up, and that is not an error', () => {
-  // Before anything has been looked up, for an event with no match: this once read a property of nothing, which
-  // took the reminder banner, and with it the whole workspace, off the screen.
-  assert.equal(personFor(null, undefined), null);
-  assert.equal(personFor(null, 7), null, 'still loading');
-  assert.equal(personFor({ applicationId: 7, person: { name: 'Kevin' } }, undefined), null);
-  assert.equal(personFor({ applicationId: 7, person: { name: 'Kevin' } }, 8), null, 'the look-up for another event');
-  assert.deepEqual(personFor({ applicationId: 7, person: { name: 'Kevin' } }, 7), { name: 'Kevin' });
+test('how long a call was', () => {
+  assert.equal(fmtLength(45_000), '45 sec');
+  assert.equal(fmtLength(12 * 60_000), '12 min');
+  assert.equal(fmtLength(65 * 60_000), '1 h 05 min');
+  assert.equal(fmtLength(null), '');
+  assert.equal(fmtLength(0), '');
+});
+
+test('names are listed the way people say them', () => {
+  assert.equal(nameList([]), '');
+  assert.equal(nameList(['Dana']), 'Dana');
+  assert.equal(nameList(['Dana', 'Alex']), 'Dana and Alex');
+  assert.equal(nameList(['Dana', 'Alex', 'Sam']), 'Dana, Alex and Sam');
+});
+
+test('a Metaview call says who was on it, without repeating a name that is in its title', () => {
+  assert.equal(peopleLine(call()), 'With Alex Morgan');
+  assert.equal(peopleLine(call({ title: 'Controller intro' })), 'Dana Whitlock with Alex Morgan');
+  assert.equal(peopleLine(call({ title: 'CALL WITH DANA WHITLOCK' })), 'With Alex Morgan', 'however the title is written');
+  const panel = [{ name: 'Dana Whitlock', role: 'candidate' }, { name: 'Alex Morgan', role: 'interviewer' }, { name: 'Sam Okafor', role: 'interviewer' }, { name: 'Priya Nair', role: 'other' }];
+  assert.equal(peopleLine(call({ title: 'Panel interview', people: panel })), 'Dana Whitlock and Priya Nair with Alex Morgan and Sam Okafor');
+  assert.equal(peopleLine(call({ title: 'Voicemail', people: [{ name: 'Dana Whitlock', role: 'candidate' }] })), 'Dana Whitlock', 'nobody from the agency named');
+  assert.equal(peopleLine(call({ people: [{ name: ' ', role: 'candidate' }, { name: null, role: 'interviewer' }] })), '', 'people without a name are left out');
+  assert.equal(peopleLine(call({ people: undefined })), '');
+});
+
+test('a Metaview call says what kind it was, how it was held and how long it lasted', () => {
+  assert.equal(kindLine(call()), 'Job Interview · Phone · 25 min');
+  assert.equal(kindLine(call({ minutes: 75, channel: 'Zoom' })), 'Job Interview · Zoom · 1 h 15 min');
+  assert.equal(kindLine(call({ minutes: null })), 'Job Interview · Phone', 'the length is not always known');
+  assert.equal(kindLine(call({ kind: '', channel: null, minutes: 0 })), '');
+});
+
+test('whose a Metaview call is in The Book', () => {
+  assert.equal(whoseCall(call({ match: person() })), 'matched');
+  assert.equal(whoseCall(call({ suggestions: [person({ how: 'name' }), person({ application_id: 8, candidate_id: 4 })] })), 'choose');
+  assert.equal(whoseCall(call()), 'nobody');
+  assert.equal(whoseCall(call({ suggestions: undefined })), 'nobody');
+  assert.equal(whoseCall(call({ match: person(), suggestions: [person()] })), 'matched', 'a match needs nobody to choose');
+});
+
+test('while the history is being read, the tab says how far it has got', () => {
+  assert.equal(readingLine({ catching_up: true, known: 600, total: 2100 }), 'Reading your Metaview history: 600 of about 2,100 so far');
+  assert.equal(readingLine({ catching_up: true, known: 600 }), 'Reading your Metaview history: 600 calls so far', 'when how many there are in all is not known');
+  assert.equal(readingLine({ catching_up: true, known: 1 }), 'Reading your Metaview history: 1 call so far');
+  assert.equal(readingLine({ catching_up: true, known: 2100, total: 2100 }), 'Reading your Metaview history: 2,100 calls so far');
+  assert.equal(readingLine({ catching_up: false, known: 2100 }), '', 'nothing once it has caught up');
+  assert.equal(readingLine(null), '');
+});
+
+test('settings say how many Metaview calls The Book knows about and how many are in it', () => {
+  assert.equal(knownLine({ known: 2100, in_the_book: 38 }), 'The Book knows about 2,100 Metaview calls. 38 of them are in The Book.');
+  assert.equal(knownLine({ known: 2100, in_the_book: 1 }), 'The Book knows about 2,100 Metaview calls. 1 of them is in The Book.');
+  assert.equal(knownLine({ known: 2100, in_the_book: 0 }), 'The Book knows about 2,100 Metaview calls. None of them are in The Book yet.');
+  assert.equal(knownLine({ known: 3, in_the_book: 3 }), 'The Book knows about 3 Metaview calls. All of them are in The Book.');
+  assert.equal(knownLine({ known: 1, in_the_book: 0 }), 'The Book knows about 1 Metaview call. It is not in The Book yet.');
+  assert.equal(knownLine({ known: 1, in_the_book: 1 }), 'The Book knows about 1 Metaview call. It is in The Book.');
+  assert.equal(knownLine({ known: 0, in_the_book: 0 }), 'The Book has not found any calls in Metaview yet.');
+});
+
+test('a phone number on a profile is a link that dials it, however it was typed', () => {
+  assert.equal(telHref('+1 (416) 555-0142'), 'tel:+14165550142');
+  assert.equal(telHref('416.555.0142 ext'), 'tel:4165550142');
+  assert.equal(telHref(null), 'tel:');
 });
