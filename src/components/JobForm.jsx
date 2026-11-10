@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { GripVertical, Plus, Trash2 } from 'lucide-react';
 import { api, url, WORK_MODES, EMPLOYMENT } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Button, Checkbox, Field, Input, Modal, Select, Textarea, useAction, useToast } from '../ui.jsx';
@@ -24,6 +24,56 @@ function Section({ title, hint, children }) {
       <div className={hint ? '' : 'mt-3'}>{children}</div>
     </section>
   );
+}
+
+/**
+ * Lets the rows of a list be put in a new order by dragging a grip (mouse or finger) or with the arrow keys while
+ * the grip has focus. The list is reordered as the row is dragged, so what is on screen is always what will be saved.
+ * Rows are marked with data-reorder-row and grips with data-reorder-grip inside the element `box` is attached to.
+ */
+function useReorder(list, onChange) {
+  const box = useRef(null);
+  const at = useRef(null); // where the row being dragged is now
+  const [dragging, setDragging] = useState(null);
+  const move = (from, to) => {
+    if (to < 0 || to >= list.length || to === from) return from;
+    const next = [...list];
+    next.splice(to, 0, next.splice(from, 1)[0]);
+    onChange(next);
+    return to;
+  };
+  const stop = () => { at.current = null; setDragging(null); };
+  const grip = (index) => ({
+    'data-reorder-grip': '',
+    onPointerDown: (e) => {
+      if (e.button) return; // left button or a finger only
+      e.preventDefault(); // no text selection while dragging
+      e.currentTarget.focus();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      at.current = index;
+      setDragging(index);
+    },
+    onPointerMove: (e) => {
+      if (at.current === null) return;
+      const rows = [...box.current.querySelectorAll('[data-reorder-row]')].map((row) => row.getBoundingClientRect());
+      // The row the pointer is over; above the first counts as the first, below the last as the last.
+      let over = rows.findIndex((r) => e.clientY < r.bottom);
+      if (over === -1) over = rows.length - 1;
+      if (over !== at.current) { at.current = move(at.current, over); setDragging(at.current); }
+    },
+    onPointerUp: stop,
+    onPointerCancel: stop,
+    onLostPointerCapture: stop,
+    onKeyDown: (e) => {
+      const step = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+      if (!step) return;
+      e.preventDefault();
+      const to = move(index, index + step);
+      // The row moved, so the grip to keep focus on is the one at its new place.
+      if (to !== index) setTimeout(() => box.current?.querySelectorAll('[data-reorder-grip]')[to]?.focus());
+    },
+  });
+  return { box, grip, dragging };
 }
 
 /** Create a job, or edit one when `job` (and its `stages`) are passed. */
@@ -74,6 +124,7 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
   const bind = (key) => ({ value: form[key] ?? '', onChange: (e) => set(key, e.target.value) });
   const editList = (key, index, patch) => set(key, form[key].map((item, i) => (i === index ? (typeof item === 'string' ? patch : { ...item, ...patch }) : item)));
   const dropFrom = (key, index) => set(key, form[key].filter((_, i) => i !== index));
+  const stageOrder = useReorder(form.interview_stages, (next) => set('interview_stages', next));
   const { data: people } = useApi(form.client_id ? url('/users', { client_id: form.client_id }) : null);
   const client = clients.find((c) => c.id === Number(form.client_id));
 
@@ -149,10 +200,16 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
         <Textarea rows={9} {...bind('description')} placeholder={'A short introduction to the role and team.\n\nWhat you will do\n• …\n\nWhat we are looking for\n• …'} />
       </Section>
 
-      <Section title="Interview stages" hint="Every pipeline starts with Applied and ends with Offer and Hired. These are the steps in between, in order.">
-        <div className="space-y-2">
+      <Section title="Interview stages" hint="Every pipeline starts with Applied and ends with Offer and Hired. These are the steps in between, in order. Drag a stage by its grip to move it.">
+        <div className="space-y-2" ref={stageOrder.box}>
           {form.interview_stages.map((s, i) => (
-            <div key={i} className="flex items-center gap-2">
+            <div key={i} data-reorder-row="" className={`flex items-center gap-2 rounded-lg ${stageOrder.dragging === i ? 'bg-brand-50 ring-2 ring-brand-300' : ''}`}>
+              {form.interview_stages.length > 1 && (
+                <button type="button" {...stageOrder.grip(i)} aria-label={`Move stage ${i + 1}${s.name ? `, ${s.name}` : ''}. Drag, or use the up and down arrow keys.`} title="Drag to move"
+                  className={`flex h-9 w-6 shrink-0 touch-none select-none items-center justify-center rounded text-stone-400 hover:bg-stone-100 hover:text-stone-700 focus-visible:outline-2 focus-visible:outline-brand-500 ${stageOrder.dragging === i ? 'cursor-grabbing text-stone-700' : 'cursor-grab'}`}>
+                  <GripVertical size={16} aria-hidden="true" />
+                </button>
+              )}
               <span className="tabular w-5 text-center text-xs text-stone-400">{i + 1}</span>
               <Input value={s.name} onChange={(e) => editList('interview_stages', i, { name: e.target.value })} aria-label={`Stage ${i + 1}`} />
               <Button variant="ghost" icon={Trash2} aria-label="Remove stage" className="!px-2" onClick={() => dropFrom('interview_stages', i)} disabled={form.interview_stages.length === 1} />
