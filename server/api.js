@@ -776,11 +776,11 @@ function hydrateJob(j, user) {
 }
 
 // The recruiter brief: free-text sections and one-item-per-line lists. Only these keys are stored.
-const BRIEF_TEXT = ['about', 'locations', 'search_string', 'pay_notes', 'pay_flex', 'process_notes'];
+const BRIEF_TEXT = ['about', 'locations', 'search_string', 'search_location', 'pay_notes', 'pay_flex', 'process_notes'];
 const BRIEF_LISTS = ['must_haves', 'nice_to_haves', 'not_a_fit', 'target_companies', 'where_to_look', 'search_titles', 'search_keywords', 'selling_points', 'screening_questions'];
 const BRIEF_MAX = { text: 6000, item: 300, items: 60 };
 // What the brief form calls each section, for telling the person which one is too long.
-const BRIEF_NAMES = { about: 'The role, the team and why it is open', locations: 'Where they can be based', search_string: 'Search string', pay_notes: 'Bonus, equity and benefits', pay_flex: 'Room to move',
+const BRIEF_NAMES = { about: 'The role, the team and why it is open', locations: 'Where they can be based', search_string: 'Search string', search_location: 'Search location', pay_notes: 'Bonus, equity and benefits', pay_flex: 'Room to move',
   process_notes: 'Process notes', must_haves: 'Must-haves', nice_to_haves: 'Nice to have', not_a_fit: 'Not a fit', target_companies: 'Companies to look in', where_to_look: 'Places to find them',
   search_titles: 'Job titles', search_keywords: 'Keywords', selling_points: 'How to sell it', screening_questions: 'Questions for the first call' };
 const tooLong = (name, what, length, max) => bad(`“${name}” ${what} (${length.toLocaleString('en-GB')}; the limit is ${max.toLocaleString('en-GB')}). Shorten it and save again: nothing has been saved.`);
@@ -1399,8 +1399,8 @@ api.get('/applications/:id', (req, res) => {
   // The agency reads the history and the e-mails from two places: the tables the hiring team is shown from, and its
   // own (what was written before the person was on this job, and how they were matched). The agency's own lines are
   // numbered below zero, so that no two lines of one list share a number. The hiring team is only ever read the
-  // first of the two. That a call was recorded is the agency's business as well: clients never see anything of the
-  // Oracle, that line included.
+  // first of the two. That a call was recorded is the agency's business as well: clients never see anything of
+  // Otterview, that line included.
   const both = (shown, kept, columns) =>
     `(SELECT id, application_id, ${columns}, created_at, 0 AS agency_only FROM ${shown} WHERE application_id = ?1
       UNION ALL SELECT -id, application_id, ${columns}, created_at, 1 FROM ${kept} WHERE application_id = ?1)`;

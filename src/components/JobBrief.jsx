@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Ban, Building2, Check, Copy, ExternalLink, MapPin, NotebookPen, Pencil, Search, Sparkles } from 'lucide-react';
 import { api, money, salaryRange, WORK_MODES, EMPLOYMENT } from '../lib.js';
 import { useApp } from '../state.jsx';
-import { Badge, Button, Card, Empty, Field, Loading, Modal, Textarea, useAction, useToast } from '../ui.jsx';
+import { Badge, Button, Card, Empty, Field, Input, Loading, Modal, Textarea, useAction, useToast } from '../ui.jsx';
+import { locationClause, xraySearch, xrayUrl } from '../xray.js';
 import JobAutofill from './JobAutofill.jsx';
 
 // The recruiter brief for a job: everything someone sourcing for the role needs. Agency only.
@@ -64,6 +65,16 @@ export default function JobBrief({ job, stages }) {
   const has = (key) => (Array.isArray(brief[key]) ? brief[key].length > 0 : Boolean(brief[key]));
   const empty = !Object.keys(brief).length && !job.ideal_profile;
   const search = brief.search_string || suggestedSearch(brief);
+  // Where to look for people. It starts from the brief (or the job's own location) and anyone searching can change
+  // it for themselves: what they type is remembered on their computer for this job, not saved to the brief.
+  const placeKey = `thebook.searchplace.${job.id}`;
+  const savedPlace = brief.search_location || job.location || '';
+  const [place, setPlace] = useState(() => { try { return localStorage.getItem(placeKey) ?? savedPlace; } catch { return savedPlace; } });
+  const changePlace = (value) => {
+    setPlace(value);
+    try { if (value === savedPlace) localStorage.removeItem(placeKey); else localStorage.setItem(placeKey, value); } catch { /* private window: it still works for this visit */ }
+  };
+  const placeClause = locationClause(place);
   const range = salaryRange(job.salary_min, job.salary_max, job.currency);
   const fee = job.fee_percent > 0 && (job.salary_min || job.salary_max)
     ? [job.salary_min, job.salary_max].filter(Boolean).map((s) => money((s * job.fee_percent) / 100, job.currency)).join(' – ')
@@ -134,10 +145,24 @@ export default function JobBrief({ job, stages }) {
                 <div>
                   <Label>{brief.search_string ? 'Search string' : 'Suggested search string'}</Label>
                   <code className="block rounded-lg bg-stone-900 px-3.5 py-3 text-[13px] leading-relaxed break-words whitespace-pre-wrap text-stone-100">{search}</code>
+                  <div className="mt-3 max-w-md">
+                    <label htmlFor="search-place" className="mb-1.5 block text-xs font-medium tracking-wide text-stone-500 uppercase">Location</label>
+                    <div className="relative">
+                      <MapPin className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-stone-400" aria-hidden="true" />
+                      <Input id="search-place" value={place} onChange={(e) => changePlace(e.target.value)} placeholder="San Francisco Bay Area" className="!pl-8" autoComplete="off" />
+                    </div>
+                    <p className={`mt-1.5 text-xs text-stone-500 ${WRAP}`}>
+                      {placeClause
+                        ? <>Search with Google looks for people in <span className="font-mono text-[12px] text-stone-700">{placeClause}</span>. For several places, put “or” between them.</>
+                        : 'Add a place and Search with Google only brings up people there. Without one, Google leans towards wherever you are.'}
+                      {place !== savedPlace && <> <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => changePlace(savedPlace)}>{savedPlace ? `Back to ${savedPlace}` : 'Clear'}</button></>}
+                    </p>
+                  </div>
                   <div className="mt-2.5 flex flex-wrap gap-2">
                     <Button size="sm" icon={Copy} onClick={() => copy(search, 'Search string')}>Copy</Button>
                     <a href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(search)}`} target="_blank" rel="noopener noreferrer"><Button size="sm" icon={ExternalLink}>Search on LinkedIn</Button></a>
-                    <a href={`https://www.google.com/search?q=${encodeURIComponent(`site:linkedin.com/in ${search}`)}`} target="_blank" rel="noopener noreferrer"><Button size="sm" icon={ExternalLink}>Search with Google</Button></a>
+                    <a href={xrayUrl(search, place)} target="_blank" rel="noopener noreferrer"><Button size="sm" icon={ExternalLink}>Search with Google</Button></a>
+                    <Button size="sm" variant="ghost" icon={Copy} onClick={() => copy(xraySearch(search, place), 'Google search')}>Copy the Google search</Button>
                   </div>
                 </div>
               )}
@@ -185,11 +210,11 @@ export default function JobBrief({ job, stages }) {
 }
 
 const LISTS = ['must_haves', 'nice_to_haves', 'not_a_fit', 'target_companies', 'where_to_look', 'search_titles', 'search_keywords', 'selling_points', 'screening_questions'];
-const TEXTS = ['about', 'locations', 'search_string', 'pay_notes', 'pay_flex', 'process_notes'];
+const TEXTS = ['about', 'locations', 'search_string', 'search_location', 'pay_notes', 'pay_flex', 'process_notes'];
 
 const LABELS = { about: 'The role, the team and why it is open', ideal_profile: 'Who we are looking for', must_haves: 'Must-haves', nice_to_haves: 'Nice to have', not_a_fit: 'Not a fit',
   target_companies: 'Companies to look in', where_to_look: 'Places to find them', locations: 'Where they can be based', search_titles: 'Job titles', search_keywords: 'Keywords',
-  search_string: 'Search string', pay_notes: 'Bonus, equity and benefits', pay_flex: 'Room to move', selling_points: 'How to sell it', screening_questions: 'Questions for the first call', process_notes: 'Process notes' };
+  search_string: 'Search string', search_location: 'Search location', pay_notes: 'Bonus, equity and benefits', pay_flex: 'Room to move', selling_points: 'How to sell it', screening_questions: 'Questions for the first call', process_notes: 'Process notes' };
 
 /** The form opens on the brief as it is saved now: the page behind it may have been open since before a colleague changed it. */
 function BriefForm({ job, onClose }) {
@@ -288,6 +313,9 @@ function BriefEditor({ job, onClose }) {
       </div>
       <Field label="Search string" hint="Optional. If you leave it empty, one is built from the titles and keywords above.">
         <Textarea rows={2} {...bind('search_string')} placeholder='("Head of Sales" OR "Sales Director") AND (logistics OR freight) NOT recruiter' className="font-mono text-[13px]" />
+      </Field>
+      <Field label="Search location" hint="Where to look for people, for example “San Francisco Bay Area” or “Toronto or Ottawa”. Search with Google adds it to the search. If you leave it empty, the job’s own location is used.">
+        <Input {...bind('search_location')} placeholder="San Francisco Bay Area" />
       </Field>
 
       {heading('Pay')}

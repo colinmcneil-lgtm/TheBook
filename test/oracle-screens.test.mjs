@@ -21,7 +21,7 @@ test('Otterview opens on the tab in the address, else the one used last, else Me
   assert.equal(oracleTab(null, 'record'), 'record', 'the tab used last');
   assert.equal(oracleTab(null, null), 'metaview', 'the first tab, the first time');
   assert.equal(oracleTab('calendar', 'phone'), 'metaview', 'a tab that no longer exists, in the address or remembered from before');
-  assert.equal(oraclePath('record'), '/oracle?tab=record');
+  assert.equal(oraclePath('record'), '/otterview?tab=record');
 });
 
 test('a call goes back to the tab it is listed on', () => {
