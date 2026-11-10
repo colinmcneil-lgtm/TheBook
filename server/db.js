@@ -211,6 +211,34 @@ CREATE TABLE IF NOT EXISTS email_templates (
   subject TEXT NOT NULL,
   body TEXT NOT NULL
 );
+
+-- The Oracle: calls with candidates that a recruiter recorded or uploaded, with the transcript, the notes summary
+-- and the draft write-up for the hiring team. Agency only: client users never see any of it.
+CREATE TABLE IF NOT EXISTS calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused, so an old link cannot open a different call
+  recording_id TEXT NOT NULL UNIQUE,                 -- 32 hex characters; names the folder the pieces of a recording arrive in
+  title TEXT NOT NULL,
+  status TEXT NOT NULL,                              -- recording | uploaded | transcribing | ready | failed
+  error TEXT,                                        -- why transcription failed, in plain English
+  source TEXT NOT NULL,                              -- recorded | uploaded
+  mime_type TEXT,                                    -- the format the browser said it was recording in
+  audio_file TEXT, audio_type TEXT, audio_size INTEGER, -- the finished audio: a file in the uploads folder
+  duration_ms INTEGER,
+  interrupted INTEGER NOT NULL DEFAULT 0,            -- 1 = finished from what had arrived after the recording was cut short
+  transcript TEXT,                                   -- JSON: [{ speaker, start, end, text }]
+  transcript_source TEXT,                            -- deepgram | pasted
+  speakers TEXT NOT NULL DEFAULT '{}',               -- JSON: speaker number -> name
+  notes TEXT, notes_at TEXT,
+  submission TEXT, submission_at TEXT,
+  note_id INTEGER,                                   -- the candidate note the summary was last saved as
+  -- Removing an application leaves the call with the candidate; removing the candidate removes their calls.
+  application_id INTEGER REFERENCES applications(id) ON DELETE SET NULL,
+  candidate_id INTEGER REFERENCES candidates(id) ON DELETE CASCADE,
+  consent_by INTEGER, consent_at TEXT, consent_wording TEXT, -- who confirmed everyone agreed to be recorded, when, and the words they agreed to
+  created_by INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `);
 
 // ---------- migrations for databases created by an earlier version ----------
@@ -299,7 +327,10 @@ CREATE INDEX IF NOT EXISTS idx_candidates_link ON candidates(client_id, linkedin
 CREATE INDEX IF NOT EXISTS idx_apps_stage ON applications(stage_id);
 CREATE INDEX IF NOT EXISTS idx_hist_app ON stage_history(application_id);
 CREATE INDEX IF NOT EXISTS idx_interviews_app ON interviews(application_id);
-CREATE INDEX IF NOT EXISTS idx_activities_app ON activities(application_id);`);
+CREATE INDEX IF NOT EXISTS idx_activities_app ON activities(application_id);
+CREATE INDEX IF NOT EXISTS idx_calls_candidate ON calls(candidate_id);
+CREATE INDEX IF NOT EXISTS idx_calls_application ON calls(application_id);
+CREATE INDEX IF NOT EXISTS idx_calls_created_by ON calls(created_by);`);
 
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),

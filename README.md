@@ -15,6 +15,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Careers pages** | Every client gets a public, branded careers page at `/careers/<client>` listing open roles, each with an application form (résumé upload, custom screening questions, consent). Link to it from the client's website. Add `?src=linkedin`, `?src=job_board` or `?src=referral` to an apply link to track where applicants came from. |
 | **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
+| **The Oracle** | Record a call with a candidate in the browser, or upload a recording. The call is written out with who said what, a notes summary is drafted, and one click drafts the write-up for the hiring team. A call can be recorded first and added to a candidate afterwards. Agency only. See [The Oracle](#the-oracle). |
 | **Inbox** | Every new application across all clients lands in one review queue, oldest first. |
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
 | **Shortlist hand-off** | Submit a candidate to the hiring team with your write-up. They approve (the candidate moves to the next interview stage) or decline with a reason, so you can calibrate. |
@@ -57,6 +58,92 @@ GitHub page, a personal site, a company's team page, a LinkedIn Recruiter or Sal
   link there. If the link matches someone already on file, both records are kept, each profile shows
   "Possible duplicate", and an agency user can merge them. Merging moves every application, note, interview and
   email onto the record you keep.
+
+## The Oracle
+
+The Oracle is where recruiters record their calls with candidates.
+
+1. **Record or upload.** A recruiter records the call in the browser, or uploads a recording made elsewhere (MP3,
+   M4A, MP4, WAV, WebM or Ogg, up to 200 MB).
+   A browser recording is sent to the server in small pieces during the call and each piece is saved as it arrives,
+   so a dropped connection, a reloaded page or a restart of the server does not lose what was already recorded. A
+   recording can run for 3 hours.
+2. **Transcript.** The audio is written out as text with the speakers told apart and a time on every turn.
+3. **Notes.** A summary is drafted under headings a recruiter would use: background, why they are looking, relevant
+   experience, pay, notice period, location, other processes, concerns to probe, next steps. Only what was said on
+   the call goes in, and figures are kept as they were said. The recruiter can edit the notes and save them onto the
+   candidate's profile as an agency-only note.
+4. **Submission draft.** For a call that is on a candidate, one click drafts the write-up that goes to the client's
+   hiring team. It is written to be read by the client: no fees, nothing copied from your private brief, no other
+   clients, no names of other companies the candidate is talking to, nothing they said in confidence about their
+   employer. The recruiter reviews it before anything is sent.
+
+A call can be recorded with no candidate chosen and added to one afterwards. Client users never see calls, audio,
+transcripts or notes, or the line on a candidate's history that says a call was recorded.
+
+### The two keys
+
+| Setting | What it turns on | Without it |
+| --- | --- | --- |
+| `DEEPGRAM_API_KEY` | Transcription. The audio is sent to [Deepgram](https://deepgram.com), which returns the words with the speakers told apart. Create an account and an API key there. | Calls are still recorded, kept and played back. The recruiter can paste in a transcript (lines such as `Priya: ...` become speaker turns), and everything else works from that. |
+| `ANTHROPIC_API_KEY` | The notes summary and the submission draft, written by Claude from the transcript. This is the same key job autofill uses. | Transcripts still work. The recruiter writes the notes and the write-up by hand. |
+
+Claude cannot listen to audio, which is why transcription needs a service of its own. Optional settings:
+`ORACLE_MODEL` chooses a different Claude model for the Oracle (it otherwise follows `AUTOFILL_MODEL`, then
+`claude-opus-5-5`); `DEEPGRAM_LANGUAGE` sets the language of the calls (default `en`); `DEEPGRAM_API_URL` points at
+another Deepgram address, for example `https://api.eu.deepgram.com/v1/listen` to have audio processed in the EU.
+
+Recording needs the workspace to be served over HTTPS: browsers only allow the microphone on secure pages.
+
+### Where audio is kept
+
+Finished audio is a file in `DATA_DIR/uploads`, next to résumés and photos (its name starts with `call-`). While a
+call is being recorded its pieces sit in `DATA_DIR/recordings`. Both are on the same persistent disk as the database,
+so the back-up that covers `DATA_DIR` covers them. An hour of recorded speech is about 15 MB; uploads are whatever
+size the file is. Transcripts and notes are in the database.
+
+### What is sent outside your server
+
+- **To Deepgram:** the audio of a call, once, when it is transcribed. Every request asks Deepgram not to keep the
+  audio or transcript and not to use them to train its models (`mip_opt_out`).
+- **To Anthropic:** the transcript, the notes, the recruiter's name, and the candidate's and job's details (name,
+  current job, the advert, the must-haves and ideal profile from your brief). Your fee and the rest of the brief are
+  never sent.
+
+### Consent to recording
+
+A call with a candidate is personal data, and in many places it is against the law to record a call unless everyone
+on it has agreed. The Book does not announce the recording to the candidate: the recruiter has to tell them and get
+their agreement. Before every recording and every upload the recruiter must confirm that everyone on the call has
+agreed, and the workspace stores who confirmed it, when, and the wording they confirmed. Nothing is recorded or kept
+without that. Check what the law requires where you and your candidates are, and say in your privacy notice that
+calls may be recorded and transcribed.
+
+"Delete candidate data" on a profile also deletes that person's calls: the audio, the transcripts and the notes.
+Merging two records of the same person moves their calls to the record you keep. A call can be deleted on its own
+by the person who recorded it or by an admin. Nothing is deleted automatically after a set time: calls are kept
+until someone deletes them, so decide how long you keep them and clear out older ones.
+
+### What it costs
+
+Both services bill the account whose key you set, per use. These figures are estimates gathered in November 2026,
+not quotes; check the providers' pricing pages.
+
+- **Deepgram:** its pricing page could not be read while this was built, and the published figures found elsewhere
+  disagree. Plan for roughly $0.26 to $0.38 per hour of audio. Asking Deepgram not to keep or train on the audio,
+  which the Oracle always does, may put the rate up.
+- **Claude:** an hour-long call is about 9,000 words. At the published price of `claude-opus-5-5` ($4 per million
+  tokens read, $20 per million written) the notes for such a call should cost in the region of 10 to 20 US cents,
+  and each submission draft about the same. This is worked out from the prices, not measured.
+
+Each recruiter can ask for 40 AI drafts an hour, so a mistake cannot run up a bill.
+
+### Before you rely on it
+
+The transcription request follows Deepgram's published description exactly, but Deepgram could not be reached from
+where this was built, so it has only been run against a stand-in that answers the way the description says. Before
+going live, record a one-minute call with two people in Chrome and in Safari with a real key and check that the
+transcript comes back with two speakers.
 
 ## Chrome extension
 
@@ -150,14 +237,17 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
 
 ### Any host
 
-- **Persistent storage is required.** The database and résumés live in `DATA_DIR` (`/data` in the container).
+- **Persistent storage is required.** The database, résumés and recorded calls live in `DATA_DIR` (`/data` in the container).
   Without a mounted volume they are lost on every redeploy. Back this folder up.
 - **Serve it over HTTPS** (every host above does this for you) and point a domain at it, for example
   `hiring.youragency.com`. Careers pages then live at `hiring.youragency.com/careers/<client>`.
 - **Connect AI drafting (optional)** by setting `ANTHROPIC_API_KEY` (create one at console.anthropic.com). Job autofill
   then sends the job description and intake notes a recruiter provides to Anthropic's API to draft the job and brief,
   billed to that account per use. It uses `claude-opus-5-5`; set `AUTOFILL_MODEL` to use a different Claude model.
-  Without a key, autofill still works in its basic form and nothing is sent anywhere.
+  Without a key, autofill still works in its basic form and nothing is sent anywhere. The same key lets the Oracle
+  write call notes and submission drafts.
+- **Connect call transcription (optional)** by setting `DEEPGRAM_API_KEY`. See [The Oracle](#the-oracle) for what is
+  sent, what it costs and what happens without it.
 - **Tell the app about proxies.** Leave `TRUST_PROXY` unset when the app is reached directly (plain `docker run`).
   Behind a reverse proxy set it to the number of proxies in front, or sign-in and application rate limits will
   either lump every visitor together or be trivially bypassed.
@@ -177,6 +267,9 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
 server/
   index.js   Express server; serves the API and the built front end
   api.js     All API routes: auth, careers pages, jobs, pipeline, interviews, reports
+  autofill.js  Drafting a job and its brief from a job description and intake notes
+  oracle.js  The Oracle: recording and uploading calls, transcription, notes and submission drafts
+  webm.js    Writes a browser recording's length into the file, so the player can seek
   db.js      SQLite schema and helpers (Node's built-in node:sqlite, no native modules)
   links.js   How profile links are stored, and which ones identify a person
   mail.js    Optional SMTP delivery; every email is logged either way
@@ -196,7 +289,7 @@ logic, front end and deployment, and the confirmed findings were fixed.
 
 Candidate privacy: each application records when consent was given, each client can link its own privacy
 notice from the form, and "Delete candidate data" on a profile erases the person's record, every application
-they made at that client, and their résumé files.
+they made at that client, their résumé files, and their recorded calls with the audio, transcripts and notes.
 
 ## Not built yet
 
@@ -204,6 +297,8 @@ they made at that client, and their résumé files.
 - Self-service password reset by email. Until then, an agency user deactivates the account and invites the person
   again at the same address (see "Accounts and getting back in").
 - Declining many account requests at once; each is declined on its own, and unanswered ones expire after 14 days.
-- AI-assisted screening or candidate summaries.
+- AI-assisted screening of applications. (Calls are summarised by the Oracle; applications and résumés are not.)
+- Joining a video call to record it. The Oracle records in the recruiter's browser, or takes an uploaded recording.
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
-- Automated tests in the repository (the flows were verified end to end in a browser during development).
+- Automated tests that drive the screens in a browser. `npm test` covers the résumé reader, job autofill and the
+  Oracle's server side; the screens were verified by hand in a browser during development.

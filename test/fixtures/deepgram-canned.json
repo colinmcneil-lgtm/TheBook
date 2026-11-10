@@ -1,0 +1,161 @@
+{
+  "metadata": {
+    "transaction_key": "deprecated",
+    "request_id": "00000000-0000-4000-8000-000000000001",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "created": "2026-11-10T09:00:00.000Z",
+    "duration": 21.4,
+    "channels": 1,
+    "models": [
+      "11111111-1111-4111-8111-111111111111"
+    ],
+    "model_info": {
+      "11111111-1111-4111-8111-111111111111": {
+        "name": "general-nova-3",
+        "version": "stub",
+        "arch": "nova-3"
+      }
+    },
+    "diarize_info": {
+      "model_uuid": "22222222-2222-4222-8222-222222222222",
+      "arch": "v2"
+    }
+  },
+  "results": {
+    "channels": [
+      {
+        "alternatives": [
+          {
+            "transcript": "Thanks for making the time today. Could you tell me about your current role? Sure. I lead six account executives at Varsity Freight. We closed 2.4 million last year. And what are you looking for on salary? Around 90,000 base.",
+            "confidence": 0.99,
+            "words": [],
+            "paragraphs": {
+              "transcript": "\nSpeaker 0: Thanks for making the time today. Could you tell me about your current role?\n\nSpeaker 1: Sure. I lead six account executives at Varsity Freight. We closed 2.4 million last year.\n\nSpeaker 0: And what are you looking for on salary?\n\nSpeaker 1: Around 90,000 base.",
+              "paragraphs": [
+                {
+                  "sentences": [
+                    {
+                      "text": "Thanks for making the time today.",
+                      "start": 0.5,
+                      "end": 2.2
+                    },
+                    {
+                      "text": "Could you tell me about your current role?",
+                      "start": 2.4,
+                      "end": 4.9
+                    }
+                  ],
+                  "speaker": 0,
+                  "num_words": 14,
+                  "start": 0.5,
+                  "end": 4.9
+                },
+                {
+                  "sentences": [
+                    {
+                      "text": "Sure.",
+                      "start": 5.8,
+                      "end": 6.2
+                    },
+                    {
+                      "text": "I lead six account executives at Varsity Freight.",
+                      "start": 6.5,
+                      "end": 9.6
+                    },
+                    {
+                      "text": "We closed 2.4 million last year.",
+                      "start": 10.9,
+                      "end": 13.2
+                    }
+                  ],
+                  "speaker": 1,
+                  "num_words": 15,
+                  "start": 5.8,
+                  "end": 13.2
+                },
+                {
+                  "sentences": [
+                    {
+                      "text": "And what are you looking for on salary?",
+                      "start": 14.1,
+                      "end": 16.4
+                    }
+                  ],
+                  "speaker": 0,
+                  "num_words": 8,
+                  "start": 14.1,
+                  "end": 16.4
+                },
+                {
+                  "sentences": [
+                    {
+                      "text": "Around 90,000 base.",
+                      "start": 17.3,
+                      "end": 19.0
+                    }
+                  ],
+                  "speaker": 1,
+                  "num_words": 3,
+                  "start": 17.3,
+                  "end": 19.0
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "utterances": [
+      {
+        "start": 0.5,
+        "end": 4.9,
+        "confidence": 0.99,
+        "channel": 0,
+        "transcript": "Thanks for making the time today. Could you tell me about your current role?",
+        "words": [],
+        "speaker": 0,
+        "id": "aaaaaaaa-0000-4000-8000-000000000001"
+      },
+      {
+        "start": 5.8,
+        "end": 9.6,
+        "confidence": 0.99,
+        "channel": 0,
+        "transcript": "Sure. I lead six account executives at Varsity Freight.",
+        "words": [],
+        "speaker": 1,
+        "id": "aaaaaaaa-0000-4000-8000-000000000002"
+      },
+      {
+        "start": 10.9,
+        "end": 13.2,
+        "confidence": 0.98,
+        "channel": 0,
+        "transcript": "We closed 2.4 million last year.",
+        "words": [],
+        "speaker": 1,
+        "id": "aaaaaaaa-0000-4000-8000-000000000003"
+      },
+      {
+        "start": 14.1,
+        "end": 16.4,
+        "confidence": 0.99,
+        "channel": 0,
+        "transcript": "And what are you looking for on salary?",
+        "words": [],
+        "speaker": 0,
+        "id": "aaaaaaaa-0000-4000-8000-000000000004"
+      },
+      {
+        "start": 17.3,
+        "end": 19.0,
+        "confidence": 0.97,
+        "channel": 0,
+        "transcript": "Around 90,000 base.",
+        "words": [],
+        "speaker": 1,
+        "id": "aaaaaaaa-0000-4000-8000-000000000005"
+      }
+    ]
+  }
+}
