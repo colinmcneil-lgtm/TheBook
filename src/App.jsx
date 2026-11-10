@@ -7,6 +7,7 @@ import { ToastProvider, Loading, Empty, Button } from './ui.jsx';
 import Layout from './components/Layout.jsx';
 import Login, { Join } from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import Todo from './pages/Todo.jsx';
 import Inbox from './pages/Inbox.jsx';
 import Jobs from './pages/Jobs.jsx';
 import JobDetail from './pages/JobDetail.jsx';
@@ -47,7 +48,7 @@ function Pages({ children }) {
   return <PageBoundary at={pathname}>{children}</PageBoundary>;
 }
 
-/** An address from when Otterview was called The Oracle, sent on to the same page under its new name. */
+/** An address from before Otterview had that name (its pages lived under /oracle), sent on to the same page. */
 function OldOracleLink() {
   const { pathname, search, hash } = useLocation();
   return <Navigate to={{ pathname: pathname.replace(/^\/oracle/, '/otterview'), search, hash }} replace />;
@@ -97,6 +98,7 @@ function Workspace() {
         <Pages>
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          {ctx.isAgency && <Route path="/todo" element={<Todo />} />}
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/jobs/:id" element={<JobDetail />} />
@@ -104,7 +106,7 @@ function Workspace() {
           <Route path="/interviews" element={<Interviews />} />
           {ctx.isAgency && <Route path="/otterview" element={<Oracle />} />}
           {ctx.isAgency && <Route path="/otterview/:id" element={<OracleCall />} />}
-          {/* Otterview used to be called The Oracle: links and bookmarks from then still lead to the same place. */}
+          {/* Otterview's pages used to live under /oracle: links and bookmarks from then still lead to the same place. */}
           {ctx.isAgency && <Route path="/oracle/*" element={<OldOracleLink />} />}
           <Route path="/reports" element={<Reports />} />
           {ctx.isAgency && <Route path="/clients" element={<Clients />} />}

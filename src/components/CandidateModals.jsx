@@ -47,35 +47,39 @@ export function RejectModal({ data, onClose }) {
   );
 }
 
-export function ScheduleModal({ data, onClose }) {
+/** Schedule an interview, or change one that is already booked when `interview` is passed (its time, length, format, place, notes and interviewers). */
+export function ScheduleModal({ data, interview, onClose }) {
   const { bump, user } = useApp();
   const toast = useToast();
   const stage = data.stages.find((s) => s.id === data.application.stage_id);
   const tomorrow = new Date(Date.now() + 86400000);
   tomorrow.setHours(10, 0, 0, 0);
-  const [form, setForm, bind] = useForm({
-    title: stage?.kind === 'interview' ? stage.name : 'Interview', kind: 'video', starts_at: toLocalInput(tomorrow), duration_min: 45, location: '', notes: '',
-  });
-  const [panel, setPanel] = useState([user.id]);
+  const [form, setForm, bind] = useForm(interview
+    ? { title: interview.title, kind: interview.kind, starts_at: toLocalInput(new Date(interview.starts_at)), duration_min: interview.duration_min, location: interview.location || '', notes: interview.notes || '' }
+    : { title: stage?.kind === 'interview' ? stage.name : 'Interview', kind: 'video', starts_at: toLocalInput(tomorrow), duration_min: 45, location: '', notes: '' });
+  const [panel, setPanel] = useState(interview ? (interview.panel || []).map((p) => p.id) : [user.id]);
   const [notify, setNotify] = useState(false);
   const { data: people } = useApi(url('/users', { client_id: data.client.id }));
   const toggle = (id) => setPanel((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const [save, busy] = useAction(async () => {
     const starts = new Date(form.starts_at);
-    await api.post('/interviews', { ...form, application_id: data.application.id, starts_at: starts.toISOString(), panel, notify, time_label: `${fmtDateTime(starts)} (${Intl.DateTimeFormat().resolvedOptions().timeZone})` });
-    toast('Interview scheduled');
+    const details = { ...form, starts_at: starts.toISOString(), panel, notify, time_label: `${fmtDateTime(starts)} (${Intl.DateTimeFormat().resolvedOptions().timeZone})` };
+    if (interview) await api.patch(`/interviews/${interview.id}`, details);
+    else await api.post('/interviews', { ...details, application_id: data.application.id });
+    toast(interview ? 'Interview updated' : 'Interview scheduled');
     bump();
     onClose();
   });
   return (
-    <Modal title="Schedule interview" subtitle={`${data.candidate.name} · ${data.job.title}`} onClose={onClose} onSubmit={save}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Schedule</Button></>}>
+    <Modal title={interview ? 'Edit interview' : 'Schedule interview'} subtitle={`${data.candidate.name} · ${data.job.title}`} onClose={onClose} onSubmit={save}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>{interview ? 'Save changes' : 'Schedule'}</Button></>}>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Interview" className="sm:col-span-2"><Input {...bind('title')} required /></Field>
         <Field label="Date and time" hint={`Your time zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`}><Input type="datetime-local" {...bind('starts_at')} required /></Field>
         <Field label="Length">
-          <Select {...bind('duration_min')}>{[15, 30, 45, 60, 90, 120].map((m) => <option key={m} value={m}>{m} minutes</option>)}</Select>
+          {/* An interview booked with a length that is not on the list keeps it. */}
+          <Select {...bind('duration_min')}>{[...new Set([15, 30, 45, 60, 90, 120, Number(form.duration_min)])].sort((a, b) => a - b).map((m) => <option key={m} value={m}>{m} minutes</option>)}</Select>
         </Field>
         <Field label="Format">
           <Select {...bind('kind')}>{Object.entries(INTERVIEW_KINDS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
@@ -99,7 +103,7 @@ export function ScheduleModal({ data, onClose }) {
         <p className="mt-1.5 text-xs text-stone-500">Each interviewer is asked for a scorecard once the interview has taken place.</p>
       </div>
       <Field label="Notes for the panel"><Textarea rows={2} {...bind('notes')} placeholder="What to focus on, what has already been covered" /></Field>
-      <Checkbox checked={notify && Boolean(data.candidate.email)} disabled={!data.candidate.email} onChange={(e) => setNotify(e.target.checked)} label="Email the invitation to the candidate"
+      <Checkbox checked={notify && Boolean(data.candidate.email)} disabled={!data.candidate.email} onChange={(e) => setNotify(e.target.checked)} label={interview ? 'Email the updated invitation to the candidate' : 'Email the invitation to the candidate'}
         hint={data.candidate.email ? 'Uses the “Interview invitation” template with this time, format and location.' : 'There is no email address on file for this candidate.'} />
       {notify && <MailNote />}
     </Modal>

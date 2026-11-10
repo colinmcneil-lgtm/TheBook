@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { db, q, tx, setSetting, createStages, DATA_DIR, UPLOAD_DIR } from './db.js';
 import { reportStart } from './reporting.js';
+import { catchUp } from './todos.js';
 
 const reset = process.argv.includes('--reset');
 if (process.env.NODE_ENV === 'production' && !process.argv.includes('--force')) {
@@ -20,7 +21,7 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   }
   console.log(`Wiping ${DATA_DIR} ...`);
   tx(() => {
-    for (const t of ['report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'agency_emails', 'agency_activities', 'earlier_resumes', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
+    for (const t of ['todos', 'report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'agency_emails', 'agency_activities', 'earlier_resumes', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
       db.exec(`DELETE FROM ${t}`);
     db.exec(`DELETE FROM settings WHERE key LIKE 'metaview_%'`); // the demo is not connected to Metaview
     db.exec('DELETE FROM sqlite_sequence'); // a wiped database starts numbering from 1 again
@@ -536,6 +537,33 @@ tx(() => {
     act(appId, p.owner, 'added', `Added to The Book (${p.source.replace('_', ' ')})`, at);
     if (p.note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', appId, p.owner, p.note, at);
   }
+
+  // To do: so that Alex's and Priya's lists are not empty. The people to prep come from the interviews booked above
+  // for the next seven days, added the way the server adds them. The rest is what the two of them might have put
+  // there: a few jobs each, somebody to debrief after their latest interview, and one or two things already ticked.
+  catchUp();
+  const todo = (userId, kind, about, { note = null, doneDays = null, auto = 0 } = {}) => {
+    const position = q.get('SELECT COUNT(*) AS n FROM todos WHERE user_id = ? AND kind = ? AND done_at IS NULL', userId, kind).n;
+    q.run('INSERT INTO todos (user_id, kind, job_id, application_id, interview_id, note, position, auto, created_at, done_at, auto_done) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      userId, kind, about.job ?? null, about.application ?? null, about.interview ?? null, note, position, auto, ago(doneDays ?? 0.1), doneDays == null ? null : ago(doneDays), doneDays == null ? 0 : auto);
+  };
+  todo(priya, 'job', { job: jobs[0].id }, { note: 'Find 5 more senior profiles by Friday' });
+  todo(priya, 'job', { job: jobs[3].id }, { note: 'Chase Ruth for feedback on the shortlist' });
+  todo(priya, 'job', { job: jobs[4].id });
+  todo(priya, 'job', { job: jobs[2].id }, { doneDays: 2 });
+  todo(alex, 'job', { job: jobs[1].id }, { note: 'Two portfolios still to review with Tom' });
+  todo(alex, 'job', { job: jobs[6].id });
+  for (const userId of [priya, alex]) {
+    // The latest interview held for a candidate of theirs who is still in play: prep ticked when it passed, debrief to do.
+    const held = q.get(
+      `SELECT i.id AS interview, i.application_id AS application FROM interviews i JOIN applications a ON a.id = i.application_id
+       WHERE a.status = 'active' AND a.owner_id = ? AND i.status = 'completed' ORDER BY i.starts_at DESC LIMIT 1`, userId);
+    if (!held) continue;
+    todo(userId, 'prep', held, { doneDays: 1, auto: 1 });
+    todo(userId, 'debrief', held, { auto: 1, note: userId === priya ? 'Ask how the panel felt, then call the client' : null });
+  }
+  const firstPrep = q.get(`SELECT id FROM todos WHERE user_id = ? AND kind = 'prep' AND done_at IS NULL ORDER BY position LIMIT 1`, priya);
+  if (firstPrep) q.run('UPDATE todos SET note = ? WHERE id = ?', 'Send the interview pack and confirm the time', firstPrep.id);
 });
 
 console.log(`Demo data loaded.

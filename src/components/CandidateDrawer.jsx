@@ -227,7 +227,7 @@ function CandidateView({ data, onClose }) {
         {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} />}
         {/* Drawn afresh when the file changes: a newer résumé can take the place of this one under the same address and name. */}
         {tab === 'resume' && app.resume_file && <ResumeViewer key={app.resume_file} app={app} />}
-        {tab === 'interviews' && !general && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onScorecard={(i) => setModal({ scorecard: i })} />}
+        {tab === 'interviews' && !general && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onEdit={(i) => setModal({ editInterview: i })} onScorecard={(i) => setModal({ scorecard: i })} />}
         {tab === 'calls' && isAgency && <CallsTab data={data} calls={calls} error={callsError} reload={reloadCalls} />}
         {tab === 'activity' && <ActivityTab data={data} />}
         {tab === 'emails' && <EmailsTab data={data} onCompose={() => setModal('email')} />}
@@ -235,6 +235,7 @@ function CandidateView({ data, onClose }) {
 
       {modal === 'reject' && <RejectModal data={data} onClose={() => setModal(null)} />}
       {modal === 'schedule' && <ScheduleModal data={data} onClose={() => setModal(null)} />}
+      {modal?.editInterview && <ScheduleModal data={data} interview={modal.editInterview} onClose={() => setModal(null)} />}
       {modal === 'email' && <EmailModal data={data} onClose={() => setModal(null)} />}
       {modal === 'submit' && <SubmitModal data={data} onClose={() => setModal(null)} />}
       {modal === 'offer' && <OfferModal data={data} onClose={() => setModal(null)} />}
@@ -465,7 +466,7 @@ function Overview({ data, onOffer, onFee, onResume }) {
   );
 }
 
-function InterviewsTab({ data, onSchedule, onScorecard }) {
+function InterviewsTab({ data, onSchedule, onEdit, onScorecard }) {
   const { bump, user } = useApp();
   const [setStatus] = useAction(async (id, status) => { await api.patch(`/interviews/${id}`, { status }); bump(); });
   const canSchedule = data.application.status === 'active';
@@ -494,6 +495,7 @@ function InterviewsTab({ data, onSchedule, onScorecard }) {
                 <Menu
                   trigger={<Button size="sm" aria-label="Interview actions" icon={Ellipsis} className="!px-2" />}
                   items={[
+                    i.status !== 'cancelled' && { label: 'Edit interview', icon: Pencil, onClick: () => onEdit(i) },
                     { label: 'Add to calendar (.ics)', icon: Download, onClick: () => { window.location.href = `/api/interviews/${i.id}/ics`; } },
                     i.status === 'scheduled' && { label: 'Mark as completed', icon: Check, onClick: () => setStatus(i.id, 'completed') },
                     i.status !== 'cancelled' && { label: 'Cancel interview', icon: X, danger: true, onClick: () => setStatus(i.id, 'cancelled') },

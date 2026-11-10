@@ -21,7 +21,7 @@ import { metaviewStandIn } from './metaview-standin.mjs';
 // Four ports: POOL_TEST_PORT, the one after it, and the fifth and sixth from it (a second server with e-mail
 // delivery connected, and the stand-in for its mail provider), or the four kept for this file (see oracle-helpers.mjs).
 const BASE_PORT = Number(process.env.POOL_TEST_PORT) || SHARED.pool;
-const PORTS = { api: BASE_PORT, metaview: BASE_PORT + 1, mailApi: BASE_PORT + 4, mail: BASE_PORT + 5 };
+const PORTS = { api: BASE_PORT, metaview: BASE_PORT + 1, mailApi: BASE_PORT - 4, mail: BASE_PORT - 3 }; // +10 and +11 from the shared base: +18 and +19 are the to-do tests'
 const NEEDS_JOB = { error: 'Add them to a job first.' };
 // A real picture, one pixel square: the workspace reads a photo's own size and refuses a file that only starts like one.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
