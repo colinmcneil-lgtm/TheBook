@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ORACLE_TABS, callWhen, fmtLength, kindLine, knownLine, madeBy, nameList, oraclePath, oracleTab, peopleLine, readingLine, tabOfCall, whoseCall,
+  MATCHED_BY, OFFERED_BY, ORACLE_TABS, callWhen, fmtLength, kindLine, knownLine, madeBy, nameList, oraclePath, oracleTab, peopleLine, readingLine, tabOfCall, whoseCall,
 } from '../src/oracle/calls.js';
 import { telHref } from '../src/lib.js';
 
@@ -36,7 +36,8 @@ test('a call says how it came to be in The Oracle', () => {
   assert.equal(madeBy({ source: 'recorded', created_by_name: 'Alex Morgan' }), 'Recorded by Alex Morgan');
   assert.equal(madeBy({ source: 'uploaded', created_by_name: 'Alex Morgan' }), 'Uploaded by Alex Morgan');
   assert.equal(madeBy({ source: 'recorded', created_by_name: null }), 'Recorded by someone who has left');
-  assert.equal(madeBy({ source: 'metaview', created_by_name: 'Alex Morgan' }), 'Brought in from Metaview by Alex Morgan');
+  // The person a Metaview call belongs to is whoever took it, not whoever brought it in, so nobody is named.
+  assert.equal(madeBy({ source: 'metaview', created_by_name: 'Alex Morgan' }), 'Brought in from Metaview');
   assert.equal(madeBy({ source: 'metaview', created_by_name: null }), 'Brought in from Metaview', 'brought in by The Book itself');
   // A call left over from an earlier version still reads as a call, with nothing about how it was placed.
   assert.equal(madeBy({ source: 'phone', direction: 'outbound', created_by_name: 'Alex Morgan' }), 'Recorded by Alex Morgan');
@@ -89,6 +90,13 @@ test('whose a Metaview call is in The Book', () => {
   assert.equal(whoseCall(call({ match: person(), suggestions: [person()] })), 'matched', 'a match needs nobody to choose');
 });
 
+test('somebody offered for a call by name is said to have a similar name, not the same one', () => {
+  assert.equal(MATCHED_BY.name, 'Same name', 'a match by name is the whole name');
+  assert.equal(OFFERED_BY.name, 'Similar name', 'an offer by name is a first name or part of one');
+  assert.equal(OFFERED_BY.phone, MATCHED_BY.phone);
+  assert.equal(OFFERED_BY.email, MATCHED_BY.email);
+});
+
 test('while the history is being read, the tab says how far it has got', () => {
   assert.equal(readingLine({ catching_up: true, known: 600, total: 2100 }), 'Reading your Metaview history: 600 of about 2,100 so far');
   assert.equal(readingLine({ catching_up: true, known: 600 }), 'Reading your Metaview history: 600 calls so far', 'when how many there are in all is not known');
@@ -98,13 +106,13 @@ test('while the history is being read, the tab says how far it has got', () => {
   assert.equal(readingLine(null), '');
 });
 
-test('settings say how many Metaview calls The Book knows about and how many are in it', () => {
-  assert.equal(knownLine({ known: 2100, in_the_book: 38 }), 'The Book knows about 2,100 Metaview calls. 38 of them are in The Book.');
-  assert.equal(knownLine({ known: 2100, in_the_book: 1 }), 'The Book knows about 2,100 Metaview calls. 1 of them is in The Book.');
-  assert.equal(knownLine({ known: 2100, in_the_book: 0 }), 'The Book knows about 2,100 Metaview calls. None of them are in The Book yet.');
-  assert.equal(knownLine({ known: 3, in_the_book: 3 }), 'The Book knows about 3 Metaview calls. All of them are in The Book.');
-  assert.equal(knownLine({ known: 1, in_the_book: 0 }), 'The Book knows about 1 Metaview call. It is not in The Book yet.');
-  assert.equal(knownLine({ known: 1, in_the_book: 1 }), 'The Book knows about 1 Metaview call. It is in The Book.');
+test('settings say how many Metaview calls The Book can see and how many have been brought in', () => {
+  assert.equal(knownLine({ known: 2100, in_the_book: 38 }), 'The Book can see 2,100 Metaview calls. 38 of them have been brought in.');
+  assert.equal(knownLine({ known: 2100, in_the_book: 1 }), 'The Book can see 2,100 Metaview calls. 1 of them has been brought in.');
+  assert.equal(knownLine({ known: 2100, in_the_book: 0 }), 'The Book can see 2,100 Metaview calls. None of them have been brought in yet.');
+  assert.equal(knownLine({ known: 3, in_the_book: 3 }), 'The Book can see 3 Metaview calls. All of them have been brought in.');
+  assert.equal(knownLine({ known: 1, in_the_book: 0 }), 'The Book can see 1 Metaview call. It has not been brought in yet.');
+  assert.equal(knownLine({ known: 1, in_the_book: 1 }), 'The Book can see 1 Metaview call. It has been brought in.');
   assert.equal(knownLine({ known: 0, in_the_book: 0 }), 'The Book has not found any calls in Metaview yet.');
 });
 

@@ -223,8 +223,10 @@ Metaview.
    asks "Use API Key instead of OAuth?", choose that, and press **Generate API Key**. Copy the key. A key belongs to
    the person who made it and sees what that person sees in Metaview, so make it with an account that can see all
    of the agency's conversations (an admin's).
-2. **Enter it in The Book.** An admin opens The Oracle, the Metaview tab, and pastes the key. The Book tries the key
-   against Metaview before keeping it: a key Metaview refuses is not saved, and the page says so.
+2. **Enter it in The Book.** An admin opens **Settings**, **Agency**, and pastes the key into the **Metaview** card
+   (the **Connect Metaview** button on The Oracle's Metaview tab leads there). The Book tries the key against
+   Metaview before keeping it: a key Metaview refuses is not saved, and the card says so. Recruiters see whether
+   Metaview is connected, but only an admin can connect it, change the key or disconnect it.
 
 That is all. Nothing needs setting on the server. If you would rather keep the key with the server's other
 settings, set `METAVIEW_API_KEY` where The Book is hosted (on Railway: the service's **Variables**) and restart; it
@@ -235,10 +237,10 @@ the app can be removed in the app.
 
 - **The list fills in.** The Book reads Metaview's list of conversations in the background, fifty at a time with a
   few seconds between pages, newest first. A couple of thousand conversations take two or three minutes. How far
-  it got is kept, so a restart carries on from there. The status on the Metaview tab says while it is still
-  reading.
-- **New calls appear by themselves.** Every ten minutes The Book looks for new conversations; "Refresh" looks at
-  once. A recent conversation that has changed in Metaview (a transcript that arrived later, a corrected name) is
+  it got is kept, so a restart carries on from there. While it is still reading, the Metaview tab and the card in
+  Settings say how far it has got ("600 of about 2,100 so far"); the calls already listed can be used meanwhile.
+- **New calls appear by themselves.** Every ten minutes The Book looks for new conversations; **Look for new
+  calls** looks at once. A recent conversation that has changed in Metaview (a transcript that arrived later, a corrected name) is
   brought up to date at the same time, and once a week the whole list is read again, which also takes out
   conversations that have been deleted in Metaview and were never brought in.
 - **Each call is matched to a candidate.** First by an e-mail address of somebody on the call, then by phone
@@ -246,7 +248,12 @@ the app can be removed in the app.
   name. Capitals and accents do not count. Anything weaker (a first name on its own, part of a name, the same
   address on two records) never chooses anybody: those people are offered, and a recruiter picks. A person chosen
   by hand always wins and is remembered. Interviewers, and anyone with a login to The Book, are never taken for
-  the candidate.
+  the candidate. Metaview often knows somebody on a phone call only by a first name and their number, so in
+  practice most calls are matched by the phone number on the candidate's record: a candidate with no number in The
+  Book will usually have to be chosen by hand.
+- **A caller Metaview has no name for** goes by their phone number there, and so the call is listed as "Call with
+  +1 647…" here. The number still matches them to their candidate, and once the call is on a candidate it, and
+  the speaker in its transcript, carry the candidate's name.
 - **Opening a call brings it in.** The Book fetches that one conversation's transcript and notes and makes the call
   in The Oracle, on the candidate it was matched to (their most recent job in progress) or the one the recruiter
   chose. The candidate's history gets the line "Metaview call, 12 min", which client users never see. Opening it
@@ -266,7 +273,9 @@ the app can be removed in the app.
   somebody deleted is never brought back by itself.
 
 The list can be searched by name, e-mail address, phone digits and title, and narrowed to the calls you took part
-in, the ones not yet in The Book, the ones with no candidate, or one candidate's calls.
+in (**Mine**: the ones where the e-mail address you sign in to The Book with is an interviewer's in Metaview), the
+ones not yet in The Book, the ones with no candidate, or, on a candidate's Calls tab, that candidate's calls, each
+with **Add** and all of them with **Add all**.
 
 ### It only reads
 
@@ -285,7 +294,8 @@ conversation there. That happens only for conversations that are brought in.
   type, channel (Phone, Zoom...), length and language, whether it has a transcript, and the people on it with their
   part in the call, their e-mail addresses and their phone numbers. That is what is needed to list a conversation
   and to work out who it was with, and nothing more is kept. Addresses and numbers are used for matching and
-  searching on the server and are not sent to the browser.
+  searching on the server and are not sent to the browser, with one exception: where the number is all Metaview
+  has to call somebody by, it is shown as their name, as it is in Metaview.
 - **For a conversation that has been brought in:** its transcript and notes, on the call in The Oracle.
 - **Never:** audio. Metaview does not give it out.
 - **The key:** sealed with a secret that the server makes on first use and keeps in `DATA_DIR/server-secret`, beside
@@ -299,20 +309,24 @@ has the notes written again or a write-up drafted, the transcript goes to Anthro
 Everything is agency only: client users are refused on every route and see nothing of it. "Delete candidate data"
 deletes the calls that were brought in for that person. The Metaview tab will still list that their conversations
 exist, because they still exist in Metaview; delete them there too if they must go altogether. An admin can
-**forget the key**: that removes the key and everything remembered about conversations that were never brought
-in. Calls already in The Oracle stay.
+**Disconnect** Metaview (Settings, Agency): that removes the key and everything remembered about conversations
+that were never brought in. Calls already in The Oracle stay, and still open.
 
 ### Before you rely on Metaview
 
-How Metaview answers was checked against the real service with a real key in November 2026: the address, the key,
-the shape of the list, the transcript's lines, the notes arriving on a second request. The Book itself was then
-built and tested against a stand-in that answers the same way (`test/metaview-standin.mjs`), never against the
-real service. So the first time you connect it:
+The Book was built and tested against a stand-in that answers the way Metaview does (`test/metaview-standin.mjs`).
+It was then run once against the real service, reading only, in November 2026: the key was accepted and the
+workspace named, the newest hundred conversations were listed (a page of fifty took about a second), and one phone
+call was opened: every line of its transcript was read into turns for its two named speakers, its length and date
+matched, and Metaview's notes arrived by themselves about 35 seconds later. That run is also where it was seen
+that most callers have only a first name and a number, and that a few go by their number alone.
 
-1. Enter the key and watch the count on the Metaview tab climb to about the number of conversations you have.
-2. Open a recent phone call. Check the transcript has both names on it, the times look right, and the notes arrive
-   within a minute.
-3. Check a few matches of each kind: a candidate matched by e-mail, one by phone number, one by name.
+What that one run could not show, so check it the first time you connect:
+
+1. Enter the key and watch the count climb to about the number of conversations you have.
+2. Open a few recent calls, among them a video meeting and a long call. Check both names are on the transcript, the
+   times look right, and the notes arrive within a minute.
+3. Check a few matches of each kind: a candidate matched by phone number, one by e-mail, one by name.
 4. Look at the calls that came in by themselves, and at each candidate's history line.
 
 Not known: what limits Metaview puts on how often it may be asked (The Book stays well below anything
@@ -424,7 +438,7 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   write call notes and submission drafts.
 - **Connect call transcription (optional)** by setting `DEEPGRAM_API_KEY`. See [The Oracle](#the-oracle) for what is
   sent, what it costs and what happens without it.
-- **Connect Metaview (optional)** in the app: an admin pastes a Metaview key on The Oracle's Metaview tab. Nothing
+- **Connect Metaview (optional)** in the app: an admin pastes a Metaview key under Settings, Agency, Metaview. Nothing
   needs setting on the server, though `METAVIEW_API_KEY` works too. See [Metaview in The Oracle](#metaview-in-the-oracle).
 - **Tell the app about proxies.** Leave `TRUST_PROXY` unset when the app is reached directly (plain `docker run`).
   Behind a reverse proxy set it to the number of proxies in front, or sign-in and application rate limits will
@@ -494,5 +508,8 @@ they made at that client, their résumé files, and their recorded calls with th
   against a stand-in for Metaview, and starting on a database from before phone calls and the calendar were taken
   out. The Oracle's recording screens were driven end to end in Chrome with a simulated microphone while they were
   built (record, reload and server restart mid-call, a lost connection, two people on one computer, transcript,
-  notes, add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude.
+  notes, add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude. The two tabs with
+  Metaview were driven the same way at computer and phone widths against the stand-in for Metaview (connect, the
+  history being read, search and filters, open, choose a candidate, draft and submit, a candidate's Calls tab,
+  record, upload, a recruiter, a client user, disconnect).
   The other screens were verified by hand.

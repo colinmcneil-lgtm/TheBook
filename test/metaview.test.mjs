@@ -60,7 +60,7 @@ after(async () => {
 });
 
 test('before a key is entered: nothing is connected, and only the agency can even ask', async () => {
-  assert.deepEqual(await status(), { connected: false, workspace: null, source: null, can_manage: true, last_checked_at: null, known: 0, in_the_book: 0, catching_up: false, error: null, auto: false });
+  assert.deepEqual(await status(), { connected: false, workspace: null, source: null, can_manage: true, last_checked_at: null, known: 0, in_the_book: 0, catching_up: false, error: null, auto: false, total: null });
   assert.equal((await status(w.priya)).can_manage, false);
   assert.deepEqual((await w.priya.get('/metaview/calls')).body, { total: 0, calls: [] });
   const refresh = await w.priya.post('/metaview/refresh');
@@ -120,6 +120,7 @@ test('the whole history is read a page at a time, one request at a time', async 
   const done = await settled();
   assert.equal(done.known, 130);
   assert.equal(done.in_the_book, 0);
+  assert.equal(done.total, 130, 'how many Metaview says there are in all, for "50 of about 130 so far"');
   const pages = standIn.toolCalls().filter((r) => r.tool === 'search_conversations' && !r.args.conversation_ids);
   // Each page of history once (the first look is its first page), fifty at a time, and nothing else but new looks at the top.
   assert.deepEqual(pages.filter((r) => r.args.offset > 0).map((r) => r.args.offset), [50, 100]);
@@ -133,7 +134,7 @@ test('the whole history is read a page at a time, one request at a time', async 
   });
 });
 
-test('the list: newest first, a page at a time, with names and roles but no addresses or numbers', async () => {
+test('the list: newest first, a page at a time, with names and roles; no addresses, and a number only where it is all Metaview calls somebody', async () => {
   const first = (await w.priya.get('/metaview/calls')).body;
   assert.equal(first.total, 130);
   assert.equal(first.calls.length, 30);
@@ -156,8 +157,12 @@ test('the list: newest first, a page at a time, with names and roles but no addr
   assert.deepEqual(meeting.people, [{ name: 'Maya Okonkwo', role: 'other' }, { name: INTERVIEWERS[1].name, role: 'interviewer' }]);
   assert.equal(meeting.kind, 'Client Meeting');
   assert.equal(all.calls.find((call) => call.id === standIn.at(SPECIAL.noTranscript[0]).id).has_transcript, false);
-  // Nobody's address or number leaves the server in the list.
-  const text = JSON.stringify(all);
+  // Somebody Metaview has no name for goes by their number there, and so does here: it is how a recruiter knows the call.
+  const unnamed = all.calls.find((call) => call.id === standIn.at(SPECIAL.numberForName).id);
+  assert.equal(unnamed.title, `Call with ${PEOPLE[16].phone}`);
+  assert.deepEqual(unnamed.people[0], { name: PEOPLE[16].phone, role: 'candidate' });
+  // Otherwise nobody's address or number leaves the server in the list.
+  const text = JSON.stringify(all.calls.filter((call) => call !== unnamed));
   assert.equal(/@mail\.example|@agency\.example|5550\d{3}/.test(text), false);
   // Things a list cannot be asked for.
   for (const query of ['who=nobody', 'show=everything', 'candidate_id=999999']) assert.ok([400, 404].includes((await w.priya.get(`/metaview/calls?${query}`)).status), query);
@@ -363,6 +368,32 @@ test('a call nobody on file matches is brought in on its own; one over an hour l
   assert.equal(Object.keys(call.speakers).length, 2);
   // Its interviewer is Priya; had it been somebody with no login here, it would be the opener's (see the next test).
   assert.equal(call.created_by_name, 'Priya Nair');
+});
+
+test('a caller Metaview knows only by number is matched by it, and takes the candidate\'s name in The Oracle', async () => {
+  const conv = standIn.at(SPECIAL.numberForName);
+  // Nobody on file has the number: the call is offered to nobody, and a number is never mistaken for a name.
+  assert.deepEqual([(await row(conv.id)).match, (await row(conv.id)).suggestions], [null, []]);
+  const rosa = await w.candidate({ name: 'Rosa D.', email: 'rosa@elsewhere.example', phone: '289-555-0116' });
+  const found = await row(conv.id);
+  assert.equal(found.match.application_id, rosa.application_id);
+  assert.equal(found.match.how, 'phone');
+  const { call, candidate } = await callOf(w.owner, (await open(w.owner, conv.id)).body.call_id);
+  assert.equal(candidate.id, rosa.candidate_id);
+  assert.equal(call.title, 'Call with Rosa D.');
+  // In the transcript the number stood where the name would be; here the speaker is the candidate.
+  assert.deepEqual(Object.values(call.speakers).sort(), [conv.interviewers[0].name, 'Rosa D.'].sort());
+  assert.equal(JSON.stringify(call.speakers).includes('555'), false);
+  // Brought in with nobody chosen, such a call is named after the number until it is put on somebody.
+  const stranger = standIn.add({ person: { name: 'Nobody Known', phone: '+14165550191' }, shown: '+14165550191', emails: [], minutesAgo: 4 });
+  await w.owner.post('/metaview/refresh');
+  await until(() => row(stranger.id), Boolean);
+  const loose = (await open(w.owner, stranger.id)).body.call_id;
+  assert.equal((await callOf(w.owner, loose)).call.title, 'Call with +14165550191');
+  assert.deepEqual(Object.values((await callOf(w.owner, loose)).call.speakers).sort(), ['Candidate', 'Priya Nair']);
+  const moved = (await w.owner.patch(`/oracle/calls/${loose}`, { application_id: rosa.application_id })).body.call;
+  assert.equal(moved.title, 'Call with Rosa D.');
+  assert.deepEqual(Object.values(moved.speakers).sort(), ['Priya Nair', 'Rosa D.']);
 });
 
 test('a call from Metaview works like any other: names, notes, the write-up, moving it, deleting it', async () => {
@@ -623,7 +654,7 @@ test('forgetting the key forgets what was never brought in; the calls in The Ora
   assert.equal(forgotten.status, 200);
   assert.deepEqual(forgotten.body, { ok: true });
   const after = await status();
-  assert.deepEqual(after, { connected: false, workspace: null, source: null, can_manage: true, last_checked_at: null, known: before.in_the_book, in_the_book: before.in_the_book, catching_up: false, error: null, auto: false });
+  assert.deepEqual(after, { connected: false, workspace: null, source: null, can_manage: true, last_checked_at: null, known: before.in_the_book, in_the_book: before.in_the_book, catching_up: false, error: null, auto: false, total: null });
   look(dataDir, (all) => {
     assert.deepEqual(all(`SELECT key FROM settings WHERE key LIKE 'metaview_%' AND key != 'metaview_auto'`), []);
     assert.equal(all('SELECT COUNT(*) AS n FROM metaview_calls WHERE call_id IS NULL')[0].n, 0);

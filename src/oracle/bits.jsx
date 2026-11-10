@@ -6,7 +6,7 @@ import { api, url, fmtDate, photoUrl } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Checkbox, Input, Modal, useAction, useToast, cx } from '../ui.jsx';
 import { AddCandidateModal } from '../components/CandidateModals.jsx';
-import { MATCHED_BY } from './calls.js';
+import { OFFERED_BY } from './calls.js';
 
 export { callWhen, fmtLength, madeBy } from './calls.js';
 
@@ -238,7 +238,7 @@ export function AttachModal({ call, current, suggestions, save: saveChoice, save
                     <span className="block truncate text-sm font-medium text-stone-900">{s.name}</span>
                     <span className="block truncate text-[13px] text-stone-600">{[s.job_title, s.client_name].filter(Boolean).join(' · ')}</span>
                   </span>
-                  {MATCHED_BY[s.how] && <span className="shrink-0 text-xs text-stone-500">{MATCHED_BY[s.how]}</span>}
+                  {OFFERED_BY[s.how] && <span className="shrink-0 text-xs text-stone-500">{OFFERED_BY[s.how]}</span>}
                 </button>
               </li>
             ))}

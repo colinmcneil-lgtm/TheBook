@@ -28,12 +28,16 @@ export const ChannelBadge = ({ call, size = 36 }) => <MicBadge size={size} icon=
 // ---- the connection ---------------------------------------------------------------------------------------------------------
 /**
  * Whether Metaview is connected and how far The Book has got with it. Asked again every few seconds while the
- * history is still being read, and after "Look for new calls" until that look has been done.
+ * history is still being read, and after "Look for new calls" until that look has been done. Once connected it is
+ * also asked now and then for as long as the screen is open, so calls The Book finds or brings in by itself (it
+ * looks every ten minutes) show up without the page being loaded again.
  */
 export function useMetaview() {
   const [looking, setLooking] = useState(null); // { was: when The Book had last looked } from pressing the button until it has looked again
-  const live = useLive('/metaview/status', (s) => Boolean(s.catching_up || looking), looking ? 2000 : 5000);
+  const [reading, setReading] = useState(false); // the history is still being read
+  const live = useLive('/metaview/status', (s) => Boolean(s.connected || looking), looking ? 2000 : reading ? 5000 : 20_000);
   const status = live.data;
+  useEffect(() => { setReading(Boolean(status?.catching_up)); }, [status?.catching_up]);
   const checked = status?.last_checked_at ?? null;
   useEffect(() => { if (looking && checked !== looking.was) setLooking(null); }, [checked, looking]);
   // Metaview may be slow or not answering: the button does not spin for ever.

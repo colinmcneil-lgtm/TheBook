@@ -22,7 +22,7 @@
 import { q, now, tx, getSetting, setSetting } from './db.js';
 import { seal, unseal } from './secret.js';
 import { fold, nameTokens, phoneTail, matchConversations, chosenMatch } from './match.js';
-import { MetaviewError, whoAmI, listConversations, oneConversation, transcriptTurns } from './metaview-client.js';
+import { MetaviewError, whoAmI, listConversations, oneConversation, transcriptTurns, onlyANumber } from './metaview-client.js';
 import { addOutsideCall, fillOutsideCall, putCallOn, whenNotesAwaited, UNTITLED } from './oracle.js';
 
 // ---------- timings and limits ----------
@@ -70,6 +70,9 @@ function statusFor(user) {
     connected: Boolean(key), workspace: key ? getSetting('metaview_workspace') || null : null, source, can_manage: user.role === 'admin',
     last_checked_at: key ? getSetting('metaview_checked_at') : null, known: counts.known, in_the_book: counts.in_the_book,
     catching_up: Boolean(key) && !historyDone(), error: key ? getSetting('metaview_error') : lost ? LOST_KEY : null, auto: autoOn(),
+    // How many conversations Metaview says it has in all, so the screens can say "600 of about 2,100 so far" while
+    // the history is read. Null until Metaview has said.
+    total: key ? Number(getSetting('metaview_total')) || null : null,
   };
 }
 
@@ -77,8 +80,10 @@ function statusFor(user) {
 function forgetUnbrought() {
   q.run('DELETE FROM metaview_calls WHERE call_id IS NULL');
   q.run('UPDATE metaview_calls SET fetch_next_at = NULL, fetch_tries = 0');
-  forget('history_offset', 'history_done', 'walked_at', 'walk_started_at', 'walk_offset');
+  forget('history_offset', 'history_done', 'walked_at', 'walk_started_at', 'walk_offset', 'total');
 }
+/** Keep how many conversations Metaview says there are in all, when a page of the whole list says so. */
+const noteTotal = (page) => { if (page.total != null) setSetting('metaview_total', String(page.total)); };
 /** Keep what Metaview says about whose key this is. A key for a different workspace starts the list afresh: what was listed belonged to the other one. */
 function noteWorkspace(who) {
   const before = getSetting('metaview_org');
@@ -96,7 +101,8 @@ function otherSide(people) {
 /** What a remembered conversation is matched by, in the shape match.js reads. */
 const evidenceOf = (row) => {
   const others = otherSide(json(row.people, []));
-  return { key: row.id, emails: others.flatMap((p) => p.emails || []), phones: others.flatMap((p) => p.phones || []), names: others.map((p) => p.name).filter(Boolean) };
+  // A phone number standing where a name would be says nothing about what the person is called.
+  return { key: row.id, emails: others.flatMap((p) => p.emails || []), phones: others.flatMap((p) => p.phones || []), names: others.map((p) => p.name).filter((name) => name && !onlyANumber(name)) };
 };
 const nameOfOther = (people) => otherSide(people).find((p) => p.name)?.name || null;
 
@@ -131,7 +137,7 @@ function remember(conversations) {
       for (const p of others) {
         for (const email of p.emails) add('email', email);
         for (const tail of new Set(p.phones.map(phoneTail).filter(Boolean))) add('phone', tail);
-        const words = nameTokens(p.name);
+        const words = onlyANumber(p.name) ? [] : nameTokens(p.name);
         if (words.length) add('name', words.join(' '), words[0], words.length > 1 ? words.at(-1) : '');
       }
       for (const p of c.people) if (p.role === 'interviewer') for (const email of p.emails) add('interviewer', email);
@@ -211,6 +217,7 @@ async function readNewest(key) {
   for (let offset = 0, pages = 0; pages < 100; pages++) {
     const page = await listConversations(key, { offset });
     const fresh = remember(page.conversations);
+    noteTotal(page);
     setSetting('metaview_checked_at', now());
     offset += page.received;
     // The first look at a workspace is also the first page of its history.
@@ -228,6 +235,7 @@ async function readHistoryPage(key) {
   const offset = Number(getSetting('metaview_history_offset', '0')) || 0;
   const page = await listConversations(key, { offset });
   remember(page.conversations);
+  noteTotal(page);
   setSetting('metaview_checked_at', now());
   tx(() => {
     setSetting('metaview_history_offset', String(offset + page.received));

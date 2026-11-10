@@ -875,7 +875,8 @@ const savedNote = (call) => (call.note_id && call.application_id
  */
 function renamedFor(call, name) {
   const before = candidateName(call.candidate_id);
-  const automatic = call.title === UNTITLED || (before && call.title === `Call with ${before}`);
+  // "Call with +16475550100" is automatic too: the call came from somewhere that knew the person only by their number.
+  const automatic = call.title === UNTITLED || (before && call.title === `Call with ${before}`) || /^Call with \+?[\d\s().-]{7,}$/.test(call.title);
   const speakers = json(call.speakers, {});
   for (const [number, speaker] of Object.entries(speakers)) {
     if (speaker === before || (name && speaker === 'Candidate')) speakers[number] = name || 'Candidate';
@@ -928,6 +929,10 @@ function notesWithin(notes, where) {
   return `${kept.slice(0, Math.max(kept.lastIndexOf('\n'), 1)).trimEnd()}${ending}`;
 }
 
+/** Speakers as they are kept for a call on a candidate: one known only as "Candidate" takes that candidate's name. */
+const speakersFor = (speakers, candidate) => (candidate
+  ? Object.fromEntries(Object.entries(speakers).map(([number, name]) => [number, name === 'Candidate' ? candidate : name])) : speakers);
+
 /**
  * Keep a conversation recorded elsewhere as a call. Resolves to the new call's id.
  * @param call { source, where, title, withName, turns, speakers, notes, noTranscript, durationMs, externalUrl,
@@ -940,6 +945,8 @@ function notesWithin(notes, where) {
  *                 Nobody confirmed anything in The Book, so there is no name and no time beside it.
  *   createdBy     the user of The Book the call belongs to
  *   applicationId the application to put it on, if any. It is said on that candidate's history, as done by `addedBy`.
+ *                 A speaker known only as "Candidate" is then given that candidate's name, as when a call is
+ *                 put on a candidate later (see renamedFor).
  *   then          run with the new call's id before anything is final, so the caller's own record of the call is
  *                 written with it or not at all
  */
@@ -949,13 +956,14 @@ export function addOutsideCall({ source, where, title = null, withName = null, t
     const app = applicationFor(applicationId);
     const t = now();
     const kept = notesWithin(notes, where);
+    const named = speakersFor(speakers, app?.candidate_name);
     const id = q.insert(
       `INSERT INTO calls (recording_id, title, status, error, source, duration_ms, transcript, transcript_source, speakers, notes, notes_at, notes_auto,
          external_url, took_place_at, application_id, candidate_id, consent_wording, created_by, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       crypto.randomBytes(16).toString('hex'), title || (app ? `Call with ${app.candidate_name}` : withName ? `Call with ${withName}` : UNTITLED),
       turns.length ? 'ready' : 'uploaded', turns.length ? null : noTranscript, source, durationMs > 0 ? Math.round(durationMs) : null,
-      turns.length ? JSON.stringify(turns) : null, turns.length ? source : null, JSON.stringify(speakers), kept, kept ? t : null, kept ? 1 : 0,
+      turns.length ? JSON.stringify(turns) : null, turns.length ? source : null, JSON.stringify(named), kept, kept ? t : null, kept ? 1 : 0,
       externalUrl, tookPlaceAt, app?.id ?? null, app?.candidate_id ?? null, wording, createdBy, t, t);
     if (app) logCall(app.id, addedBy, historyLine({ source, duration_ms: durationMs }, 'added'));
     then?.(id);
@@ -972,7 +980,7 @@ export function fillOutsideCall(id, { where, turns = null, speakers = {}, notes 
   if (!call) return;
   if (turns?.length) {
     q.run(`UPDATE calls SET transcript = ?, transcript_source = ?, speakers = ?, status = 'ready', error = NULL, updated_at = ? WHERE id = ? AND transcript IS NULL`,
-      JSON.stringify(turns), call.source, JSON.stringify(speakers), now(), id);
+      JSON.stringify(turns), call.source, JSON.stringify(speakersFor(speakers, candidateName(call.candidate_id))), now(), id);
   }
   const kept = notesWithin(notes, where);
   if (kept) q.run('UPDATE calls SET notes = ?, notes_at = ?, notes_auto = 1, notes_blind = 0, notes_error = NULL, updated_at = ? WHERE id = ? AND notes IS NULL', kept, now(), now(), id);

@@ -14,11 +14,12 @@ export const tabOfCall = (call) => (call?.source === 'metaview' ? 'metaview' : '
 // ---- words for a call -----------------------------------------------------------------------------------------------------
 /**
  * How a call came to be in The Oracle and who made it: "Recorded by Alex", "Uploaded by Alex", "Brought in from
- * Metaview by Alex". A Metaview call that The Book brought in by itself has nobody to name. A call from an earlier
+ * Metaview". A Metaview call names nobody: the person it belongs to in The Book is whoever took the call, which is
+ * often not the person who brought it in, and many are brought in by The Book itself. A call from an earlier
  * version that came in some other way is simply a recorded call.
  */
 export function madeBy(call) {
-  if (call.source === 'metaview') return call.created_by_name ? `Brought in from Metaview by ${call.created_by_name}` : 'Brought in from Metaview';
+  if (call.source === 'metaview') return 'Brought in from Metaview';
   return `${call.source === 'uploaded' ? 'Uploaded' : 'Recorded'} by ${call.created_by_name || 'someone who has left'}`;
 }
 
@@ -63,6 +64,8 @@ export const whoseCall = (call) => (call.match ? 'matched' : call.suggestions?.l
 
 /** Why The Book thinks a Metaview call belongs to a candidate. */
 export const MATCHED_BY = { email: 'Same email address', phone: 'Same phone number', name: 'Same name', chosen: 'Chosen by your team' };
+/** Why somebody is only offered for a call. By name that is a first name or part of a name: the whole name would have matched. */
+export const OFFERED_BY = { ...MATCHED_BY, name: 'Similar name' };
 
 const count = (n) => Number(n || 0).toLocaleString('en-CA');
 /**
@@ -76,11 +79,14 @@ export function readingLine(status) {
     : `Reading your Metaview history: ${count(status.known)} ${status.known === 1 ? 'call' : 'calls'} so far`;
 }
 
-/** How much of what is in Metaview The Book holds: "The Book knows about 2,100 Metaview calls. 38 of them are in The Book." */
+/**
+ * How much of what is in Metaview The Book holds: "The Book can see 2,100 Metaview calls. 38 of them have been
+ * brought in." ("Knows about 50 calls" would read as "roughly 50".)
+ */
 export function knownLine(status) {
   const known = Number(status?.known || 0), here = Number(status?.in_the_book || 0);
   if (!known) return 'The Book has not found any calls in Metaview yet.';
-  const inTheBook = known === 1 ? (here ? 'It is in The Book.' : 'It is not in The Book yet.')
-    : here === 0 ? 'None of them are in The Book yet.' : here >= known ? 'All of them are in The Book.' : `${count(here)} of them ${here === 1 ? 'is' : 'are'} in The Book.`;
-  return `The Book knows about ${count(known)} Metaview ${known === 1 ? 'call' : 'calls'}. ${inTheBook}`;
+  const broughtIn = known === 1 ? (here ? 'It has been brought in.' : 'It has not been brought in yet.')
+    : here === 0 ? 'None of them have been brought in yet.' : here >= known ? 'All of them have been brought in.' : `${count(here)} of them ${here === 1 ? 'has' : 'have'} been brought in.`;
+  return `The Book can see ${count(known)} Metaview ${known === 1 ? 'call' : 'calls'}. ${broughtIn}`;
 }

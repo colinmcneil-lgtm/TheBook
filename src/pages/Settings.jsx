@@ -135,6 +135,9 @@ function MetaviewCard({ metaview }) {
       </div>
     </form>
   );
+  const autoBox = (hint) => (
+    <Checkbox checked={Boolean(status.auto)} disabled={savingAuto} onChange={(e) => setAuto(e.target.checked)} label="Bring in calls by themselves when they clearly belong to one candidate" hint={hint} />
+  );
   const reading = readingLine(status);
   return (
     <Card id="metaview" className="scroll-mt-4">
@@ -149,6 +152,8 @@ function MetaviewCard({ metaview }) {
             <ol className="list-decimal space-y-1.5 pl-5">{METAVIEW_STEPS.map((step, i) => <li key={i}>{step}</li>)}</ol>
             {keyForm('Metaview API key', 'Connect')}
             <p className="text-[13px] text-stone-500">The key belongs to the person who makes it, and The Book sees the Metaview calls that person can see. Make it from an account that sees the whole team’s calls.</p>
+            {/* Decided before connecting, because bringing calls in starts as soon as the key is accepted. */}
+            {autoBox('Calls from the last two weeks, and new ones, that an email address or a phone number ties to one candidate come in without anyone opening them, up to a daily limit (50, unless that was changed where the app is hosted). Untick this first if you would rather bring calls in yourself.')}
           </>
         ) : (
           <>
@@ -159,8 +164,7 @@ function MetaviewCard({ metaview }) {
               {reading && <p className="mt-1 flex items-center gap-2 text-[13px] text-stone-600" role="status"><LoaderCircle className="size-3.5 shrink-0 animate-spin text-brand-600" />{reading}.</p>}
             </div>
             {status.error && <Notice tone="warn"><span className="font-medium">Metaview could not be read the last time The Book looked.</span> {status.error}</Notice>}
-            <Checkbox checked={Boolean(status.auto)} disabled={savingAuto} onChange={(e) => setAuto(e.target.checked)} label="Bring in calls by themselves when they clearly belong to one candidate"
-              hint="Other calls wait on the Metaview tab of The Oracle until somebody opens them or chooses their candidate." />
+            {autoBox('Other calls wait on the Metaview tab of The Oracle until somebody opens them or chooses their candidate.')}
             <div className="flex flex-wrap gap-2">
               <Button icon={RefreshCw} busy={metaview.looking} onClick={metaview.look}>Look for new calls now</Button>
               {status.source !== 'server' && <Button variant="danger" busy={disconnecting} onClick={disconnect}>Disconnect</Button>}

@@ -16,7 +16,9 @@
 // Everybody in it is invented. Phone numbers are from the range kept for fiction (555-01xx) and addresses end in
 // ".example". There are about 130 conversations, the newest twenty minutes old and one roughly every nine hours
 // before that, among them: people known only by a first name, people with a phone number and no address, calls
-// with two interviewers, a few with no transcript, one over an hour long, phone calls and video meetings.
+// with two interviewers, a few with no transcript, one over an hour long, phone calls and video meetings, and one
+// whose caller Metaview has no name for, so that their phone number stands where the name would be (the real
+// service was seen to do this for about one call in twenty-five).
 //
 // Every request is kept in `requests`, so a test can prove that nothing but the read-only tools was ever called.
 // Faults can be switched on for the next request (`faults.push('429')`) or for all of them (`fault = '500'`):
@@ -64,7 +66,7 @@ export const INTERVIEWERS = [
 export const CLIENT_CONTACT = { name: 'Maya Okonkwo', email: 'maya@kestrel.example', phone: null };
 
 /** Which conversations are the unusual ones, by their place in the list (0 is the newest). */
-export const SPECIAL = { hourLong: 20, noTranscript: [7, 58, 101] };
+export const SPECIAL = { hourLong: 20, noTranscript: [7, 58, 101], numberForName: 64 };
 
 const clockOf = (seconds) => {
   const s = Math.floor(seconds), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, '0');
@@ -88,7 +90,7 @@ function transcriptOf(c) {
     const start = t * each + 1, end = start + each * (t % 5 === 4 ? 1.2 : 0.9); // every fifth turn runs on into the next one
     const asking = t % 2 === 0;
     const who = asking ? c.interviewers[(t / 2) % c.interviewers.length] : c.other;
-    const words = asking ? `${t === 0 ? `Hi ${c.other.shown.split(' ')[0]}, ` : ''}${QUESTIONS[(t / 2) % QUESTIONS.length]}` : ANSWERS[((t - 1) / 2) % ANSWERS.length];
+    const words = asking ? `${t === 0 ? `Hi ${/^\+/.test(c.other.shown) ? 'there' : c.other.shown.split(' ')[0]}, ` : ''}${QUESTIONS[(t / 2) % QUESTIONS.length]}` : ANSWERS[((t - 1) / 2) % ANSWERS.length];
     lines.push(`${who.shown ?? who.name} (${asking ? 'Interviewer' : c.candidate ? 'Candidate' : 'Contact'}) @${clockOf(start)}-${clockOf(end)}: ${words}`);
     // One turn in a long call is written over two lines, as dictated notes sometimes are.
     if (c.minutes > 60 && t === 5) lines.push('I should add: the team is six people now.');
@@ -110,11 +112,12 @@ export function makeConversations(count = 130, now = Date.now()) {
     const person = PEOPLE[i % PEOPLE.length];
     const noCandidate = i % 17 === 9;                        // a meeting with a client, nobody being interviewed
     const firstOnly = !noCandidate && i % 10 === 3;          // Metaview only knows a first name
-    const phoneOnly = firstOnly || i % 4 === 1, emailOnly = !phoneOnly && i % 4 === 2;
+    const numberForName = i === SPECIAL.numberForName;       // Metaview has no name at all: the number stands in for it
+    const phoneOnly = firstOnly || numberForName || i % 4 === 1, emailOnly = !phoneOnly && i % 4 === 2;
     const video = i % 3 === 0;
     const interviewers = i % 13 === 5 ? [INTERVIEWERS[i % 4], INTERVIEWERS[(i + 1) % 4]] : [INTERVIEWERS[i % 4]];
     const other = noCandidate ? { ...CLIENT_CONTACT, shown: CLIENT_CONTACT.name, emails: [CLIENT_CONTACT.email], phones: [] }
-      : { ...person, shown: firstOnly ? person.first : person.name, emails: phoneOnly ? [] : [person.email], phones: emailOnly ? [] : [person.phone] };
+      : { ...person, shown: numberForName ? person.phone : firstOnly ? person.first : person.name, emails: phoneOnly ? [] : [person.email], phones: emailOnly ? [] : [person.phone] };
     const started = new Date(now - 20 * 60000 - i * 9 * HOUR - ((i * 37) % 50) * 60000);
     const c = {
       index: i, id: 880000000 + (count - i) * 137, started, has_transcript: !SPECIAL.noTranscript.includes(i),

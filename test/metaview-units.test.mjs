@@ -8,7 +8,7 @@ import { tempDir } from './oracle-helpers.mjs';
 // The modules open the database when they load, so they are pointed at a folder of their own first.
 process.env.DATA_DIR = tempDir('metaview-units');
 process.env.METAVIEW_API_URL = 'http://127.0.0.1:9/mcp';   // nothing listens here: no test in this file may reach Metaview
-const { messagesIn, startTime, metaviewPage, readConversation, transcriptTurns, askMetaview, READ_ONLY } = await import('../server/metaview-client.js');
+const { messagesIn, startTime, metaviewPage, readConversation, transcriptTurns, onlyANumber, askMetaview, READ_ONLY } = await import('../server/metaview-client.js');
 const { nameTokens, phoneTail, decide, fold } = await import('../server/match.js');
 const { seal, unseal } = await import('../server/secret.js');
 test.after(() => fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }));
@@ -86,6 +86,11 @@ test('a conversation from the list: the fields are lists that may be empty or mi
   // A number with nobody to give it to is still kept, to match by.
   const numberOnly = readConversation({ id: 6, fields: { 'default:start_time': [{ value: '2026-11-09 22:00:00+00:00' }], 'default:phone_number': [{ value: '+14165550100' }] } });
   assert.deepEqual(numberOnly.people, [{ name: '', role: 'candidate', emails: [], phones: ['+14165550100'] }]);
+  // Somebody Metaview has no name for is called by their number there. It stays what they are called, and is their number too.
+  const unnamed = readConversation({ ...raw, fields: { ...raw.fields, 'default:candidate': [who('c9', '+14165550123')], 'default:contact': [], 'default:phone_number': [] } });
+  assert.deepEqual(unnamed.people[0], { name: '+14165550123', role: 'candidate', emails: [], phones: ['+14165550123'] });
+  for (const number of ['+14165550123', '(416) 555-0123', '416.555.0123', ' 4165550123 ']) assert.equal(onlyANumber(number), true, number);
+  for (const name of ['Dana', 'Dana 2', 'R2-D2', '12345', '', null, 'x4165550123']) assert.equal(onlyANumber(name), false, String(name));
   // Without a number of its own or a start time there is nothing to file it under.
   for (const bad of [null, {}, { id: 'abc', fields: raw.fields }, { id: 7, fields: {} }, { id: 7, fields: { 'default:start_time': 'soon' } }, { id: -1, fields: raw.fields }]) assert.equal(readConversation(bad), null);
   // Text from outside is tidied and cut: no line breaks, nothing endless.
@@ -107,6 +112,7 @@ test('a transcript\'s lines become turns with seconds and named speakers', () =>
     ' (Candidate) @1:02:03-1:02:09: No name was given for this one.',
     'Priya Nair (Interviewer) @1:15:00-1:14:00:   ',                      // nothing was said: not a turn
     'Priya Nair (Interviewer) @75:30-75:20: Minutes can run past sixty.',
+    '+14165550123 (Candidate) @75:40-75:50: A number is not a name.',     // Metaview knew this caller only by their number
   ].join('\r\n'));
   assert.deepEqual(speakers, { 0: 'Priya Nair', 1: 'Dana Whitlock', 2: 'Dana (Dee) Whitlock', 3: 'Candidate' });
   assert.deepEqual(turns, [
@@ -116,6 +122,7 @@ test('a transcript\'s lines become turns with seconds and named speakers', () =>
     { speaker: 2, start: 3598, end: 3607, text: 'That is the hour.' },
     { speaker: 3, start: 3723, end: 3729, text: 'No name was given for this one.' },
     { speaker: 0, start: 4530, end: 4530, text: 'Minutes can run past sixty.' },   // an end before its start is not believed
+    { speaker: 3, start: 4540, end: 4550, text: 'A number is not a name.' },       // called by their part in the call, like anybody with no name
   ]);
   // Nothing, or text that is not a transcript, gives no turns rather than a guess.
   for (const empty of ['', null, undefined, 'Just some words with no speaker.\nAnd some more.']) assert.deepEqual(transcriptTurns(empty), { turns: [], speakers: {} });

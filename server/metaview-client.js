@@ -180,6 +180,12 @@ export function metaviewPage(value) {
   } catch { return null; }
 }
 
+/**
+ * Metaview calls somebody it has no name for by their phone number ("+16475550100" where the name would be). That
+ * is how the real service shows a caller it does not know (seen in about one call in twenty-five).
+ */
+export const onlyANumber = (name) => /^\+?[\d\s().-]{7,}$/.test(String(name ?? '').trim());
+
 const person = (entry, role) => ({
   name: line(entry.details?.name || entry.label, 120), role,
   emails: (Array.isArray(entry.details?.emails) ? entry.details.emails : []).map((e) => line(e, 200).toLowerCase()).filter((e) => /^[^\s@]+@[^\s@]+$/.test(e)).slice(0, 5),
@@ -203,6 +209,8 @@ export function readConversation(raw) {
     seen.add(key);
     const who = person(entry, role);
     if (!who.name && !who.emails.length && !who.phones.length) return;
+    // A "name" that is really their number is kept as what to call them, and counts as their number too.
+    if (onlyANumber(who.name) && !who.phones.includes(who.name)) who.phones = [...who.phones, who.name].slice(0, 5);
     // "Everybody on the call" repeats the candidates and the interviewers. Should it ever name one of them under
     // another identity, they are still the same person: an interviewer must never turn up a second time as somebody else.
     if (role === 'other' && people.some((p) => (who.name && p.name === who.name) || p.emails.some((e) => who.emails.includes(e)))) return;
@@ -238,7 +246,8 @@ const MAX_SPEAKERS = 40;
 /**
  * Metaview's transcript (one string, one line per turn) as the turns The Oracle keeps, [{ speaker, start, end, text }]
  * with times in seconds, and the name of each speaker number. A line that is not the start of a turn carries on the
- * turn before it. Somebody Metaview has no name for is called by their part in the call ("Candidate").
+ * turn before it. Somebody Metaview has no name for, or only a phone number for, is called by their part in the
+ * call ("Candidate"): The Oracle puts the candidate's own name there once the call is on a candidate.
  */
 export function transcriptTurns(transcript) {
   const turns = [], names = [];
@@ -251,7 +260,8 @@ export function transcriptTurns(transcript) {
       if (current) current.text += (current.text ? ' ' : '') + text;
       continue;
     }
-    const name = line(m[1], 60) || line(m[2], 60);
+    const said = line(m[1], 60);
+    const name = (onlyANumber(said) ? '' : said) || line(m[2], 60);
     let speaker = names.indexOf(name);
     if (speaker < 0) speaker = names.length < MAX_SPEAKERS ? names.push(name) - 1 : MAX_SPEAKERS - 1;
     const start = secondsOf(m[3]);
