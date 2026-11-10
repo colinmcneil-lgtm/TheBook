@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { CircleCheck, LoaderCircle, Mic, Pause, Play, Square, TriangleAlert, WifiOff, X } from 'lucide-react';
 import { useApp } from '../state.jsx';
@@ -62,7 +62,7 @@ export function RecorderProvider({ children }) {
   const recovering = useRef(null);
   const stoppedShort = useRef(false); // a call ended in this page without reaching the server (as opposed to the page closing)
   const [state, setState] = useState('idle'); // idle | starting | recording | paused | stopping
-  const [session, setSession] = useState(null); // { callId, title, subject: { name, job_title } | null }
+  const [session, setSession] = useState(null); // { callId, title, subject: { name, job_title } | null, eventKey: the calendar event it is for | null }
   const [waiting, setWaiting] = useState(0); // parts of the recording waiting for the connection to come back
   const [callAudio, setCallAudio] = useState(null); // { surface } while the other side of the call is being recorded
   const [note, setNote] = useState(null); // { tone: 'info' | 'warn', text } shown with the recording controls
@@ -120,7 +120,7 @@ export function RecorderProvider({ children }) {
     return () => window.removeEventListener('beforeunload', warn);
   }, [live, state]);
 
-  const start = useCallback(async ({ consent, title, application_id, subject }) => {
+  const start = useCallback(async ({ consent, title, application_id, subject, event_key }) => {
     if (rec.current) throw new Error('A call is already being recorded.');
     setState('starting');
     setNote(null);
@@ -131,8 +131,8 @@ export function RecorderProvider({ children }) {
       const earlier = await (recovering.current || (ChunkUploader.interrupted(user.id) ? recover() : null));
       if (earlier?.busy) throw Object.assign(new Error('Busy'), { name: 'BusyError' });
       if (earlier?.failed) throw Object.assign(new Error('An earlier recording has not finished saving yet. Check your connection and try again in a moment.'), { status: 409 });
-      const made = await r.start({ consent, title, application_id, userId: user.id });
-      setSession({ callId: made.call_id, title: title || '', subject: subject || null });
+      const made = await r.start({ consent, title, application_id, event_key, userId: user.id });
+      setSession({ callId: made.call_id, title: title || '', subject: subject || null, eventKey: event_key || null });
       // The server counts a call's length from the moment it started, pauses included, so this does the same.
       startedAt.current = Date.now();
       api.get('/oracle/status').then((s) => setLimitMinutes(s?.maxRecordingMinutes > 0 ? s.maxRecordingMinutes : null)).catch(() => {});
@@ -270,31 +270,18 @@ export const sessionLabel = (session) => session?.title || (session?.subject?.na
 
 /**
  * The strip across the top of the workspace. While a call is being recorded it shows the red dot, the time, the level
- * and the controls on every page; after an interrupted recording it says what happened to it.
+ * and the controls on every page; after an interrupted recording it says what happened to it. (The layout measures
+ * everything that sits across the top, this strip included, so drawers and dialogs open below it.)
  */
 export function RecorderStrip() {
   const { state, live, session, waiting, recovered, limitMinutes, minutesLeft, pause, resume, stop, retryRecovery, dismissRecovered } = useRecorder();
-  const strip = useRef(null);
-  const shown = live || state === 'stopping' || Boolean(recovered);
-
-  // Drawers and dialogs cover the whole window; they start below the strip so it is never hidden.
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    if (!shown || !strip.current) { root.style.removeProperty('--recording-bar'); return undefined; }
-    const measure = () => root.style.setProperty('--recording-bar', `${strip.current.offsetHeight}px`);
-    measure();
-    const watcher = new ResizeObserver(measure);
-    watcher.observe(strip.current);
-    return () => { watcher.disconnect(); root.style.removeProperty('--recording-bar'); };
-  }, [shown, live, state, recovered]);
-
   if (live || state === 'stopping') {
     const paused = state === 'paused';
     // Once Stop has been pressed nothing is being recorded any more: the call is only waiting to be sent.
     const offline = state === 'stopping' ? 'Connection lost. The call will be saved when it is back.' : 'Connection lost. Still recording.';
     const button = 'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-colors';
     return (
-      <div ref={strip} role="region" aria-label="Call recording" className={cx('no-print flex h-11 shrink-0 items-center gap-3 px-3 text-sm text-white sm:px-4', paused ? 'bg-stone-800' : 'bg-red-700')}>
+      <div role="region" aria-label="Call recording" className={cx('no-print flex h-11 shrink-0 items-center gap-3 px-3 text-sm text-white sm:px-4', paused ? 'bg-stone-800' : 'bg-red-700')}>
         {/* The dot, the word and the time are together the way back to The Oracle from any page. */}
         <Link to="/oracle" title="Open The Oracle" className="flex shrink-0 items-center gap-2.5 rounded-md hover:opacity-90">
           <span className="relative flex size-2.5 shrink-0" aria-hidden="true">
@@ -327,7 +314,7 @@ export function RecorderStrip() {
     // Saved, but not all of it: said in amber, because the recruiter may want to call the candidate back or start again.
     const short = recovered.broke || recovered.lost;
     return (
-      <div ref={strip} role="status" className={cx('no-print flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2.5 text-sm', short ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-brand-200 bg-brand-50 text-brand-950')}>
+      <div role="status" className={cx('no-print flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2.5 text-sm', short ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-brand-200 bg-brand-50 text-brand-950')}>
         {short ? <TriangleAlert className="size-4 shrink-0 text-amber-700" /> : <CircleCheck className="size-4 shrink-0 text-brand-700" />}
         <span className="min-w-0 flex-1 basis-64">
           {recovered.broke ? 'Your browser stopped recording by itself. The call has been saved up to that point. To carry on, start a new recording.'
@@ -343,7 +330,7 @@ export function RecorderStrip() {
   }
   if (recovered?.failed) {
     return (
-      <div ref={strip} role="alert" className="no-print flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-950">
+      <div role="alert" className="no-print flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-950">
         <TriangleAlert className="size-4 shrink-0 text-amber-700" />
         <span className="min-w-0 flex-1 basis-64">The end of a call you recorded has not reached The Book yet. It is kept safe in this browser: do not clear your browsing data until it has been saved.</span>
         <button type="button" onClick={retryRecovery} className="font-medium text-amber-900 underline underline-offset-2 hover:text-amber-950">Try again now</button>
@@ -353,11 +340,11 @@ export function RecorderStrip() {
   return null;
 }
 
-/** A round microphone badge, used wherever a call stands in for a person's photo. */
-export function MicBadge({ size = 32, className }) {
+/** A round microphone badge, used wherever a call stands in for a person's photo. A phone call passes a phone as its `icon`. */
+export function MicBadge({ size = 32, className, icon: Icon = Mic }) {
   return (
     <span className={cx('inline-flex shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700 ring-1 ring-brand-100 ring-inset', className)} style={{ width: size, height: size }} aria-hidden="true">
-      <Mic style={{ width: size * 0.5, height: size * 0.5 }} />
+      <Icon style={{ width: size * 0.5, height: size * 0.5 }} />
     </span>
   );
 }

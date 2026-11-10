@@ -1,18 +1,31 @@
-import React, { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Check, Copy, Download, Plus, UserPlus, Trash2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { Check, ChevronDown, Copy, Download, Plus, UserPlus, Trash2 } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, ago, fmtDate } from '../lib.js';
 import { Checkbox, Avatar, Badge, Button, Card, CardHeader, Field, Input, Modal, Page, Tabs, Textarea, useAction, useToast } from '../ui.jsx';
 import { ApproveForm, InviteForm } from '../components/Forms.jsx';
+import { Notice } from '../oracle/bits.jsx';
+import { PHONE_SETTINGS, settingNames, usePhone } from '../oracle/phone.jsx';
+import { showNumber } from '../oracle/calls.js';
+
+/** A link such as /settings?tab=account#phone lands on that card, not at the top of the page. */
+function useScrollToHash(ready) {
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (!hash || !ready) return;
+    document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' });
+  }, [hash, ready]);
+}
 
 function Account() {
-  const { user } = useApp();
+  const { user, isAgency } = useApp();
   const toast = useToast();
   const [form, setForm] = useState({ current: '', next: '' });
   const [save, busy] = useAction(async () => { await api.post('/me/password', form); setForm({ current: '', next: '' }); toast('Password changed'); });
   return (
-    <Card className="max-w-lg">
+    <div className="max-w-lg space-y-6">
+    <Card>
       <CardHeader title="Your account" />
       <div className="space-y-4 p-4">
         <div className="flex items-center gap-3">
@@ -26,12 +39,173 @@ function Account() {
         </form>
       </div>
     </Card>
+    {/* Calls and calendars belong to the agency's own people: a client's hiring team has neither. */}
+    {isAgency && <MobileCard />}
+    {isAgency && <CalendarLinkCard />}
+    </div>
+  );
+}
+
+/** The signed-in person's own mobile, and the PIN that goes with ringing The Book from it. */
+function MobileCard() {
+  const { status, statusError, reloadStatus } = usePhone();
+  const toast = useToast();
+  const [number, setNumber] = useState(null); // null until typed in: the box then shows what is saved
+  const [pin, setPin] = useState('');
+  const [problem, setProblem] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useScrollToHash(Boolean(status));
+  const saved = status?.my_phone ? showNumber(status.my_phone) : '';
+  const shown = number ?? saved;
+  const send = async (body, done) => {
+    setProblem(null);
+    setBusy(true);
+    try {
+      await api.put('/me/phone', body);
+      await reloadStatus();
+      setNumber(null);
+      setPin('');
+      toast(done);
+    } catch (err) { setProblem(err.status ? err.message : 'The Book could not be reached. Check your connection and try again.'); }
+    setBusy(false);
+  };
+  // The PIN is only sent when one was typed, so saving a new number leaves the PIN as it is.
+  const save = () => send({ phone: shown.trim(), ...(pin ? { pin } : {}) }, shown.trim() ? 'Mobile number saved' : 'Mobile number removed');
+  return (
+    <Card id="phone" className="scroll-mt-4">
+      <CardHeader title="Your mobile number" action={status && <Badge tone={status.my_phone ? 'green' : 'amber'}>{status.my_phone ? 'Saved' : 'Not saved'}</Badge>} />
+      <form className="space-y-4 p-4" onSubmit={(e) => { e.preventDefault(); save(); }}>
+        {!status && statusError && <Notice tone="bad">Your phone settings could not be loaded. {statusError}</Notice>}
+        {status && !status.configured && <Notice>Phone calls are not connected to this workspace yet. You can save your number now and it is used as soon as they are.</Notice>}
+        <Field label="Mobile number" hint="The phone The Book rings when you press Call, before it connects you to the candidate. It is also the only phone that can place calls by ringing The Book’s number.">
+          <Input type="tel" inputMode="tel" autoComplete="tel" value={shown} onChange={(e) => setNumber(e.target.value)} placeholder="(416) 555 0123" className="max-sm:!h-11 max-sm:!text-base" />
+        </Field>
+        <Field label={status?.my_pin_set ? 'New PIN' : 'PIN'} hint={`4 to 6 digits. You key it in when you ring The Book’s number from your mobile to place a call without the app, so nobody else can place calls with your phone.${status?.my_pin_set ? ' Leave this empty to keep the PIN you have.' : ''}`}>
+          <Input type="password" inputMode="numeric" autoComplete="off" pattern="[0-9]{4,6}" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} placeholder={status?.my_pin_set ? 'A PIN is set' : 'Choose a PIN'} className="max-w-40 max-sm:!h-11 max-sm:!text-base" />
+        </Field>
+        {problem && <Notice tone="bad">{problem}</Notice>}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="submit" variant="primary" busy={busy} disabled={!status || (shown.trim() === saved && !pin)}>Save</Button>
+          {status?.my_pin_set && <Button disabled={busy} onClick={() => send({ phone: status.my_phone || '', pin: '' }, 'PIN removed')}>Remove PIN</Button>}
+          {status?.my_phone && <Button variant="danger" disabled={busy} onClick={() => send({ phone: '' }, 'Mobile number removed')}>Remove number</Button>}
+        </div>
+        {status?.configured && status.number_display && (
+          <p className="text-[13px] leading-relaxed text-stone-500">The Book’s own number is <span className="tabular font-medium text-stone-700">{status.number_display}</span>. Candidates see it when you call them, and it is the number you ring to place a call from your phone. <Link to="/oracle" className="font-medium text-brand-700 hover:underline">How that works</Link></p>
+        )}
+      </form>
+    </Card>
+  );
+}
+
+const PROVIDERS = { google: 'Google Calendar', outlook: 'Outlook', icloud: 'Apple Calendar', other: 'Calendar link' };
+const strong = (text) => <b className="font-medium text-stone-900">{text}</b>;
+// Where each calendar keeps its private link. Checked against each provider's help pages, not against a live account.
+const HOW_TO = [
+  {
+    name: 'Google Calendar',
+    steps: [
+      <>On a computer, open Google Calendar, click the gear and choose {strong('Settings')}.</>,
+      <>On the left, under {strong('Settings for my calendars')}, click your calendar’s name.</>,
+      <>Scroll to {strong('Integrate calendar')} and copy the link under {strong('Secret address in iCal format')}.</>,
+    ],
+    note: 'On a work account, if there is no secret address, your Google Workspace admin has switched it off and is the person to ask.',
+  },
+  {
+    name: 'Outlook',
+    steps: [
+      <>In Outlook on the web, click the gear, then {strong('Calendar')}, then {strong('Shared calendars')}.</>,
+      <>Under {strong('Publish a calendar')}, choose your calendar and {strong('Can view all details')}, then click {strong('Publish')}.</>,
+      <>Click the {strong('ICS')} link that appears and choose {strong('Copy link')}.</>,
+    ],
+    note: 'If “Publish a calendar” is missing, your IT admin has switched publishing off. Outlook’s link usually leaves out who was invited, so you may have to choose the candidate for an event yourself.',
+  },
+  {
+    name: 'Apple Calendar',
+    steps: [
+      <>Open {strong('icloud.com/calendar')} and sign in (or on an iPhone: Calendar, then Calendars).</>,
+      <>Open the sharing options beside your calendar (the {strong('i')} on an iPhone) and switch on {strong('Public Calendar')}.</>,
+      <>Copy the link. It starts with webcal://, which is fine.</>,
+    ],
+    note: 'Anyone who has an Apple public link can read that calendar, so paste it here and nowhere else.',
+  },
+];
+
+/** The signed-in person's calendar link: paste it, see whether it is being read, remove it. The link is never shown again. */
+function CalendarLinkCard() {
+  const { version, bump } = useApp();
+  const toast = useToast();
+  const [status, setStatus] = useState(null);
+  const [link, setLink] = useState('');
+  const [problem, setProblem] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.get('/calendar/status').then(setStatus).catch((err) => setProblem(err.status ? err.message : 'The Book could not be reached. Check your connection and try again.')); }, [version]);
+  useScrollToHash(Boolean(status));
+  const connect = async () => {
+    setProblem(null);
+    setBusy(true);
+    try {
+      const made = await api.put('/calendar/link', { url: link.trim() });
+      setLink('');
+      toast(`Calendar connected. ${made.events_today === 1 ? '1 event' : `${made.events_today} events`} today.`);
+      bump();
+    } catch (err) { setProblem(err.status ? err.message : 'The Book could not be reached. Check your connection and try again.'); }
+    setBusy(false);
+  };
+  const [remove, removing] = useAction(async () => {
+    if (!window.confirm('Remove your calendar link? Your day in The Oracle then shows only the interviews scheduled in The Book. Calls already recorded are kept.')) return;
+    await api.del('/calendar/link');
+    toast('Calendar link removed');
+    bump();
+  });
+  return (
+    <Card id="calendar" className="scroll-mt-4">
+      <CardHeader title="Your calendar" action={status && <Badge tone={!status.connected ? 'amber' : status.error ? 'red' : 'green'}>{!status.connected ? 'Not connected' : status.error ? 'Not being read' : 'Connected'}</Badge>} />
+      <div className="space-y-4 p-4">
+        <p className="text-sm leading-relaxed text-stone-600">
+          Paste your calendar’s private link and your day shows in The Oracle, with a reminder when a call you added is about to start. The link lets The Book read your calendar and nothing else. It is kept on the server and never shown again, to you or anyone.
+        </p>
+        {status?.connected && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-stone-50 px-3 py-2.5 text-sm">
+            <span className="min-w-0 flex-1 basis-48">
+              <span className="block font-medium text-stone-900">{PROVIDERS[status.provider] || PROVIDERS.other}</span>
+              <span className="block text-[13px] text-stone-500">{status.last_read_at ? `Last read ${ago(status.last_read_at)}` : 'Not read yet'}</span>
+            </span>
+            <Button size="sm" variant="danger" icon={Trash2} busy={removing} onClick={remove}>Remove</Button>
+          </div>
+        )}
+        {status?.connected && status.error && <Notice tone="warn"><span className="font-medium">The last read did not work.</span> {status.error}</Notice>}
+        <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); connect(); }}>
+          <Field label={status?.connected ? 'Replace it with another link' : 'Calendar link'} hint="It is read once before it is accepted, so you know straight away that it works.">
+            <Input type="url" inputMode="url" autoComplete="off" spellCheck={false} value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" className="max-sm:!h-11 max-sm:!text-base" />
+          </Field>
+          {problem && <Notice tone="bad">{problem}</Notice>}
+          <Button type="submit" variant="primary" busy={busy} disabled={!link.trim()}>{busy ? 'Reading the calendar…' : status?.connected ? 'Replace link' : 'Connect calendar'}</Button>
+        </form>
+        <div className="space-y-2 border-t border-line pt-4">
+          <p className="text-[13px] font-medium text-stone-700">Where to find the link</p>
+          {HOW_TO.map((how) => (
+            <details key={how.name} className="group rounded-lg border border-line">
+              <summary className="flex min-h-10 list-none items-center gap-2 px-3 text-sm font-medium text-stone-800 hover:bg-stone-50 [&::-webkit-details-marker]:hidden">
+                {how.name}<ChevronDown className="ml-auto size-4 text-stone-400 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="space-y-2 border-t border-line px-3 py-3 text-[13px] leading-relaxed text-stone-600">
+                <ol className="list-decimal space-y-1.5 pl-5">{how.steps.map((step, i) => <li key={i}>{step}</li>)}</ol>
+                <p className="text-stone-500">{how.note}</p>
+              </div>
+            </details>
+          ))}
+        </div>
+      </div>
+    </Card>
   );
 }
 
 function AiCard() {
+  const { isAdmin } = useApp();
   const { data: status } = useApi('/jobs/autofill/status');
   const { data: oracle } = useApi('/oracle/status');
+  const { status: phone } = usePhone();
+  useScrollToHash(Boolean(status && phone));
   if (!status) return null;
   const code = (text) => <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">{text}</code>;
   return (
@@ -58,6 +232,36 @@ function AiCard() {
               and each transcript is sent to Claude to write the notes summary and draft submissions{oracle.ai ? '' : <> (the {code('ANTHROPIC_API_KEY')} above)</>}.
               {' '}Without them, calls are still recorded and saved, and a transcript can be pasted in. Both are billed to your own accounts per use.
             </p>
+          </div>
+        )}
+        {phone && (
+          <div id="phone-connection" className="mt-3 scroll-mt-4 space-y-2 border-t border-line pt-3">
+            <p className="flex flex-wrap items-center gap-2 font-medium text-stone-900">
+              Phone calls
+              <Badge tone={phone.configured ? 'green' : 'amber'}>{phone.configured ? 'Connected' : 'Not connected'}</Badge>
+              {phone.configured && <span className="tabular text-[13px] font-normal text-stone-500">{phone.number_display}</span>}
+            </p>
+            <p>
+              Recruiters call candidates through one phone number that belongs to The Book, from the app or by ringing that number from their own mobile. The calls go through Twilio, which rings both phones, records the call and passes the recording to The Oracle. Twilio bills your own account for the number and for each minute.
+            </p>
+            {phone.configured ? (
+              <p>
+                {phone.notice ? 'The other person hears a short notice that the call is recorded before a recorded call is connected.' : 'The spoken notice that a call is recorded is switched off, so recruiters have to say it themselves.'}
+                {' '}Calls can be placed to: {phone.countries?.length ? phone.countries.join(', ') : 'CA, US'}.
+              </p>
+            ) : isAdmin ? (
+              <>
+                <p>To connect them, create a Twilio account, buy a number there, and set these three where the app is hosted, then restart it:</p>
+                <ul className="list-disc space-y-1 pl-5">
+                  <li>{code(PHONE_SETTINGS[0])}: the account’s ID, which starts with AC.</li>
+                  <li>{code(PHONE_SETTINGS[1])}: the account’s secret token, shown next to it in the Twilio console.</li>
+                  <li>{code(PHONE_SETTINGS[2])}: the number you bought, written like +14165550123.</li>
+                </ul>
+                <p>The Book also has to know its own public address ({code('APP_URL')}), because Twilio reports on each call to that address. The README has the steps.</p>
+              </>
+            ) : (
+              <p>An admin can connect them: it needs a Twilio account and three settings ({settingNames(PHONE_SETTINGS)}) where the app is hosted.</p>
+            )}
           </div>
         )}
       </div>

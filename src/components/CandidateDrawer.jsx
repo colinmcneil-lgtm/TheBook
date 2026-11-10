@@ -7,7 +7,9 @@ import { api, url, ago, since, extUrl, photoUrl, fmtDate, fmtDateTime, money, fi
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import ResumeViewer from './ResumeViewer.jsx';
-import { CallStatus, callName, fmtLength } from '../oracle/bits.jsx';
+import { CallStatus, PhoneMark, callName, fmtLength, madeBy } from '../oracle/bits.jsx';
+import { personOf, usePhone } from '../oracle/phone.jsx';
+import { telHref } from '../oracle/calls.js';
 import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal } from './CandidateModals.jsx';
 
 const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
@@ -27,6 +29,10 @@ export default function CandidateDrawer({ id, onClose }) {
 function CandidateView({ data, onClose }) {
   const { isAgency, bump, user } = useApp();
   const toast = useToast();
+  const phone = usePhone();
+  // With the phone line connected, an agency user calls through The Book (their mobile is rung, then the candidate's,
+  // and the call is written up). Otherwise the number is an ordinary link that dials from their own device.
+  const callThroughTheBook = isAgency && phone.status?.configured ? () => phone.openDialer({ person: personOf(data), application_id: data.application.id }) : null;
   const [tab, setTab] = useState('overview');
   const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'edit' | { review } | { scorecard }
   const { application: app, candidate, job, client, stages } = data;
@@ -94,7 +100,14 @@ function CandidateView({ data, onClose }) {
               {candidate.email
                 ? <a href={`mailto:${candidate.email}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Mail className="size-3.5" />{candidate.email}</a>
                 : <span className="inline-flex items-center gap-1.5 text-stone-400"><Mail className="size-3.5" />No email yet</span>}
-              {candidate.phone && <a href={`tel:${candidate.phone}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Phone className="size-3.5" />{candidate.phone}</a>}
+              {candidate.phone && (
+                <span className="inline-flex items-center gap-2">
+                  <a href={telHref(candidate.phone)} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Phone className="size-3.5" />{candidate.phone}</a>
+                  {isAgency && (callThroughTheBook
+                    ? <button type="button" onClick={callThroughTheBook} className="inline-flex h-6 items-center rounded-md bg-brand-700 px-2 text-xs font-medium text-white hover:bg-brand-800 max-sm:h-8 max-sm:px-3">Call</button>
+                    : <a href={telHref(candidate.phone)} className="inline-flex h-6 items-center rounded-md border border-line bg-white px-2 text-xs font-medium text-stone-700 hover:bg-stone-50 max-sm:h-8 max-sm:px-3">Call</a>)}
+                </span>
+              )}
               {extUrl(candidate.linkedin) && <a href={extUrl(candidate.linkedin)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 hover:text-brand-700"><Link2 className="size-3.5" />Profile link</a>}
               {candidate.location && <span className="inline-flex items-center gap-1.5"><MapPin className="size-3.5" />{candidate.location}</span>}
             </div>
@@ -182,7 +195,7 @@ function CandidateView({ data, onClose }) {
         {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onResume={() => setTab('resume')} />}
         {tab === 'resume' && app.resume_file && <ResumeViewer app={app} />}
         {tab === 'interviews' && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onScorecard={(i) => setModal({ scorecard: i })} />}
-        {tab === 'calls' && isAgency && <CallsTab data={data} calls={calls} error={callsError} />}
+        {tab === 'calls' && isAgency && <CallsTab data={data} calls={calls} error={callsError} onCall={candidate.phone ? callThroughTheBook : null} />}
         {tab === 'activity' && <ActivityTab data={data} />}
         {tab === 'emails' && <EmailsTab data={data} onCompose={() => setModal('email')} />}
       </div>
@@ -453,31 +466,40 @@ function InterviewsTab({ data, onSchedule, onScorecard }) {
   );
 }
 
-/** Calls recorded with this person in The Oracle, for any of the jobs they are being considered for. Agency only. */
-function CallsTab({ data, calls, error }) {
+/** Calls with this person in The Oracle, recorded in the browser or made on the phone line, for any of the jobs they are being considered for. Agency only. */
+function CallsTab({ data, calls, error, onCall }) {
   const navigate = useNavigate();
   const { application: app, candidate } = data;
-  const record = <Button variant="primary" icon={Mic} size="sm" onClick={() => navigate(`/oracle?application=${app.id}`)}>Record a call</Button>;
+  const actions = (
+    <span className="flex shrink-0 justify-end gap-2">
+      {onCall && <Button icon={Phone} size="sm" onClick={onCall}>Call</Button>}
+      <Button variant="primary" icon={Mic} size="sm" onClick={() => navigate(`/oracle?application=${app.id}`)}>Record a call</Button>
+    </span>
+  );
   if (error) return <Card><Empty icon={CircleAlert} title="The calls could not be loaded">{error}</Empty></Card>;
   if (!calls) return <Loading />;
   if (!calls.length)
-    return <Card><Empty icon={AudioLines} title="No calls recorded yet" action={record}>Record your calls with {firstName(candidate.name)} in The Oracle and they are kept here with their transcript and notes. Only your agency sees them.</Empty></Card>;
+    return <Card><Empty icon={AudioLines} title="No calls yet" action={actions}>{onCall ? `Call ${firstName(candidate.name)} through The Book, or record` : 'Record'} your conversations with {firstName(candidate.name)} in The Oracle, and they are kept here with their transcript and notes. Only your agency sees them.</Empty></Card>;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <span className="inline-flex items-center gap-1.5 text-xs text-stone-500"><Lock className="size-3.5" />Only your agency sees calls.</span>
-        {record}
+        {actions}
       </div>
       <Card className="divide-y divide-line overflow-hidden">
         {calls.map((c) => (
           <Link key={c.id} to={`/oracle/${c.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 hover:bg-stone-50">
+            <span className={cx('flex size-8 shrink-0 items-center justify-center rounded-full ring-1 ring-inset', c.source === 'phone' ? 'bg-brand-950 text-gold ring-brand-900' : 'bg-brand-50 text-brand-700 ring-brand-100')} aria-hidden="true">
+              {c.source === 'phone' ? <Phone className="size-4" /> : <Mic className="size-4" />}
+            </span>
             <span className="min-w-0 flex-1 basis-56">
               <span className="flex flex-wrap items-center gap-2">
                 <span className="truncate text-sm font-medium text-stone-900">{callName(c)}</span>
-                <CallStatus status={c.status} />
+                <PhoneMark call={c} />
+                <CallStatus status={c.status} source={c.source} />
               </span>
               <span className="block truncate text-[13px] text-stone-500">
-                {c.source === 'uploaded' ? 'Uploaded' : 'Recorded'} by {c.created_by_name || 'someone who has left'}{c.application_id !== app.id && c.job_title ? ` · about ${c.job_title}` : ''}
+                {madeBy(c)}{c.phone_display ? ` · ${c.phone_display}` : ''}{c.application_id !== app.id && c.job_title ? ` · about ${c.job_title}` : ''}
               </span>
             </span>
             <span className="tabular text-right text-[13px] text-stone-600">{fmtDateTime(c.created_at)}{c.duration_ms ? ` · ${fmtLength(c.duration_ms)}` : ''}</span>

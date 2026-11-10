@@ -19,6 +19,8 @@ import Settings from './pages/Settings.jsx';
 import Oracle from './pages/Oracle.jsx';
 import OracleCall from './pages/OracleCall.jsx';
 import { RecorderProvider } from './oracle/RecorderProvider.jsx';
+import { PhoneProvider } from './oracle/phone.jsx';
+import { CalendarProvider } from './oracle/calendar.jsx';
 import { Careers, CareersJob } from './pages/Careers.jsx';
 
 const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
@@ -48,6 +50,11 @@ class PageBoundary extends React.Component {
 function Pages({ children }) {
   const { pathname } = useLocation();
   return <PageBoundary at={pathname}>{children}</PageBoundary>;
+}
+
+/** The recorder, the phone line and the calendar reminders, each of which the next one needs to know about. */
+function OracleProviders({ children }) {
+  return <RecorderProvider><PhoneProvider><CalendarProvider>{children}</CalendarProvider></PhoneProvider></RecorderProvider>;
 }
 
 function Workspace() {
@@ -85,11 +92,12 @@ function Workspace() {
   if (!me) return <Login onDone={reloadMe} />;
 
   // The call recorder sits above the pages, so a recording carries on while the recruiter moves around the workspace.
-  // Client hiring teams have no part in The Oracle, so they get no recorder and no routes to it.
-  const Recorder = ctx.isAgency ? RecorderProvider : React.Fragment;
+  // So do the phone line (a call under way is followed from any page) and the day's reminders.
+  // Client hiring teams have no part in The Oracle, so they get none of the three and no routes to it.
+  const Providers = ctx.isAgency ? OracleProviders : React.Fragment;
   return (
     <AppContext.Provider value={ctx}>
-      <Recorder>
+      <Providers>
       <Layout>
         <Pages>
         <Routes>
@@ -109,7 +117,7 @@ function Workspace() {
         </Routes>
         </Pages>
       </Layout>
-      </Recorder>
+      </Providers>
     </AppContext.Provider>
   );
 }

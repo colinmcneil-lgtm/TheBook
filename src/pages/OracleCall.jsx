@@ -9,7 +9,8 @@ import { Avatar, Badge, Button, Card, CardHeader, Input, Menu, Select, Tabs, Tex
 import { ReviewBadge } from '../components/bits.jsx';
 import { SubmitModal } from '../components/CandidateModals.jsx';
 import { useRecorder } from '../oracle/RecorderProvider.jsx';
-import { AttachModal, CallStatus, CopyButton, NotesText, Notice, callName, fmtClock, fmtLength, useLive } from '../oracle/bits.jsx';
+import { usePhone } from '../oracle/phone.jsx';
+import { AttachModal, CallStatus, CopyButton, NotesText, Notice, PhoneMark, callName, fmtClock, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
 
 const SPEAKER_TONES = ['text-brand-700', 'text-amber-700', 'text-violet-700', 'text-sky-700', 'text-rose-700', 'text-lime-700'];
 const speakerName = (call, n) => call.speakers?.[n]?.trim() || `Speaker ${Number(n) + 1}`;
@@ -246,7 +247,7 @@ function TranscriptCard({ data, status, onPatch, reload, onSeek, activeTurn, cla
       </div>
     );
   } else if (call.status === 'recording') {
-    body = <p className="px-4 py-6 text-sm text-stone-500">The transcript is written once the recording has stopped.</p>;
+    body = <p className="px-4 py-6 text-sm text-stone-500">{call.source === 'phone' ? 'The transcript is written once the call is over and its recording has arrived.' : 'The transcript is written once the recording has stopped.'}</p>;
   } else {
     body = (
       <div className="space-y-3 p-4">
@@ -445,6 +446,7 @@ export default function OracleCall() {
   const navigate = useNavigate();
   const toast = useToast();
   const recorder = useRecorder();
+  const phone = usePhone();
   const { data: status } = useApi('/oracle/status');
   const opened = useRef(Date.now());
   // Check again while the call is being transcribed, while the server is writing the notes that follow a new
@@ -494,6 +496,9 @@ export default function OracleCall() {
     setActiveTurn(audio.current?.paused && t === 0 ? -1 : at);
   };
   const beingRecordedHere = call.status === 'recording' && recorder.session?.callId === call.id;
+  // A call made on the phone line is here from the moment it is placed; its recording arrives after it ends.
+  const phoned = call.source === 'phone';
+  const onThePhone = phoned && phone.live && phone.call.call_id === call.id;
   const awaitedNotes = Boolean(call.notes_pending) && !call.notes;
 
   return (
@@ -503,8 +508,9 @@ export default function OracleCall() {
         <div className="min-w-0 flex-1 basis-72">
           <Title call={{ ...call, candidate_name: candidate?.name }} onPatch={onPatch} />
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-stone-500">
-            <CallStatus status={call.status} />
-            <span>{call.source === 'uploaded' ? 'Uploaded' : 'Recorded'} by {call.created_by_name || 'someone who has left'} · {fmtDateTime(call.created_at)}{call.duration_ms ? ` · ${fmtLength(call.duration_ms)}` : ''}</span>
+            <PhoneMark call={call} />
+            {onThePhone ? <Badge tone="red">On the phone now</Badge> : <CallStatus status={call.status} source={call.source} />}
+            <span>{madeBy(call)}{call.phone_display ? <span className="tabular"> · {call.direction === 'inbound' ? 'from' : 'to'} {call.phone_display}</span> : null} · {fmtDateTime(call.created_at)}{call.duration_ms ? ` · ${fmtLength(call.duration_ms)}` : ''}</span>
           </p>
           {call.consent_at && (
             <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-stone-500">
@@ -513,13 +519,18 @@ export default function OracleCall() {
           )}
         </div>
         {/* A recording that was cut off and never recovered can still be deleted; the one being made right now cannot. */}
-        {data.can_delete && !beingRecordedHere && <Button variant="danger" icon={Trash2} busy={removing} onClick={remove}>Delete call</Button>}
+        {data.can_delete && !beingRecordedHere && !onThePhone && <Button variant="danger" icon={Trash2} busy={removing} onClick={remove}>Delete call</Button>}
       </div>
 
       <div className="space-y-4">
         <CandidateCard data={data} onPatch={onPatch} onAttach={() => setAttaching(true)} />
 
-        {call.status === 'recording' ? (
+        {call.status === 'recording' && phoned ? (
+          <Notice>
+            {onThePhone ? 'This phone call is under way. It can be played back here once it is over and its recording has arrived from the phone service.'
+              : 'This phone call is under way, or has just ended. Its recording arrives from the phone service a few minutes after the call ends, and the transcript and notes follow. There is nothing you need to do.'}
+          </Notice>
+        ) : call.status === 'recording' ? (
           <Notice tone={beingRecordedHere ? 'info' : 'warn'}>
             {beingRecordedHere ? 'This call is being recorded now. It can be played back here once you stop the recording.' : (
               <>
