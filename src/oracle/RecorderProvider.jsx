@@ -5,6 +5,7 @@ import { useApp } from '../state.jsx';
 import { api } from '../lib.js';
 import { useToast, cx } from '../ui.jsx';
 import { CallRecorder, ChunkUploader, formatElapsed } from './recorder.js';
+import { oraclePath } from './calls.js';
 
 /** The sentence the recruiter ticks before a call is recorded. It is stored with the call. */
 export const CONSENT_WORDING = 'Everyone on this call knows it is being recorded and has agreed.';
@@ -62,7 +63,7 @@ export function RecorderProvider({ children }) {
   const recovering = useRef(null);
   const stoppedShort = useRef(false); // a call ended in this page without reaching the server (as opposed to the page closing)
   const [state, setState] = useState('idle'); // idle | starting | recording | paused | stopping
-  const [session, setSession] = useState(null); // { callId, title, subject: { name, job_title } | null, eventKey: the calendar event it is for | null }
+  const [session, setSession] = useState(null); // { callId, title, subject: { name, job_title } | null }
   const [waiting, setWaiting] = useState(0); // parts of the recording waiting for the connection to come back
   const [callAudio, setCallAudio] = useState(null); // { surface } while the other side of the call is being recorded
   const [note, setNote] = useState(null); // { tone: 'info' | 'warn', text } shown with the recording controls
@@ -120,7 +121,7 @@ export function RecorderProvider({ children }) {
     return () => window.removeEventListener('beforeunload', warn);
   }, [live, state]);
 
-  const start = useCallback(async ({ consent, title, application_id, subject, event_key }) => {
+  const start = useCallback(async ({ consent, title, application_id, subject }) => {
     if (rec.current) throw new Error('A call is already being recorded.');
     setState('starting');
     setNote(null);
@@ -131,8 +132,8 @@ export function RecorderProvider({ children }) {
       const earlier = await (recovering.current || (ChunkUploader.interrupted(user.id) ? recover() : null));
       if (earlier?.busy) throw Object.assign(new Error('Busy'), { name: 'BusyError' });
       if (earlier?.failed) throw Object.assign(new Error('An earlier recording has not finished saving yet. Check your connection and try again in a moment.'), { status: 409 });
-      const made = await r.start({ consent, title, application_id, event_key, userId: user.id });
-      setSession({ callId: made.call_id, title: title || '', subject: subject || null, eventKey: event_key || null });
+      const made = await r.start({ consent, title, application_id, userId: user.id });
+      setSession({ callId: made.call_id, title: title || '', subject: subject || null });
       // The server counts a call's length from the moment it started, pauses included, so this does the same.
       startedAt.current = Date.now();
       api.get('/oracle/status').then((s) => setLimitMinutes(s?.maxRecordingMinutes > 0 ? s.maxRecordingMinutes : null)).catch(() => {});
@@ -282,8 +283,8 @@ export function RecorderStrip() {
     const button = 'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-colors';
     return (
       <div role="region" aria-label="Call recording" className={cx('no-print flex h-11 shrink-0 items-center gap-3 px-3 text-sm text-white sm:px-4', paused ? 'bg-stone-800' : 'bg-red-700')}>
-        {/* The dot, the word and the time are together the way back to The Oracle from any page. */}
-        <Link to="/oracle" title="Open The Oracle" className="flex shrink-0 items-center gap-2.5 rounded-md hover:opacity-90">
+        {/* The dot, the word and the time are together the way back to the recording from any page. */}
+        <Link to={oraclePath('record')} title="Open the recording in The Oracle" className="flex shrink-0 items-center gap-2.5 rounded-md hover:opacity-90">
           <span className="relative flex size-2.5 shrink-0" aria-hidden="true">
             {state === 'recording' && <span className="absolute inline-flex size-full animate-ping rounded-full bg-white/70" />}
             <span className={cx('relative inline-flex size-2.5 rounded-full', paused ? 'bg-stone-400' : 'bg-white')} />
@@ -292,7 +293,7 @@ export function RecorderStrip() {
           <Elapsed className="font-medium" />
         </Link>
         <LevelMeter className="w-12 shrink-0 bg-white/25 min-[420px]:w-20 sm:w-28" barClassName="bg-white" />
-        <Link to="/oracle" className="hidden min-w-0 truncate text-white/90 underline decoration-white/40 underline-offset-2 hover:text-white md:block">{sessionLabel(session)}</Link>
+        <Link to={oraclePath('record')} className="hidden min-w-0 truncate text-white/90 underline decoration-white/40 underline-offset-2 hover:text-white md:block">{sessionLabel(session)}</Link>
         {waiting > 0 && <span className="inline-flex min-w-0 items-center gap-1.5 text-[13px] text-white/90" title={offline}><WifiOff className="size-3.5 shrink-0" /><span className="truncate max-sm:sr-only">{offline}</span></span>}
         {minutesLeft !== null && state !== 'stopping' && <span className="hidden text-[13px] font-medium whitespace-nowrap text-white sm:inline">About {Math.max(1, Math.round(minutesLeft))} min left</span>}
         <span className="flex-1" />
@@ -340,7 +341,7 @@ export function RecorderStrip() {
   return null;
 }
 
-/** A round microphone badge, used wherever a call stands in for a person's photo. A phone call passes a phone as its `icon`. */
+/** A round microphone badge, used wherever a call stands in for a person's photo. A Metaview call passes its own `icon`. */
 export function MicBadge({ size = 32, className, icon: Icon = Mic }) {
   return (
     <span className={cx('inline-flex shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700 ring-1 ring-brand-100 ring-inset', className)} style={{ width: size, height: size }} aria-hidden="true">

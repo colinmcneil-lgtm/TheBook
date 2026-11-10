@@ -1,13 +1,14 @@
 // Pieces shared by The Oracle's pages and the Calls tab on a candidate's profile.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Check, Copy, Info, LoaderCircle, Phone, PhoneIncoming, PhoneOutgoing, Search, UserPlus, Voicemail, X } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Check, Copy, Info, LoaderCircle, Search, UserPlus, X } from 'lucide-react';
 import { api, url, fmtDate, photoUrl } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Checkbox, Input, Modal, useAction, useToast, cx } from '../ui.jsx';
 import { AddCandidateModal } from '../components/CandidateModals.jsx';
+import { OFFERED_BY } from './calls.js';
 
-export { madeBy } from './calls.js';
+export { callWhen, fmtLength, madeBy } from './calls.js';
 
 // ---- words for a call ---------------------------------------------------------------------------------------------------
 const STATUS = {
@@ -17,12 +18,8 @@ const STATUS = {
   ready: { label: 'Ready', tone: 'green' },
   failed: { label: 'Could not be transcribed', tone: 'red' },
 };
-/**
- * Where a call has got to. A call made on the phone line is in The Oracle from the moment it is placed, and its
- * recording arrives from the phone service a little after it ends: until then it is waiting, not "Recording".
- */
-export function CallStatus({ status, source }) {
-  if (source === 'phone' && status === 'recording') return <Badge tone="amber" icon={Spinner}>Waiting for the recording</Badge>;
+/** Where a call has got to. */
+export function CallStatus({ status }) {
   const s = STATUS[status] || STATUS.uploaded;
   return <Badge tone={s.tone} icon={status === 'transcribing' ? Spinner : undefined}>{s.label}</Badge>;
 }
@@ -31,22 +28,9 @@ const Spinner = ({ className }) => <LoaderCircle className={cx(className, 'anima
 /** What to call a call: its own title, else who it was with, else the day it was recorded. */
 export const callName = (call) => call.title || (call.candidate_name ? `Call with ${call.candidate_name}` : `Call on ${fmtDate(call.created_at)}`);
 
-/** Marks a call that was made on The Book's phone line, and which way it went. Nothing for calls recorded in the browser or uploaded. */
-export function PhoneMark({ call }) {
-  if (call.source !== 'phone') return null;
-  // A caller who reached nobody and left a message is still a call that came in, but there is only their side of it.
-  if (call.voicemail) return <Badge icon={Voicemail}>Voicemail</Badge>;
-  const inbound = call.direction === 'inbound';
-  return <Badge icon={inbound ? PhoneIncoming : call.direction === 'outbound' ? PhoneOutgoing : Phone}>{inbound ? 'Inbound call' : call.direction === 'outbound' ? 'Outbound call' : 'Phone call'}</Badge>;
-}
-
-/** "45 sec", "12 min", "1 h 05 min". Empty while the length is not known yet. */
-export function fmtLength(ms) {
-  if (!ms || ms < 0) return '';
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s} sec`;
-  const m = Math.round(s / 60);
-  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+/** Marks a call that was recorded in Metaview and brought in from there. Nothing for calls recorded or uploaded in The Book. */
+export function MetaviewMark({ call }) {
+  return call.source === 'metaview' ? <Badge tone="violet">Metaview</Badge> : null;
 }
 
 /** A position in the recording, "2:07" or "1:02:07". */
@@ -86,6 +70,27 @@ export function useLive(path, poll, everyMs = 4000) {
   }, [again, load, everyMs]);
   const set = useCallback((data) => setState({ path, data, error: null }), [path]);
   return { data: fresh ? state.data : null, error: fresh ? state.error : null, reload: load, set };
+}
+
+// ---- what the address says ------------------------------------------------------------------------------------------------
+/**
+ * The address's query (?tab=…&q=…) and a way to change parts of it: `change({ q: 'dana', show: '' })` sets one and
+ * removes the other. It works from the address as it is at that moment, not as it was when the screen was last
+ * drawn, so a change made a little later (after a pause in typing, or when an answer arrives) never undoes one
+ * made in between. Changes replace the current entry in the browser's history unless `replace` is false.
+ */
+export function useQuery() {
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const go = useRef(navigate);
+  go.current = navigate;
+  const change = useCallback((changes, { replace = true } = {}) => {
+    const next = new URLSearchParams(window.location.search);
+    for (const [name, value] of Object.entries(changes)) (value === null || value === undefined || value === '' ? next.delete(name) : next.set(name, value));
+    const query = next.toString();
+    if (query !== window.location.search.replace(/^\?/, '')) go.current({ search: query ? `?${query}` : '' }, { replace });
+  }, []);
+  return [params, change];
 }
 
 // ---- choosing the candidate -----------------------------------------------------------------------------------------------
@@ -197,8 +202,10 @@ export function CandidatePicker({ value, onChange, label = 'Who is this call wit
 /**
  * Add a call to a candidate after it was recorded (or move it to someone else). When the person is not in The Book
  * yet, the usual Add candidate dialog opens and the call is added to them once they are saved.
+ * A Metaview call may come with `suggestions` (the people in The Book it could belong to), which are offered first,
+ * and with its own way to `save` the choice, because choosing may be what brings the call into The Book.
  */
-export function AttachModal({ call, current, onClose, onDone }) {
+export function AttachModal({ call, current, suggestions, save: saveChoice, saveLabel, onClose, onDone }) {
   const toast = useToast();
   const [picked, setPicked] = useState(null);
   const [adding, setAdding] = useState(false);
@@ -208,7 +215,7 @@ export function AttachModal({ call, current, onClose, onDone }) {
   const { data: jobs } = useApi(url('/jobs', { client_id: scope }));
   const noJobs = Boolean(jobs) && !jobs.some((j) => j.status !== 'closed');
   const attach = async (applicationId, name) => {
-    const updated = await api.patch(`/oracle/calls/${call.id}`, { application_id: applicationId });
+    const updated = await (saveChoice ? saveChoice(applicationId) : api.patch(`/oracle/calls/${call.id}`, { application_id: applicationId }));
     toast(name ? `Call added to ${name}` : 'Call added to the candidate');
     onDone(updated);
   };
@@ -218,8 +225,27 @@ export function AttachModal({ call, current, onClose, onDone }) {
   if (adding) return <AddCandidateModal onClose={onClose} onAdded={afterAdding} />;
   return (
     <Modal title={current ? 'Move this call to another candidate' : 'Add this call to a candidate'} subtitle={callName(call)} size="sm" onClose={onClose} onSubmit={save}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={!picked}>{current ? 'Move call' : 'Add call'}</Button></>}>
-      <CandidatePicker value={picked} onChange={setPicked} autoFocus hint="Type at least two letters of their name." />
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={!picked}>{busy && saveLabel ? saveLabel : current ? 'Move call' : 'Add call'}</Button></>}>
+      {!picked && suggestions?.length > 0 && (
+        <div>
+          <span className="mb-1 block text-[13px] font-medium text-stone-700">{suggestions.length === 1 ? 'This could be' : 'This could be one of these'}</span>
+          <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line" aria-label="Possible candidates">
+            {suggestions.map((s) => (
+              <li key={s.application_id}>
+                <button type="button" onClick={() => setPicked(pickOf(s))} className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-stone-50">
+                  <Avatar name={s.name} size={32} src={photoUrl(s.candidate_id, s.photo)} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-stone-900">{s.name}</span>
+                    <span className="block truncate text-[13px] text-stone-600">{[s.job_title, s.client_name].filter(Boolean).join(' · ')}</span>
+                  </span>
+                  {OFFERED_BY[s.how] && <span className="shrink-0 text-xs text-stone-500">{OFFERED_BY[s.how]}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <CandidatePicker value={picked} onChange={setPicked} autoFocus={!suggestions?.length} label={suggestions?.length && !picked ? 'Or search for someone else' : undefined} hint="Type at least two letters of their name." />
       {current && call.submission && <Notice tone="warn">The submission draft was written for the job this call is on now, so it is removed when the call moves.</Notice>}
       {current && call.note_saved && <Notice tone="warn">The notes saved to {call.candidate_name ? `${call.candidate_name}’s` : 'the current'} profile from this call are removed from it if the call moves to somebody else. You can save them to the new profile afterwards.</Notice>}
       {noJobs ? (
@@ -239,7 +265,16 @@ export function AttachModal({ call, current, onClose, onDone }) {
 }
 
 // ---- small things -----------------------------------------------------------------------------------------------------------
-/** The top of each of The Oracle's three cards: a round badge, what the card is called, and what it is for in a line or two. */
+/** "Mine" or "Everyone": whose calls a list shows. */
+export function WhoToggle({ everyone, onChange }) {
+  const option = (label, on, value) => (
+    <button type="button" aria-pressed={on} onClick={() => onChange(value)}
+      className={cx('rounded-md px-2.5 py-1 text-[13px] font-medium transition-colors', on ? 'bg-white text-stone-900 shadow-sm ring-1 ring-line' : 'text-stone-500 hover:text-stone-800')}>{label}</button>
+  );
+  return <div className="flex shrink-0 gap-0.5 rounded-lg bg-stone-100 p-0.5" role="group" aria-label="Whose calls to show">{option('Mine', !everyone, 'mine')}{option('Everyone', everyone, 'everyone')}</div>;
+}
+
+/** The top of a card in The Oracle: a round badge, what the card is called, and what it is for in a line or two. */
 export function CardIntro({ icon: Icon, title, action, children }) {
   return (
     <div className="flex items-start gap-3">

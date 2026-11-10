@@ -3,13 +3,12 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
-import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, agencyStageName, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
+import { q, now, tx, scrub, UPLOAD_DIR, getSetting, setSetting, createStages, agencyStageName, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
 import { registerAutofill } from './autofill.js';
 import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCalls, forgetSavedNote } from './oracle.js';
-import { registerPhone, registerPhoneWebhooks } from './phone.js';
+import { registerMetaview, conversationsWith, forgetConversations } from './metaview.js';
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
-import { registerCalendar } from './calendar.js';
 import * as reporting from './reporting.js';
 
 export const api = express.Router();
@@ -481,10 +480,6 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
   }
 });
 
-// ---------- phone calls: the routes the phone service itself calls ----------
-// These take no sign-in (Twilio has no cookie): each request is trusted only by Twilio's signature. See phone.js.
-registerPhoneWebhooks(api);
-
 // ---------- everything below requires a signed-in user ----------
 api.use((req, res, next) => {
   req.user = readSession(req);
@@ -504,10 +499,8 @@ const adminOnly = (req, res, next) => (req.user.role === 'admin' ? next() : res.
 registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, briefFields: (b) => briefFields(b) });
 // The Oracle (recording calls with candidates, transcripts, notes and submission drafts) lives in its own module too.
 registerOracle(api, { agencyOnly, bad, clean, int, takeHit, logActivity, loadApp: (id, user) => loadApp(id, user) });
-// Phone calls (click to call, the switchboard, calls coming in to The Book's number) live in their own module as well.
-registerPhone(api, { agencyOnly, bad, clean, int, logActivity, loadApp: (id, user) => loadApp(id, user) });
-// Your calendar in The Oracle (a saved calendar link, the day's events and who they are with) is a module of its own as well.
-registerCalendar(api, { agencyOnly, bad, takeHit, loadApp: (id, user) => loadApp(id, user) });
+// Metaview in The Oracle (the agency's conversations recorded in Metaview, listed and brought in as calls) is a module of its own as well.
+registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, takeHit });
 // Reporting (the Individual and Clients reports, and the record of the moments they count) is a module of its own too.
 // The routes below tell it when one of those moments happens: each call to `reporting.` is one of them.
 reporting.registerReporting(api, { agencyOnly, adminOnly, bad, int, loadApp: (id, user) => loadApp(id, user) });
@@ -675,10 +668,6 @@ api.patch('/users/:id', agencyOnly, (req, res) => {
   if (b.password !== undefined || b.active === false) q.run('DELETE FROM sessions WHERE user_id = ?', target.id);
   // Links this person handed out stop working with them, so nobody can be let in on their say-so after they have left.
   if (b.active === false) q.run('DELETE FROM invites WHERE created_by = ? AND used_at IS NULL', target.id);
-  // Their mobile and its PIN go too: a number says who is ringing in, so it must be free for whoever has that phone next.
-  if (b.active === false) {
-    q.run('UPDATE users SET phone = NULL, phone_pin_hash = NULL, phone_pin_fails = 0, phone_locked_until = NULL, phone_lock_level = 0, phone_pin_wrong = 0, phone_pin_wrong_since = NULL WHERE id = ?', target.id);
-  }
   res.json({ ok: true });
 });
 
@@ -1403,33 +1392,39 @@ api.delete('/applications/:id', agencyOnly, (req, res) => {
   const a = loadApp(req.params.id, req.user);
   const photo = q.get('SELECT photo_file FROM candidates WHERE id = ?', a.candidate_id)?.photo_file;
   const calls = callFilesOf([a.candidate_id]);
+  const inMetaview = conversationsWith(a.candidate_id);
   const gone = tx(() => {
     // Calls recorded with this person stay on their record while they are in another job; they go when the person does.
     detachCallsFrom(a.id);
     q.run('DELETE FROM applications WHERE id = ?', a.id);
     if (q.get('SELECT 1 AS x FROM applications WHERE candidate_id = ?', a.candidate_id)) return false;
+    forgetConversations(inMetaview);   // what The Book remembered about their conversations in Metaview goes with them
     q.run('DELETE FROM candidates WHERE id = ?', a.candidate_id);
     return true;
   });
   removeUpload(a.resume_file);
-  if (gone) { removeUpload(photo); removeCallFiles(calls); }
+  if (gone) { removeUpload(photo); removeCallFiles(calls); scrub(); }
   res.json({ ok: true });
 });
 
 // Erase a person completely: every application they made at this client, with its notes, scorecards, interviews,
-// emails and résumé files, their recorded calls (audio, transcripts and notes), and their contact record.
+// emails and résumé files, their recorded calls (audio, transcripts and notes), their contact record, and what The
+// Book remembered about their conversations in Metaview. (The conversations themselves stay in Metaview.)
 api.delete('/candidates/:id', agencyOnly, (req, res) => {
   const cand = q.get('SELECT * FROM candidates WHERE id = ?', int(req.params.id));
   if (!cand || !canSee(req.user, cand.client_id)) bad('Not found', 404);
   const files = q.all('SELECT resume_file FROM applications WHERE candidate_id = ?', cand.id).map((r) => r.resume_file);
   const calls = callFilesOf([cand.id]);
+  const inMetaview = conversationsWith(cand.id);
   tx(() => {
+    forgetConversations(inMetaview);
     q.run('DELETE FROM applications WHERE candidate_id = ?', cand.id);
     q.run('DELETE FROM candidates WHERE id = ?', cand.id); // their calls are removed with them
   });
   files.forEach(removeUpload);
   removeUpload(cand.photo_file);
   removeCallFiles(calls);
+  scrub();   // what was deleted is not left readable in the database's files
   res.json({ ok: true });
 });
 

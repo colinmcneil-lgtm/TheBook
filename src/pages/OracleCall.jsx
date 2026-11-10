@@ -1,32 +1,28 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, ArrowLeftRight, AudioLines, Check, CircleAlert, ClipboardPaste, Copy, Ellipsis, LoaderCircle, NotebookPen, Pencil, RefreshCw, Send, Sparkles, StickyNote, Trash2, UserPlus, UserRound, X,
+  ArrowLeft, ArrowLeftRight, AudioLines, Check, ClipboardPaste, Copy, Ellipsis, ExternalLink, LoaderCircle, NotebookPen, Pencil, RefreshCw, Send, Sparkles, StickyNote, Trash2, UserPlus, UserRound, X,
 } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
-import { api, ago, firstName, fmtDateTime, photoUrl } from '../lib.js';
+import { api, ago, extUrl, firstName, fmtDateTime, fmtWhen, photoUrl } from '../lib.js';
 import { Avatar, Badge, Button, Card, CardHeader, Input, Menu, Select, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import { ReviewBadge } from '../components/bits.jsx';
 import { SubmitModal } from '../components/CandidateModals.jsx';
-import { useRecorder } from '../oracle/RecorderProvider.jsx';
-import { usePhone } from '../oracle/phone.jsx';
-import { AttachModal, CallStatus, CopyButton, NotesText, Notice, PhoneMark, callName, fmtClock, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
+import { MicBadge, useRecorder } from '../oracle/RecorderProvider.jsx';
+import { AttachModal, CallStatus, CopyButton, MetaviewMark, NotesText, Notice, callName, fmtClock, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
+import { oraclePath, tabOfCall } from '../oracle/calls.js';
 
 const SPEAKER_TONES = ['text-brand-700', 'text-amber-700', 'text-violet-700', 'text-sky-700', 'text-rose-700', 'text-lime-700'];
 /**
- * What the call's record says about recording it. In the browser the recruiter ticked a box; on the phone line nobody
- * ticked anything: The Book played a notice (or was set not to), and the record says which, in its own words.
+ * What the call's record says about recording it: the recruiter ticked a box before it was recorded or uploaded.
+ * A call brought in from Metaview has no such record here, because it was not recorded in The Book.
  */
 function ConsentLine({ call }) {
-  if (!call.consent_at) return null;
-  if (call.source === 'phone' && call.consent_wording) {
-    const played = call.consent_wording.startsWith('The Book played this notice');
-    return (
-      <p className="mt-1 flex max-w-3xl items-start gap-1.5 text-xs leading-relaxed text-stone-500">
-        {played ? <Check className="mt-0.5 size-3.5 shrink-0 text-brand-600" /> : <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600" />}
-        <span>{call.consent_wording}</span>
-      </p>
-    );
+  if (!call.consent_at || call.source === 'metaview') return null;
+  // A call kept from an earlier version that was neither recorded nor uploaded here: nobody ticked a box for it, so
+  // it says what its own record says, in the record's words, or nothing.
+  if (call.source !== 'recorded' && call.source !== 'uploaded') {
+    return call.consent_wording ? <p className="mt-1 max-w-3xl text-xs leading-relaxed text-stone-500">{call.consent_wording}</p> : null;
   }
   return (
     <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-stone-500">
@@ -269,12 +265,13 @@ function TranscriptCard({ data, status, onPatch, reload, onSeek, activeTurn, cla
       </div>
     );
   } else if (call.status === 'recording') {
-    body = <p className="px-4 py-6 text-sm text-stone-500">{call.source === 'phone' ? 'The transcript is written once the call is over and its recording has arrived.' : 'The transcript is written once the recording has stopped.'}</p>;
+    body = <p className="px-4 py-6 text-sm text-stone-500">The transcript is written once the recording has stopped.</p>;
   } else {
     body = (
       <div className="space-y-3 p-4">
         <p className="text-sm text-stone-600">
-          {!call.has_audio ? 'This call has no recording and no transcript yet. Paste a transcript to have notes and a submission drafted from it.'
+          {call.source === 'metaview' ? 'Metaview has no transcript for this call. If you have one from somewhere else, paste it in to have notes and a submission drafted from it.'
+            : !call.has_audio ? 'This call has no recording and no transcript yet. Paste a transcript to have notes and a submission drafted from it.'
             : status && !status.transcription ? `The recording is saved, but there is no transcript: the transcription service is not connected yet. ${isAdmin ? 'Set DEEPGRAM_API_KEY where the app is hosted to connect it (the README has the steps). Until then you' : 'An admin can connect it. Until then you'} can paste a transcript in.`
             : 'The recording is saved and has not been transcribed yet.'}
         </p>
@@ -290,7 +287,8 @@ function TranscriptCard({ data, status, onPatch, reload, onSeek, activeTurn, cla
     <Card className={cx('overflow-hidden', className)}>
       <CardHeader title="Transcript" action={call.transcript?.length && !pasting ? (
         <span className="flex items-center gap-2.5">
-        {call.transcript_source === 'pasted' && <span className="text-xs text-stone-500">Pasted in</span>}
+        {call.transcript_source === 'pasted' ? <span className="text-xs text-stone-500">Pasted in</span>
+          : call.source === 'metaview' ? <span className="text-xs text-stone-500">From Metaview</span> : null}
         <Menu trigger={<Button size="sm" aria-label="Transcript actions" icon={Ellipsis} className="!px-2" />}
           items={[
             { label: 'Copy the transcript', icon: Copy, onClick: copy },
@@ -338,8 +336,13 @@ function NotesCard({ data, status, onPatch, reload, awaited, className }) {
           </form>
         ) : writing || (awaited && !call.notes) ? (
           <>
-            <div className="flex items-center gap-3 py-4 text-sm text-stone-600" role="status"><LoaderCircle className="size-5 shrink-0 animate-spin text-brand-600" />Writing the notes summary from the transcript. This can take up to a minute.</div>
-            {/* If the AI service is slow or not answering, the recruiter can get on with their own. Notes typed meanwhile are kept. */}
+            <div className="flex items-center gap-3 py-4 text-sm text-stone-600" role="status">
+              <LoaderCircle className="size-5 shrink-0 animate-spin text-brand-600" />
+              {/* Metaview writes its notes when they are first asked for, so a call brought in a moment ago may still be waiting for them. */}
+              {!writing && call.source === 'metaview' ? 'Metaview is still writing its notes for this call. They appear here by themselves, usually within a minute.'
+                : 'Writing the notes summary from the transcript. This can take up to a minute.'}
+            </div>
+            {/* If the service is slow or not answering, the recruiter can get on with their own. Notes typed meanwhile are kept. */}
             {!call.notes && <Button size="sm" icon={NotebookPen} onClick={edit}>Write notes yourself</Button>}
           </>
         ) : call.notes ? (
@@ -468,11 +471,12 @@ export default function OracleCall() {
   const navigate = useNavigate();
   const toast = useToast();
   const recorder = useRecorder();
-  const phone = usePhone();
+  const location = useLocation();
   const { data: status } = useApi('/oracle/status');
   const opened = useRef(Date.now());
-  // Check again while the call is being transcribed, while the server is writing the notes that follow a new
-  // transcript, and for a few seconds after opening a call that was only just saved (transcribing may be about to start).
+  // Check again while the call is being transcribed, while its notes are on their way (the server is writing them
+  // after a new transcript, or Metaview is still writing its own), and for a few seconds after opening a call that
+  // was only just saved (transcribing may be about to start).
   // Also while it is being recorded somewhere other than this tab: it changes here when it is stopped, or saved after being cut off, over there.
   const live = useLive(`/oracle/calls/${id}`, (d) => d.call.status === 'transcribing' || d.call.notes_pending
     || (d.call.status === 'recording' && recorder.session?.callId !== d.call.id)
@@ -487,12 +491,17 @@ export default function OracleCall() {
   // saved: refresh when the recording stops and when a cut-off recording has been recovered.
   useEffect(() => { reload(); }, [recorder.live, recorder.recovered]);
 
+  // Back to the list the call was opened from, as it was left (its search, its filter). A call reached some other
+  // way goes back to the tab it is listed on.
+  const back = location.state?.back || (data ? oraclePath(tabOfCall(data.call)) : '/oracle');
   const onPatch = async (changes) => set(await api.patch(`/oracle/calls/${id}`, changes));
   const [remove, removing] = useAction(async () => {
-    if (!window.confirm('Delete this call? The recording, the transcript, the notes and the submission draft are removed for good. Notes already saved to a candidate’s profile stay there.')) return;
+    if (!window.confirm(data?.call.source === 'metaview'
+      ? 'Delete this call from The Book? Its transcript, notes and submission draft here are removed for good. Nothing in Metaview is changed. Notes already saved to a candidate’s profile stay there.'
+      : 'Delete this call? The recording, the transcript, the notes and the submission draft are removed for good. Notes already saved to a candidate’s profile stay there.')) return;
     await api.del(`/oracle/calls/${id}`);
     toast('Call deleted');
-    navigate('/oracle');
+    navigate(back);
   });
 
   // A recording that was cut off and cannot be finished from the browser that made it (another computer, cleared
@@ -518,36 +527,48 @@ export default function OracleCall() {
     setActiveTurn(audio.current?.paused && t === 0 ? -1 : at);
   };
   const beingRecordedHere = call.status === 'recording' && recorder.session?.callId === call.id;
-  // A call made on the phone line is here from the moment it is placed; its recording arrives after it ends.
-  const phoned = call.source === 'phone';
-  const onThePhone = phoned && phone.live && phone.call.call_id === call.id;
+  // A call brought in from Metaview was recorded there: it has no audio here, and a link to listen to it there.
+  const fromMetaview = call.source === 'metaview';
+  const listen = fromMetaview ? extUrl(call.external_url) : null;
   const awaitedNotes = Boolean(call.notes_pending) && !call.notes;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-8 sm:py-8">
-      <Link to="/oracle" className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 hover:text-brand-700"><ArrowLeft className="size-4" />The Oracle</Link>
+      <Link to={back} className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 hover:text-brand-700"><ArrowLeft className="size-4" />The Oracle</Link>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 basis-72">
           <Title call={{ ...call, candidate_name: candidate?.name }} onPatch={onPatch} />
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-stone-500">
-            <PhoneMark call={call} />
-            {onThePhone ? <Badge tone="red">On the phone now</Badge> : <CallStatus status={call.status} source={call.source} />}
-            <span>{madeBy(call)}{call.phone_display ? <span className="tabular"> · {call.direction === 'inbound' ? 'from' : 'to'} {call.phone_display}</span> : null} · {fmtDateTime(call.created_at)}{call.duration_ms ? ` · ${fmtLength(call.duration_ms)}` : ''}</span>
+            <MetaviewMark call={call} />
+            <CallStatus status={call.status} />
+            {/* A Metaview call says when it took place and how long it was beside the link to listen to it, below. */}
+            <span>{madeBy(call)} · {fmtDateTime(call.created_at)}{call.duration_ms && !fromMetaview ? ` · ${fmtLength(call.duration_ms)}` : ''}</span>
           </p>
           <ConsentLine call={call} />
         </div>
         {/* A recording that was cut off and never recovered can still be deleted; the one being made right now cannot. */}
-        {data.can_delete && !beingRecordedHere && !onThePhone && <Button variant="danger" icon={Trash2} busy={removing} onClick={remove}>Delete call</Button>}
+        {data.can_delete && !beingRecordedHere && <Button variant="danger" icon={Trash2} busy={removing} onClick={remove}>Delete call</Button>}
       </div>
 
       <div className="space-y-4">
         <CandidateCard data={data} onPatch={onPatch} onAttach={() => setAttaching(true)} />
 
-        {call.status === 'recording' && phoned ? (
-          <Notice>
-            {onThePhone ? 'This phone call is under way. It can be played back here once it is over and its recording has arrived from the phone service.'
-              : 'This phone call is under way, or has just ended. Its recording arrives from the phone service a few minutes after the call ends, and the transcript and notes follow. There is nothing you need to do.'}
-          </Notice>
+        {fromMetaview ? (
+          <Card className="flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3">
+            <MicBadge size={40} icon={AudioLines} />
+            <div className="min-w-0 flex-1 basis-56">
+              <p className="text-sm font-semibold text-stone-900">Recorded in Metaview</p>
+              <p className="text-[13px] text-stone-500">
+                {call.took_place_at ? <>Took place <span className="tabular text-stone-700">{fmtWhen(call.took_place_at)}</span>{call.duration_ms ? ` · ${fmtLength(call.duration_ms)}` : ''}. </> : null}
+                The recording stays in Metaview, so that is where you listen to it.
+              </p>
+            </div>
+            {listen && (
+              <a href={listen} target="_blank" rel="noopener noreferrer" className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-white px-3.5 text-sm font-medium text-stone-800 shadow-sm hover:bg-stone-50 max-sm:h-11 max-sm:w-full max-sm:justify-center">
+                Listen in Metaview<ExternalLink className="size-4 text-stone-500" />
+              </a>
+            )}
+          </Card>
         ) : call.status === 'recording' ? (
           <Notice tone={beingRecordedHere ? 'info' : 'warn'}>
             {beingRecordedHere ? 'This call is being recorded now. It can be played back here once you stop the recording.' : (

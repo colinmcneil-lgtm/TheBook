@@ -1,6 +1,5 @@
-// Small time-zone helpers for the calendar, built on the time-zone data that ships with Node.
-// A recruiter's day is a day on their own clock, so "the 10th" means something different in Toronto and in
-// Vancouver, and on the two days a year the clocks change it is 23 or 25 hours long.
+// Small time-zone helpers, built on the time-zone data that ships with Node. The reports count from the start of a
+// day on the agency's own clock, and on the two days a year the clocks change a day is 23 or 25 hours long.
 
 const formatters = new Map();
 function partsFormatter(timeZone) {

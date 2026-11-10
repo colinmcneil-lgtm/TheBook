@@ -60,18 +60,20 @@ function server(routes) {
   return seen;
 }
 
-test('a recording started for a calendar event tells the server which event', async () => {
+test('a new recording tells the server who it is with, and nothing about a calendar event', async () => {
   fresh();
   const seen = server({ 'POST /api/oracle/recordings': () => [201, { id: ID, call_id: 7 }] });
-  const forEvent = new ChunkUploader();
-  await forEvent.create({ mimeType: 'audio/webm', consent: { confirmed: true, wording: 'Agreed.' }, application_id: 3, event_key: 'ev-abc', userId: 1 });
-  forEvent.letGo();
-  assert.equal(seen[0].body.event_key, 'ev-abc');
+  const withCandidate = new ChunkUploader();
+  // The server no longer takes an event key, so one handed in by old code is not passed on.
+  await withCandidate.create({ mimeType: 'audio/webm', consent: { confirmed: true, wording: 'Agreed.' }, title: 'First call', application_id: 3, event_key: 'ev-abc', userId: 1 });
+  withCandidate.letGo();
   assert.equal(seen[0].body.application_id, 3);
-  // An ordinary recording sends no event at all.
+  assert.equal(seen[0].body.title, 'First call');
+  assert.equal('event_key' in seen[0].body, false);
   const plain = new ChunkUploader();
   await plain.create({ mimeType: 'audio/webm', consent: { confirmed: true, wording: 'Agreed.' }, userId: 1 });
   plain.letGo();
+  assert.equal('application_id' in seen[1].body, false);
   assert.equal('event_key' in seen[1].body, false);
 });
 

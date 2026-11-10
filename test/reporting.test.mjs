@@ -14,11 +14,16 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { session, sleep, tempDir, PORTS } from './oracle-helpers.mjs';
-import { putJson } from './phone-helpers.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Two ports the other test files leave free: the ones after the workspace tests' (see workspace.test.mjs).
-const PORT = PORTS.main + 13, UPGRADE_PORT = PORTS.main + 14;
+const PORT = PORTS.main + 16, UPGRADE_PORT = PORTS.main + 17; // clear of the ports the other test files take from the same base
+
+/** PUT with a JSON body, as the signed-in person `who` (a session from oracle-helpers). */
+async function putJson(who, base, pathname, json) {
+  const res = await fetch(`${base}/api${pathname}`, { method: 'PUT', headers: { Cookie: who.cookie(), 'Content-Type': 'application/json' }, body: JSON.stringify(json) });
+  return { status: res.status, body: await res.json() };
+}
 
 /** `firstRun` says when this version first ran on the workspace; without it the server notes the real time, as it does when installed. */
 async function startApi({ port, dataDir, firstRun }) {

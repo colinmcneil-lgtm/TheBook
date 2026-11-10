@@ -15,13 +15,11 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Careers pages** | Every client gets a public, branded careers page at `/careers/<client>` listing open roles, each with an application form (résumé upload, custom screening questions, consent). Link to it from the client's website. Add `?src=linkedin`, `?src=job_board` or `?src=referral` to an apply link to track where applicants came from. |
 | **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
-| **The Oracle** | Record a call with a candidate in the browser, or upload a recording. The call is written out with who said what, a notes summary is drafted, and one click drafts the write-up for the hiring team. A call can be recorded first and added to a candidate afterwards. Agency only. See [The Oracle](#the-oracle). |
-| **Phone calls** | Call a candidate from The Book: your own phone rings, you press 1, and the candidate is rung from the agency's number. Or ring that number from your mobile while you are out, key in a PIN and the number, and talk as you walk. Either way the call is recorded with each of you on your own channel, written out, summarised, put on the candidate, and you are e-mailed when the notes are ready. Candidates who ring the number are put through to their recruiter. Agency only. See [Phone calls](#phone-calls). |
+| **The Oracle** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [The Oracle](#the-oracle) and [Metaview in The Oracle](#metaview-in-the-oracle). |
 | **Inbox** | Every new application across all clients lands in one review queue, oldest first. |
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
 | **Shortlist hand-off** | Submit a candidate to the hiring team with your write-up. They approve (the candidate moves to the next interview stage) or decline with a reason, so you can calibrate. |
 | **Interviews** | Schedule with a panel, download a calendar file, and collect a structured scorecard from each interviewer against the criteria set on the job. Outstanding scorecards are chased in the sidebar and dashboard. |
-| **Your calendar** | Each recruiter can connect their own calendar to The Oracle with a private link. Their day is shown with The Book's interviews in it, each event says which candidate it is probably with, and "+ Add" marks the ones to record. Agency only. See [Your calendar in The Oracle](#your-calendar-in-the-oracle). |
 | **Email** | Templates with merge fields; every message is recorded on the candidate. Application confirmations, interview invitations and rejections can be sent automatically. |
 | **Reports** | Funnel conversion, source effectiveness, weekly application volume, time to hire, open-role ageing and hires. Printable for client reviews. Your retainer and placement-fee revenue is shown to your agency only. Two more reports for your agency alone: each recruiter's submissions, interviews and placements, and each client's searches, fill rate, time to fill and billings. See [Reporting](#reporting). |
 | **Access** | Agency admins and recruiters see every client. Client users see only their own company, and never see your fees, internal brief or agency-only notes. |
@@ -164,7 +162,9 @@ would have recorded.
 
 ## The Oracle
 
-The Oracle is where recruiters record their calls with candidates.
+The Oracle is where recruiters' calls with candidates are kept: the ones recorded in Metaview (see
+[Metaview in The Oracle](#metaview-in-the-oracle)) and the ones recorded or uploaded in The Book itself. This
+section is about the second kind; once a call is in The Oracle, both kinds work the same way.
 
 1. **Record or upload.** A recruiter records the call in the browser, or uploads a recording made elsewhere (MP3,
    M4A, MP4, WAV, WebM or Ogg, up to 200 MB).
@@ -193,32 +193,16 @@ person can be moved: a title the call was given automatically changes to the new
 on the first person's profile from that call are removed from it. Client users never see calls, audio, transcripts
 or notes, or the line on a candidate's history that says a call was recorded.
 
-### One tab, three ways to start a call
+### Two tabs
 
-The Oracle's page opens on three cards, with the list of calls underneath. On a computer, calling and recording sit
-on the left and the day on the right; on a phone they stack in that order.
+- **Metaview.** The agency's conversations in Metaview, newest first, with a search box and a few filters. Each one
+  says which candidate it was with, or offers the people it might have been with. Opening one makes it a call in
+  The Oracle. See [Metaview in The Oracle](#metaview-in-the-oracle).
+- **Record a live conversation.** For a call on Meet, Zoom or Teams, on speaker, or in person: record it in the
+  browser, or upload a recording made elsewhere. The calls recorded or uploaded in The Book are listed underneath.
+  See [Recording a call](#recording-a-call).
 
-- **Call a candidate.** "Find & call candidate" searches by name or by the digits of a number, or takes a number
-  typed in full. It shows who will be rung and from which of your phones, with "Record this call" ticked, and then
-  follows the call. Closing the dialog or going to another page does not end the call: it stays on the card, and
-  is a strip across the top everywhere else, with Hang up. "Or call from your own phone" shows The Book's number
-  and the three steps for calling with no screen at all. See [Phone calls](#phone-calls).
-- **Record a live conversation.** For a call on Meet, Zoom or Teams, on speaker, or in person. See
-  [Recording a call](#recording-a-call).
-- **Your calendar.** The day's events with "+ Add" on each. Two minutes before an added event starts, a prompt
-  appears across the top of whatever page you are on, with Record, Call and Join; with your permission the browser
-  also shows a desktop notification. The Book has to be open in a tab for either, and a phone's browser shows only
-  the prompt. A call recorded or placed from an event is shown on the event afterwards. See
-  [Your calendar in The Oracle](#your-calendar-in-the-oracle).
-
-One call at a time: while a phone call is under way Record now is held back, and while a browser recording is
-running Call is, each saying why. A call that comes in during a recording cannot be held back, so the card says
-both are running. A candidate's profile has a Call button beside their number (an ordinary dial link when phone
-calls are not connected), and its Calls tab lists phone calls with their direction.
-
-Each person sets up their own side under **Settings, Your account**: "Your mobile number" (the phone The Book rings,
-and the PIN for ringing in) and "Your calendar" (the private link). Whether phone calls are connected, and what is
-needed to connect them, is under **Settings, Agency**.
+A candidate's profile has a Calls tab with their calls of both kinds, in the order the conversations happened.
 
 ### Recording a call
 
@@ -276,13 +260,16 @@ size the file is. Transcripts and notes are in the database.
 - **To Anthropic:** the transcript, the notes, the recruiter's name, and the candidate's and job's details (name,
   current job, the advert, the must-haves and ideal profile from your brief). Your fee and the rest of the brief are
   never sent.
+- **To Metaview:** only the key and the requests themselves (which conversations to list or fetch). Nothing about the
+  candidates in The Book goes there. See [Metaview in The Oracle](#metaview-in-the-oracle).
 
 ### Consent to recording
 
 A call with a candidate is personal data, and in many places it is against the law to record a call unless everyone
 on it has agreed. For a call recorded in the browser or uploaded, The Book does not announce the recording to the
-candidate: the recruiter has to tell them and get their agreement. (A call placed through The Book's phone number is
-different: the other person hears a notice first. See [Phone calls](#phone-calls).) Before every recording and every upload the recruiter must confirm that everyone on the call has
+candidate: the recruiter has to tell them and get their agreement. (A call brought in from Metaview was recorded
+by Metaview, under whatever notice your Metaview account gives; The Book records that it came from there and asks
+nobody to confirm anything.) Before every recording and every upload the recruiter must confirm that everyone on the call has
 agreed, and the workspace stores who confirmed it, when, and the sentence they ticked. A recording cannot be started
 without that sentence; an upload sent without one is recorded against the standard sentence ("Everyone on this call
 knew it was being recorded and agreed."). Nothing is recorded or kept without that. Check what the law requires where you and your candidates are, and say in your privacy notice that
@@ -319,341 +306,161 @@ Recording was tested in Chrome only. Edge, Safari, Firefox and phones have not b
 tried, and neither has a real call of an hour or more. The cases where a day or a week passes (the server saving a
 call by itself, a browser coming back later with the rest) were run by putting the clock back, not by waiting.
 
-## Phone calls
+## Metaview in The Oracle
 
-With a Twilio account connected, The Book has a phone number of its own, and calls made through it land in the
-Oracle without anyone pressing Record.
+If your agency records its candidate calls in [Metaview](https://www.metaview.ai), The Oracle can show them. The
+Metaview tab lists every conversation Metaview has for you, puts each one on the candidate it was with, and opens
+any of them as a call in The Oracle: the transcript with the speakers named, Metaview's own notes as the notes
+summary, how long it was, when it took place, and a link back to the conversation in Metaview.
 
-1. **Call from the app.** Find a candidate (or type a number) and press Call. Your own mobile rings. A voice says who
-   you are about to call and asks you to press 1; only then is the candidate rung, and they see The Book's number,
-   not yours. The key press is there so that if your voicemail answers your phone, it is never connected to a
-   candidate. The screen follows the call: ringing you, waiting for you to press 1, calling them, in the call, and
-   one plain sentence for how it ended ("Kevin's phone was busy", "You did not pick up"). You can hang up from the
-   screen. If the call does not connect, the voice tells you why before it hangs up.
-2. **Call from your phone (the switchboard).** Save The Book's number in your contacts. Ring it from the mobile you
-   saved in The Book, key in your PIN and #, then the number you want and #. The call is placed and recorded the
-   same way, with no screen needed. If the number is exactly one candidate's, the call goes on that candidate. Three
-   wrong PINs end the call and lock that mobile out of the switchboard (you are e-mailed when it happens): for a
-   quarter of an hour the first time, an hour the next, then a day. Wrong PINs add up across calls, so hanging up
-   and trying again does not help a guesser, and ten of them inside a day switch the PIN off until its owner
-   chooses a new one in the app. A caller's number can be faked, so the PIN is the only real lock, and it must not
-   be something that can be guessed a few tries at a time for ever. One call at a time: while a call you placed is
-   under way, a second one from the switchboard is refused.
-3. **Somebody rings the number.** The caller is found by their number and put through to the recruiter who last
-   called them, or else the owner of their most recent application, or else the first admin who has a mobile saved.
-   Your phone shows The Book's number, and before you are joined a voice says "Call from Dana Whitlock, a candidate"
-   (or that the number is not known). If you do not answer within twenty seconds the caller is asked to leave a
-   message, and the message becomes a call in the Oracle too, titled "Voicemail from ...". A number nobody knows is
-   put through the same way and waits in the Oracle to be added to a candidate. Ringing back from your call log
-   reaches the switchboard, so the call back is recorded as well. (Set `PHONE_FORWARD_SHOWS=caller` if you would
-   rather see the caller's own number; calls passed on that way are more likely to be labelled as spam by your carrier.)
+From then on it is a call like any other. Speakers can be renamed, the notes edited or written again by The Book's
+own AI, the write-up for the hiring team drafted, the summary saved on the profile, the call moved to another
+candidate or deleted. The one difference is that there is no audio in The Book: to listen, follow the link to
+Metaview.
 
-### After the call
+### Connecting it
 
-When Twilio says the recording is ready, The Book fetches it with both channels, checks that it really has two,
-stores it next to the other call audio, and only then deletes Twilio's copy. The call appears in the Oracle with
-"phone" as its source, which way it went and the other person's number. It is put on the candidate automatically
-when it was placed on a candidate or when the number is exactly one candidate's (on their most recent active
-application), and their history says "Phone call, 12 min". Otherwise it is left for the recruiter to add to someone.
+1. **Make a key in Metaview.** Sign in to Metaview, open **Settings**, then **Integrations**, then **MCP**. Where it
+   asks "Use API Key instead of OAuth?", choose that, and press **Generate API Key**. Copy the key. A key belongs to
+   the person who made it and sees what that person sees in Metaview, so make it with an account that can see all
+   of the agency's conversations (an admin's).
+2. **Enter it in The Book.** An admin opens **Settings**, **Agency**, and pastes the key into the **Metaview** card
+   (the **Connect Metaview** button on The Oracle's Metaview tab leads there). The Book tries the key against
+   Metaview before keeping it: a key Metaview refuses is not saved, and the card says so. Recruiters see whether
+   Metaview is connected, but only an admin can connect it, change the key or disconnect it.
 
-The transcript does not guess who is speaking: Twilio puts the person it rang first on the first channel, so on a
-call you placed the first channel is you, and on a call that came in it is the caller. Each channel is written out
-on its own and the two are woven together by time, with the names filled in. Notes are then written as for any
-Oracle call, and the recruiter is e-mailed "Your call notes for Dana Whitlock are ready" with a link. Without e-mail
-connected, no e-mail is sent and nothing else changes.
+That is all. Nothing needs setting on the server. If you would rather keep the key with the server's other
+settings, set `METAVIEW_API_KEY` where The Book is hosted (on Railway: the service's **Variables**) and restart; it
+then connects by itself. A key entered in the app takes over from one set on the server, and only a key entered in
+the app can be removed in the app.
 
-Nobody is at a screen for a phone call, so what would be a button for a browser recording happens by itself. If the
-transcription service is busy, failing or not answering, the call goes back in line (after a minute, then five,
-fifteen, an hour, and so on for about two days); if it cannot be written out at all, the recruiter is e-mailed
-"Your call with Dana Whitlock could not be written out" with the reason and a link. If the e-mail itself cannot be
-sent, it is tried again for three days and only marked as sent once the mail provider has taken it. A restart
-between the transcript and the notes loses neither: the notes are written and the e-mail sent once the server is
-back.
+### What happens once it is connected
 
-Twilio's messages to The Book (webhooks) are not guaranteed to arrive, or to arrive once. Every one can be
-repeated without harm, and once a minute The Book asks Twilio about calls it has heard nothing about and about
-recordings that never turned up. A recording that cannot be fetched is tried again for up to thirty days (one day,
-if Twilio keeps answering that it has no such recording) and stays at Twilio meanwhile; it is never deleted there
-until it is safely here. A restart in the middle loses nothing.
+- **The list fills in.** The Book reads Metaview's list of conversations in the background, fifty at a time with a
+  few seconds between pages, newest first. A couple of thousand conversations take two or three minutes. How far
+  it got is kept, so a restart carries on from there. While it is still reading, the Metaview tab and the card in
+  Settings say how far it has got ("600 of about 2,100 so far"); the calls already listed can be used meanwhile.
+- **New calls appear by themselves.** Every ten minutes The Book looks for new conversations; **Look for new
+  calls** looks at once. A recent conversation that has changed in Metaview (a transcript that arrived later, a corrected name) is
+  brought up to date at the same time, and once a week the whole list is read again, which also takes out
+  conversations that have been deleted in Metaview and were never brought in.
+- **Each call is matched to a candidate.** By an e-mail address of the person on the call, by their phone number,
+  or by their exact full name. Capitals and accents do not count. Anything weaker (a first name on its own, part
+  of a name) never chooses anybody: those people are offered, and a recruiter picks. A person chosen by hand
+  always wins and is remembered. Interviewers, and anyone with a login to The Book, are never taken for the
+  candidate. Metaview often knows somebody on a phone call only by a first name and their number, so in practice
+  most calls are matched by the phone number on the candidate's record: a candidate with no number in The Book
+  will usually have to be chosen by hand.
+- **Phone numbers are compared however they were typed.** "(647) 555-0199", "647.555.0199", "647/555/0199 ext 4"
+  and "+1 647 555 0199" are one number, and a box holding two numbers ("416-555-0183 / 647-555-0199") counts for
+  both. The last ten digits are compared together with the country: the same ten digits in another country
+  ("+44 …") are a different number. A number with nothing in front is taken to be a North American one.
+- **Evidence that points two ways chooses nobody.** If the address on a call is one candidate's and its number or
+  its exact name is another's, or if Metaview lists two people on the call who are two different candidates,
+  nobody is chosen: they are all offered, the call is never brought in by itself, and it is listed on each of
+  their profiles until a recruiter decides. Two people on file with the same number (a household) or the same
+  address are told apart by the name on the call; when the name does not settle it, both are offered. The same
+  person on file under two clients is matched to the record that is still in progress, if only one is.
+- **A caller Metaview has no name for** goes by their phone number there, and so the call is listed as "Call with
+  +1 647…" here. The number still matches them to their candidate, and once the call is on a candidate it, and
+  the speaker in its transcript, carry the candidate's name.
+- **Opening a call brings it in.** The Book fetches that one conversation's transcript and notes and makes the call
+  in The Oracle, on the candidate it was matched to (their most recent job in progress) or the one the recruiter
+  chose. The candidate's history gets the line "Metaview call, 12 min", which client users never see. Opening it
+  again opens the same call. The call belongs to the interviewer, if they have a login to The Book, and otherwise
+  to whoever opened it.
+- **Notes may follow a little later.** Metaview writes a conversation's notes the first time they are asked for,
+  which takes about half a minute. The call opens at once with its transcript; the notes are asked for again by
+  themselves (five times over about nine minutes) and appear on the page when they are ready. If Metaview never
+  produces any, the call says so and the notes can be written in The Book.
+- **A call with no transcript** in Metaview is still brought in, saying that there is none yet. If Metaview writes
+  it out later, the transcript and the notes arrive by themselves.
+- **Recent calls come in without anyone clicking.** With "bring calls in by themselves" on (it is on unless an
+  admin turns it off), a conversation from the last 14 days, and every new one, that an e-mail address or a phone
+  number ties to exactly one candidate, with nothing else about the call pointing anywhere else, is brought in and
+  put on that candidate automatically. A match by name is never enough for that, nor is a number shared by two
+  people on file, and older history is only listed until somebody opens it. No more than 50 calls a day
+  come in this way (`METAVIEW_AUTO_PER_DAY` changes the number), so a mistake cannot fill the workspace, and a call
+  somebody deleted is never brought back by itself.
 
-### Telling people the call is recorded
+The list can be searched by name, e-mail address, phone digits and title, and narrowed to the calls you took part
+in (**Mine**: the ones where the e-mail address you sign in to The Book with is an interviewer's in Metaview), the
+ones not yet in The Book, the ones with no candidate, or, on a candidate's Calls tab, that candidate's calls, each
+with **Add** and all of them with **Add all**.
 
-Before a recorded call is connected, the person who did not place it hears, alone:
+### It only reads
 
-> "This call from Harbour Talent is recorded and transcribed for recruitment notes. Tell your recruiter if you'd
-> prefer it wasn't."
+The Book never changes anything in Metaview. Of everything a Metaview key allows, the code can ask for exactly two
+things, and refuses to send anything else: whose key this is (to check it and show the workspace's name), and the
+list of conversations with chosen fields. It asks one thing at a time, pauses between pages, and tries again later
+when Metaview is busy or not answering; a failure is shown as a sentence on the Metaview tab and never stops the
+rest of The Book.
 
-(with your agency's name). A caller hears it when they ring in, after "Thanks for calling". It takes under ten
-seconds. It is played before recording starts, which is when it has to be; for the same reason it is **not in the
-audio**. What proves it was played is the call's own record: the Oracle shows the words, to whom and when. The
-recruiter can also say it once connected, which puts it in the recording.
+Asking for a conversation's notes makes Metaview write them if it has not already, as it would if you opened the
+conversation there. That happens only for conversations that are brought in.
 
-- `PHONE_NOTICE=off` plays no notice. The call's record then says so, and telling the other person is up to the
-  recruiter. Any other text replaces the wording, for example a version your lawyer has approved. Keep it short.
-- **Call without recording** places the call with no recording and no notice, and nothing goes to the Oracle. Use
-  it when a candidate asks not to be recorded.
-- The recruiter hears on their own phone, before pressing 1, whether the call will be recorded.
+### What The Book keeps, and where
 
-Canada's privacy law expects people to be told that a call is recorded and why, whoever placed it, and about a dozen
-US states require everyone on a call to agree. You cannot tell where somebody is from their number. Telling everyone
-on every call covers all of them, which is why it is the default. This is a careful reading of second-hand sources,
-not legal advice: have a privacy lawyer confirm the wording once, and add a line about call recording to your
-privacy notice. Twilio, Deepgram and Anthropic all process calls in the United States.
+- **For every conversation Metaview lists:** Metaview's number for it and its link, when it took place, its title,
+  type, channel (Phone, Zoom...) and length, whether it has a transcript, and the names of the people on it with
+  their part in the call. E-mail addresses and phone numbers are kept only where they are used: the candidate's
+  (or, when Metaview names no candidate, everybody's who is not an interviewer), to work out who the call was
+  with, and each interviewer's e-mail address, for "Mine" and for whose call it is. An interviewer's own phone
+  number is not kept, nor are the contact details of anybody else on a call that has a candidate. That is what is
+  needed to list a conversation and to match it, and nothing more is kept. Addresses and numbers are used for
+  matching and searching on the server and are not sent to the browser, with one exception: where the number is
+  all Metaview has to call somebody by, it is shown as their name, as it is in Metaview.
+- **For a conversation that has been brought in:** its transcript and notes, on the call in The Oracle.
+- **Never:** audio. Metaview does not give it out.
+- **The key:** sealed with a secret that the server makes on first use and keeps in `DATA_DIR/server-secret`, beside
+  the database. It is never shown again, never returned by the server and never written to a log. Back the data
+  folder up as a whole; if the secret file is lost, the key simply has to be entered again. A key set on the
+  server (`METAVIEW_API_KEY`) that cannot be a key, such as one pasted with a line break in the middle, is not
+  sent anywhere: the Metaview card says that it needs setting again.
+- **What is deleted is written over.** When the key is replaced or Metaview is disconnected, and when a candidate
+  is erased, the old contents are overwritten in the database's files, not just marked as free space. A backup
+  taken *before* that still holds them, and a key keeps working in Metaview until it is deleted there: to retire
+  a key for good, delete it in Metaview too (Settings, Integrations, MCP).
 
-### Settings
+Nothing about your candidates in The Book is sent to Metaview: matching happens on your server. When a recruiter
+has the notes written again or a write-up drafted, the transcript goes to Anthropic like any other call's (see
+[What is sent outside your server](#what-is-sent-outside-your-server)).
 
-| Setting | What it is |
-| --- | --- |
-| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | From the front page of the Twilio Console. The token signs in to Twilio and is what proves a webhook came from Twilio. |
-| `TWILIO_NUMBER` | The number you bought, for example `+16475550100`. |
-| `APP_URL` | **The exact public https address of the workspace**, for example `https://hiring.youragency.com`. Twilio signs every webhook with the address it was sent to, and The Book checks that signature against this setting, so it must be the address you gave Twilio, letter for letter: `https`, the same domain (your own domain if you use one, not the Railway one), no path. If it is wrong, every call fails with "an application error has occurred". |
-| `PHONE_COUNTRIES` | Countries that may be called, as two-letter codes. Default `CA,US`. |
-| `PHONE_NOTICE` | See above. Default on. |
-| `PHONE_FORWARD_SHOWS` | `caller` to show a caller's own number when they are put through. Default: The Book's number. |
-| `PHONE_CALLS_PER_HOUR` | The most calls one person can place in an hour. Default 30. |
-| `PHONE_STRANGERS_PER_HOUR`, `PHONE_STRANGERS_PER_DAY` | The most calls put through from numbers that are not a candidate's. Default 10 an hour and 40 a day. |
-| `PHONE_MIN_FREE_MB` | With less free disk space than this, callers are not asked to leave a message. Default 500. |
-| `PHONE_VOICE` | Optional: which of Twilio's voices reads the prompts (for example `alice`). |
+Everything is agency only: client users are refused on every route and see nothing of it.
 
-Without the three Twilio settings (or without an address in `APP_URL`), the app says phone calls are not connected,
-and everything else works as before. People can still save their mobile and PIN ahead of time. Settings, Agency
-says which of the four is still missing, and shows the two addresses for step 5 below, filled in, ready to copy.
+**Erasing a candidate** ("Delete all data on this person", or removing somebody's only application) deletes the
+calls that were brought in for them, and also what The Book remembered about their other Metaview conversations:
+those leave the Metaview tab, the search and the profile lists, with the person's name, address and number. Only
+Metaview's numbers for those conversations are kept, so that the next reading of Metaview's list does not put
+them back; they stay off the list even if the person is added to The Book again later. The conversations
+themselves are still in Metaview: delete them there too if they must go altogether. (Deleting a whole job removes
+the people who were only in that job and their calls, but does not do this for each of them.)
 
-### Setting it up
+An admin can **Disconnect** Metaview (Settings, Agency): that removes the key and everything remembered about
+conversations that were never brought in, at once, even if The Book is in the middle of reading Metaview at that
+moment. Calls already in The Oracle stay, and still open. The same care is taken when the key is replaced by one
+for another Metaview workspace: nothing of the first workspace's list is carried into the second.
 
-1. Open a Twilio account and upgrade it from the trial. A trial account can only ring numbers you have verified,
-   plays its own message, cuts calls at ten minutes and, if opened in Canada, cannot ring US numbers at all.
-2. Buy a local number with Voice. An Ontario number (416, 647, 437, 905, 289, 365) suits an Ontario agency.
-3. In Voice, Settings, Geo permissions, allow United States and Canada only, and leave every high-risk box off.
-   Check that "Enforce HTTP Auth on Media URLs" (Voice, Settings, General) is on, so recordings cannot be fetched
-   without your credentials.
-4. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_NUMBER` and `APP_URL` on the server and restart it. Set
-   `DEEPGRAM_API_KEY` and `ANTHROPIC_API_KEY` too if they are not already (see [The Oracle](#the-oracle)), and
-   connect e-mail if you want the "notes are ready" message.
-5. In Twilio, open Phone Numbers, Active numbers, your number, Voice configuration. For **A call comes in** choose
-   Webhook, `https://<your address>/api/phone/twilio/inbound`, HTTP POST. For **Call status changes** enter
-   `https://<your address>/api/phone/twilio/status`, HTTP POST. Save. Until this is done, calls placed from the app
-   work but ringing The Book's number reaches nothing, and The Book cannot know: it shows "Connected" either way.
-   Settings, Agency shows the two addresses in full. To check, ring the number from a saved mobile: a voice should
-   say "This is The Book".
-6. In The Book, each person on the agency team saves their own mobile number under Settings, Your account, and a
-   PIN of 4 to 6 digits if they want to ring in (six is better; a PIN needs at least three different digits, and
-   runs, years and 2580 are refused). Save The Book's number in your phone as "The Book".
+### Before you rely on Metaview
 
-### What stops it running up a bill
+The Book was built and tested against a stand-in that answers the way Metaview does (`test/metaview-standin.mjs`).
+It was then run once against the real service, reading only, in November 2026: the key was accepted and the
+workspace named, the newest hundred conversations were listed (a page of fifty took about a second), and one phone
+call was opened: every line of its transcript was read into turns for its two named speakers, its length and date
+matched, and Metaview's notes arrived by themselves about 35 seconds later. That run is also where it was seen
+that most callers have only a first name and a number, and that a few go by their number alone.
 
-- A call can only be placed by a signed-in agency user, or from that user's own saved mobile with their PIN. Caller
-  ID can be faked, which is why the PIN exists.
-- Numbers are checked before Twilio is asked for anything. Only ordinary numbers in the allowed countries are
-  rung. `+1` is not only Canada and the United States: 1-900 and other premium lines, toll-free numbers, and the
-  Caribbean countries and US territories that share `+1` (Jamaica, the Dominican Republic, Puerto Rico and the
-  rest, each priced on its own) are refused. The same check applies to the mobile a person saves, since The Book
-  rings that too. For countries other than Canada and the US, The Book cannot tell a premium-rate number from an
-  ordinary one, so if you add any, rely on Twilio's geographic permissions as well.
-- Each person can place 30 calls an hour and one at a time, whether from the app or from the switchboard. The
-  count is kept in the database, so a restart does not reset it. A call is cut off at three hours. One saved mobile
-  can ring the switchboard 20 times an hour, and the PIN prompt ends the call after three asks.
-- Calls coming in are put through at most 10 an hour from one number, 60 an hour and 300 a day in all; beyond that
-  the call is turned away with a busy tone, without being answered. Calls from numbers that are not a candidate's
-  get a much smaller share (10 an hour and 40 a day), because anyone can make them, and each one rings a
-  recruiter's phone and may leave a message to store and write out.
-- A message left by a number that is nobody's is written out, but no notes are drafted for it until somebody asks
-  on its page, at most five e-mails a day are sent about such messages, and one that nobody has put on a candidate
-  after 30 days is deleted with its audio. When the disk has less than 500 MB free, callers are not asked to leave
-  a message at all, so the room that is left stays for calls being recorded.
-- Webhooks are accepted only with Twilio's signature. Anything else is answered 403 and changes nothing.
+What that one run could not show, so check it the first time you connect:
 
-### Privacy
+1. Enter the key and watch the count climb to about the number of conversations you have.
+2. Open a few recent calls, among them a video meeting and a long call. Check both names are on the transcript, the
+   times look right, and the notes arrive within a minute.
+3. Check a few matches of each kind: a candidate matched by phone number, one by e-mail, one by name.
+4. Look at the calls that came in by themselves, and at each candidate's history line.
 
-Phone calls follow the Oracle's rules: agency only; client users are refused on every route and see nothing of a
-call, not even the line on a candidate's history. Deleting a candidate deletes their phone calls with the audio,
-transcripts and notes, and the entries in each recruiter's list of calls; if a call with them is still going, its
-recording is deleted from Twilio when it arrives. A recording that was still at Twilio when the person was deleted
-(not fetched yet, or fetched but Twilio's copy not yet deleted) is remembered by its Twilio name alone and deleted
-there, tried again until Twilio says it is gone. Deleting a call in the Oracle while it is still going does the
-same. Phone numbers and PINs are never written to the server log. PINs are stored as salted hashes. What Twilio
-told The Book about each call is kept for two weeks to help with fault-finding, with numbers and keys masked.
-
-A phone recording is a WAV file, about 2 MB a minute (115 MB an hour), much larger than a browser recording, so
-watch the disk. Until The Book has fetched and deleted it, a recording sits on Twilio's servers in the United
-States; that is normally under a minute.
-
-### What it costs
-
-Estimates gathered in November 2026 from Twilio's published prices, in US dollars; check your own account.
-
-- The number: about $1.15 a month.
-- A call you place is two calls to Twilio (to you, then to the candidate) at about $0.014 a minute each, plus
-  recording at $0.0025 a minute: **about 90 cents for half an hour**. A call that comes in and is put through is
-  about 75 cents for half an hour.
-- Some places cost far more per minute: Yukon, the Northwest Territories and Nunavut (area code 867) about $0.15,
-  Alaska about $0.09.
-- Transcription is billed for both channels, so a half-hour phone call counts as an hour of audio at Deepgram.
-
-### Before you rely on it
-
-**None of this has been run against Twilio.** Twilio could not be reached from where it was built. The requests
-follow Twilio's published API description and the code of its own library, and the signature check passes that
-library's own test cases; but what Twilio sends in each webhook, and in what order, comes partly from second-hand
-summaries of its documentation. Everything was tested against a stand-in written from those sources
-(`test/twilio-standin/`), which shows that The Book and the stand-in agree, not that Twilio behaves this way. The
-same goes for Deepgram's handling of a two-channel file. Before recruiters use it with candidates, make these
-checks on real calls between the team's own phones, in this order:
-
-1. With the account upgraded and the number bought, confirm the two Console settings in step 3 above.
-2. Place one call from the app between two of your phones. If a voice says "an application error has occurred",
-   `APP_URL` does not match the address Twilio was given (the server log shows requests answered 403).
-3. Press 1, talk for a minute with each person saying who they are, and hang up. The call should show as ended
-   with its length, and appear in the Oracle within a minute or two.
-4. Open the call in the Oracle. The audio should have both voices, and **the names on the transcript should be the
-   right way round**. If they are swapped, the channel order is not what Twilio's documentation says; tell whoever
-   maintains The Book, because it is one line to change.
-5. Listen to the start of the recording: the notice should not be in it. Ask the person called what they heard, and
-   note what the caller hears while the notice plays.
-6. In the Twilio Console, under Monitor, Logs, Call recordings, the recording should be gone.
-7. Place a call and let your own phone go to voicemail. The other phone must not ring, and the call should end as
-   "You did not press 1".
-8. Ring The Book's number from a phone that is not saved in it: check what the recruiter's phone shows and hears,
-   then try again without answering and leave a message. The message should appear in the Oracle.
-9. Ring in from a saved mobile and place a call with the PIN. Then call a US mobile on each big carrier you can and
-   see how The Book's number is labelled; if it shows as spam, register for caller-ID attestation in Twilio's
-   Trust Hub.
-10. Look at the first calls in Twilio's usage page and compare the prices with the figures above.
-
-### Not built for phone calls yet
-
-- Stopping a recording part-way through a call. Until then: hang up and call back without recording, and delete the
-  call in the Oracle.
-- A French notice, or transcription of calls held in French (`DEEPGRAM_LANGUAGE` sets one language for all calls).
-- Deleting call audio automatically after a set time.
-- Talking through the browser with a headset instead of your own phone.
-- Ringing several recruiters at once for a call that comes in, and text messages.
-
-## Your calendar in The Oracle
-
-A recruiter's day, in the same place they record their calls: the events from their own calendar and The Book's
-interviews in one list, each with the candidate it is probably with, a button to join or call, and "+ Add" to mark
-the ones to record. Nothing has to be set up on the server, and nobody registers an app with Google or Microsoft:
-each recruiter pastes one private link from their calendar.
-
-### Getting your link
-
-The link is pasted in under Settings, Your account, "Your calendar", which also has these steps. They are as
-Google, Microsoft and Apple describe them, and were not tried while this was built (see
-[Before you rely on it](#before-you-rely-on-the-calendar)).
-
-- **Google Calendar** (on a computer, not the phone app): open Google Calendar, click the gear, then **Settings**.
-  In the left column, under **Settings for my calendars**, click your calendar's name, then **Integrate calendar**.
-  Copy the link under **Secret address in iCal format**. If your agency uses Google Workspace and that field is not
-  there, an administrator has to change one setting first: Admin console, Apps, Google Workspace, Calendar,
-  **Sharing settings**, **External sharing options for primary calendars**, and choose "Share all information, but
-  outsiders cannot change calendars". Google says this can take up to 24 hours to appear. Changing it publishes
-  nothing by itself: a calendar can only be read by someone who has its secret link.
-- **Outlook / Microsoft 365** (Outlook on the web): click the gear, then **Calendar**, then **Shared calendars**.
-  Under **Publish a calendar** choose your calendar and **Can view all details**, then **Publish**. Click the **ICS**
-  link that appears and choose **Copy link**. With a lower level of detail every event is just called "Busy". If
-  "Publish a calendar" is missing, your Microsoft 365 administrator has switched it off (Exchange admin center,
-  Organization, Individual Sharing: the sharing policy needs the domain "Anonymous"). Outlook publishes three months
-  back and three months ahead, and its published link very probably leaves out the guest list, so events from
-  Outlook are matched to candidates by name and phone number, not by e-mail address.
-- **Apple iCloud**: at icloud.com/calendar, click the sharing control beside the calendar, turn on **Public
-  Calendar** and copy the link (it starts `webcal://`, which is fine). On an iPhone: Calendar, Calendars, the (i)
-  beside the calendar, Public Calendar, Share Link.
-
-Paste the link under Settings, Your account, "Your calendar". The Book reads the calendar once before accepting the link, and says plainly what
-is wrong if it cannot. One calendar per person; to use another, paste its link in place of the first.
-
-**Treat the link like a password.** Anyone who has it can read that calendar. The Book stores it sealed, never
-shows it again (not to you, not to an admin) and never writes it to a log. To take access away, remove the link
-under Settings, Your account, "Your calendar", and to be sure, also reset it where it came from: **Reset** beside the secret address in Google,
-**Unpublish** in Outlook, or turn Public Calendar off in iCloud.
-
-### What the day shows
-
-- The events of the chosen day on the recruiter's own clock, wherever the server runs, including the days when the
-  clocks change. Cancelled events, and single dates of a repeating event that were cancelled or deleted, are left out.
-- **The Book's own interviews** for that person (candidates they own, interviews they scheduled or sit on the
-  panel of), with the candidate already known. When a calendar event is plainly the same meeting as one of those
-  (same candidate, within ten minutes), it is shown once, as the interview, with the calendar's link to join.
-- **The link to join**, when the event has one for Google Meet, Zoom, Microsoft Teams or Webex. No other kind of
-  link is ever offered, so an invitation cannot put an arbitrary link behind a button.
-- **A phone number**, when the event names a person's number. Numbers that belong to a meeting's dial-in
-  instructions are recognised and ignored.
-- **Who it is with.** In this order: a guest's e-mail address that is a candidate's; a phone number in the event
-  that is a candidate's; a candidate's exact full name in the title or as a guest's name (accents and capitals do
-  not matter). Anything weaker is only offered as a suggestion and never chosen: "Call Kevin" with two Kevins on
-  file asks which one, and with one Kevin on file still only offers him. The same goes for two candidates among the
-  guests, two people with one name, and one person on file at two clients and in progress at both. The recruiter
-  can always choose the candidate themselves, and their choice wins.
-- **"+ Add"** marks an event to be recorded. The mark stays with the event when it is renamed or moved, and a call
-  recorded from an event, or a phone call placed from it, is shown on it afterwards. An added event is prompted two
-  minutes before it starts, while The Book is open in a tab. The Book's own interviews are in the day like any
-  other event and are added the same way.
-
-A recruiter only ever sees and changes their own day. Client users see none of this.
-
-### How fresh it is
-
-The Book reads a calendar at most once every five minutes while its owner is looking at their day, and the day can
-be asked to read it again at once. If the calendar cannot be reached, the last copy is shown for up to six hours with a line
-saying why and how old it is. How quickly Google, Outlook and iCloud put a new event into their links is theirs to
-decide and could not be measured here.
-
-### What is kept, and where
-
-- The link, sealed with a key that the server makes on first use and keeps in `DATA_DIR/server-secret`. Back the
-  data folder up as a whole. If that file is lost, saved links can no longer be opened and are pasted in again;
-  nothing else is affected.
-- For each event a person has been shown: its key (meaningless outside The Book and different for each person),
-  the day it was on, and whether it was added, given a candidate or recorded. No titles, guests, descriptions or
-  times from the calendar are stored. Events nobody did anything with are forgotten after 30 days.
-- The calendar itself is held in memory only, and dropped when its link is removed. Descriptions and locations
-  never leave the server; the day view sends titles, times, guests, the link to join and the phone number.
-- Removing the link removes all of the above for that person's calendar events.
-
-### Safety
-
-A pasted link makes the server fetch an address somebody typed, so the reader is strict: https only, the standard
-port only, no private, loopback or link-local addresses (checked for every address the name has, again on every
-redirect, and the connection is made to exactly the address that was checked), at most five redirects, no cookies,
-10 MB and 15 seconds at most, and what comes back has to be a calendar. Saving a link can be tried twelve times an
-hour per person. Everything inside an event is text a stranger may have written (anyone can send an invitation):
-it is cut to length before it is looked at, shown as text only, and large calendars are read on a thread of their
-own so that reading one never holds up anybody else. A phone number written in an event only becomes a Call button
-when it is a number The Book would ring itself (an ordinary number in an allowed country), so an invitation cannot
-put a premium-rate or overseas number one tap away. An event set to repeat many times an hour is left out, with a
-sentence saying so, before any time is spent working out its dates.
-
-### Limits
-
-- A day shows at most 150 events from the calendar; a calendar over 10 MB is not read.
-- A repeating event changed "from this date onwards" keeps its marks when the calendar gives the later dates a new
-  identity but the same title and time (as Google does). If the time changed too, the mark on a later date is lost.
-  Calendars that write such a change in the standard's other form (rare) are only read for the first changed
-  date, and the day says so.
-- A time zone that is neither a real one nor properly defined in the calendar is shown exactly as written, with a
-  line saying so.
-- Dates added to a repeating event one by one (the standard's `RDATE`) are not shown.
-- The reader connects directly and ignores any outbound proxy.
-
-### Before you rely on the calendar
-
-No real Google, Outlook or iCloud link could be fetched from where this was built: those services were not
-reachable, and no account was available. The reader was tested against calendar files written to look like what
-they publish, and against local servers playing every trick the reader has to refuse. So, with the first real link:
-
-1. Create an event with a guest and a Meet or Teams link, paste the calendar's link under Settings, Your account,
-   "Your calendar", and check
-   that the event appears with its guest, its link to join and the right time. Note how long a new event takes to
-   show up when the day is read again.
-2. If the guests are missing (expected for Outlook), matching will rest on names and phone numbers.
-3. If the day shows a line about a time zone it does not know, send that event's details to whoever maintains this.
-4. Whether Railway's network reaches Google and Microsoft over IPv6 as well as IPv4 does not matter to the reader
-   (it tries every address a name has), but a live IPv6 connection was never exercised.
-
-The calendar tests are part of `npm test`. They start servers on five ports from `CALENDAR_TEST_PORT` (3640 unless
-set). To let the real API be tested on calendar files, the server reads links to `https://calendar.test/<name>.ics`
-from the folder named in `CALENDAR_TEST_FILES`; that setting is refused when `NODE_ENV` is `production`.
+Not known: what limits Metaview puts on how often it may be asked (The Book stays well below anything
+reasonable), and whether asking for notes counts against anything in your Metaview plan. The key is tied to the
+person who made it; if that person leaves Metaview, the tab will say the key was refused, and a new one is needed.
 
 ## Chrome extension
 
@@ -760,9 +567,8 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   write call notes and submission drafts.
 - **Connect call transcription (optional)** by setting `DEEPGRAM_API_KEY`. See [The Oracle](#the-oracle) for what is
   sent, what it costs and what happens without it.
-- **Connect phone calls (optional)** by setting `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_NUMBER` and
-  `APP_URL`, and pointing the number's voice webhook at the workspace. See [Phone calls](#phone-calls) for the steps;
-  `APP_URL` must be the exact public https address.
+- **Connect Metaview (optional)** in the app: an admin pastes a Metaview key under Settings, Agency, Metaview. Nothing
+  needs setting on the server, though `METAVIEW_API_KEY` works too. See [Metaview in The Oracle](#metaview-in-the-oracle).
 - **Tell the app about proxies.** Leave `TRUST_PROXY` unset when the app is reached directly (plain `docker run`).
   Behind a reverse proxy set it to the number of proxies in front, or sign-in and application rate limits will
   either lump every visitor together or be trivially bypassed.
@@ -776,6 +582,24 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   approved. Set `APP_URL` to the workspace's address (Railway is detected automatically): without it the app
   does not know its own address, so it emails no link and shows it to the approver instead.
 
+### If your workspace had the calendar or the phone line
+
+Earlier versions of The Book could read a recruiter's calendar from a link they pasted in, and had a phone line
+with a mobile number and a PIN for each recruiter. Both were taken out. Starting the new version never deletes
+anything, so a database that was in use before still holds what people saved for them: each saved calendar link
+(sealed, but such a link opens that person's whole calendar), what was remembered about their calendar events, and
+their mobile numbers and PINs. Nothing reads any of it any more, and nobody can remove it from inside the app any
+more. To clear it, run this once where The Book is hosted (on Railway: open a shell on the service, in `/app`):
+
+```
+node server/forget-removed.js          # says what is there and changes nothing
+node server/forget-removed.js --yes    # clears it
+```
+
+It can be run while the app is running, clears only those four things (written over, not just marked as deleted),
+and leaves every call in The Oracle alone, phone calls included. Anyone who had saved a calendar link can also
+reset their calendar's private address with their calendar provider, which makes the old link useless everywhere.
+
 ## How it is built
 
 ```
@@ -785,24 +609,20 @@ server/
   reporting.js  The Individual and Clients reports: the record of submissions, first interviews, placements and searches, and the day counting starts
   autofill.js  Drafting a job and its brief from a job description and intake notes
   oracle.js  The Oracle: recording and uploading calls, transcription, notes and submission drafts
-  phone.js   Phone calls through Twilio: click to call, the switchboard, calls coming in, fetching the recording
-  phone-numbers.js     Reading a phone number as typed, and which numbers may be rung
-  twilio-signature.js  Checking that a webhook really came from Twilio
+  metaview.js         Metaview in The Oracle: the key, reading the list in the background, bringing calls in
+  metaview-client.js  The connection to Metaview: one request at a time, read-only, and the reading of its answers
+  match.js   Which candidate a conversation was with: by address, by phone number, by exact name
   webm.js    Writes a browser recording's length into the file, so the player can seek
   db.js      SQLite schema and helpers (Node's built-in node:sqlite, no native modules)
   links.js   How profile links are stored, and which ones identify a person
   mail.js    Optional SMTP delivery; every email is logged either way
-  calendar.js         Your calendar in The Oracle: the saved link, the day's events and who they are with
-  calendar-fetch.js   Reads a pasted calendar link without being led into the server's own network
-  calendar-day.js     One day's events out of a calendar file, on the recruiter's clock
-  calendar-worker.js  Runs that reading on a thread of its own
-  calendar-links.js, calendar-match.js, calendar-time.js   Links to join and phone numbers, names, time zones
-  secret.js  The server's own secret, kept in the data folder; seals saved calendar links
+  secret.js  The server's own secret, kept in the data folder; seals the Metaview key
   seed.js    Demo data
+  forget-removed.js  Run by hand: clears what the calendar and the phone line (both taken out) left in an older database
 src/
   App.jsx, state.jsx, lib.js, ui.jsx   App shell, data hooks, helpers, shared components
   components/                           Candidate profile, modals, forms, layout
-  oracle/                               The recorder, the phone line and the day: what The Oracle's cards share with the rest of the app
+  oracle/                               What The Oracle's screens share with the rest of the app (the recorder)
   pages/                                One file per screen, plus the public careers pages
 ```
 
@@ -820,28 +640,28 @@ they made at that client, their résumé files, and their recorded calls with th
 ## Not built yet
 
 - Calendar integration (Google or Microsoft) for live availability and automatic invites; today you get a calendar file to
-  download. The Oracle reads a recruiter's own calendar from a private link, but writes nothing to it, and is not told
-  the moment something changes.
-- A reminder for an added event that reaches you when The Book is not open in a tab (the prompt and the desktop
-  notification are made by the open page), and a sign-in to Google or Microsoft in place of the pasted link (which
-  would also bring guest lists for Outlook).
+  download for each interview.
+- Calling a candidate from The Book. Calls are made the way you make them now and recorded by Metaview, or recorded
+  in the browser.
+- Playing a Metaview call's audio inside The Book; the call links to the conversation in Metaview.
 - Self-service password reset by email. Until then, an agency user deactivates the account and invites the person
   again at the same address (see "Accounts and getting back in").
 - Declining many account requests at once; each is declined on its own, and unanswered ones expire after 14 days.
 - AI-assisted screening of applications. (Calls are summarised by the Oracle; applications and résumés are not.)
-- Joining a video call to record it. The Oracle records in the recruiter's browser, or takes an uploaded recording.
+- Joining a video call to record it. The Oracle records in the recruiter's browser, or takes an uploaded recording
+  (Metaview joins meetings itself, and those conversations arrive through the Metaview tab).
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
 - Automated tests that drive the screens in a browser as part of `npm test`. `npm test` covers the résumé reader,
   job autofill (the plain reader, and the route against a stand-in for the AI service), the recruiter brief, the activity
-  feed's milestones, résumé and photo files, the Oracle's server side, the Oracle's uploader, phone calls against a stand-in for Twilio, the
-  calendar against calendar files, and reporting (every number on the Individual and Clients reports, through a
-  story acted out either side of the start date and over more than a year, with the reports' clock set by the test). The Oracle's screens were driven end to end in Chrome with a simulated microphone
-  while it was built (record, reload and server restart mid-call, a lost connection, two people on one computer,
-  transcript, notes, add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude. The
-  phone and calendar screens were driven the same way at 1280 and 390 wide (save a mobile and PIN, call and watch
-  each state, calls that do not connect, an unrecorded call, the switchboard, a call coming in, connect a calendar,
-  add an event, the prompt, record and call from an event, a client user seeing none of it), against the same
-  stand-ins, the stand-in for Twilio and a calendar file: no real phone rang and no real calendar link was read.
-  The Individual and Clients reports, the start date, the placement fee on a hired candidate and the tick on the
-  job form were driven in Chrome at 1280 and 390 wide on the demo data, and printed to PDF.
+  feed's milestones, résumé and photo files, the Oracle's server side, the Oracle's uploader, Metaview in The Oracle
+  against a stand-in for Metaview, and starting on a database from before phone calls and the calendar were taken
+  out. The Oracle's recording screens were driven end to end in Chrome with a simulated microphone while they were
+  built (record, reload and server restart mid-call, a lost connection, two people on one computer, transcript,
+  notes, add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude. The two tabs with
+  Metaview were driven the same way at computer and phone widths against the stand-in for Metaview (connect, the
+  history being read, search and filters, open, choose a candidate, draft and submit, a candidate's Calls tab,
+  record, upload, a recruiter, a client user, disconnect). Reporting (every number on the Individual and Clients
+  reports) is tested through a story acted out either side of the start date and over more than a year, with the
+  reports' clock set by the test; the two reports, the start date, the placement fee on a hired candidate and the tick
+  on the job form were driven in Chrome at 1280 and 390 wide on the demo data, and printed to PDF.
   The other screens were verified by hand.

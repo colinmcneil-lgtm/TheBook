@@ -9,6 +9,7 @@
     "build": "node scripts/pack-extension.js && node scripts/copy-pdf-assets.js && vite build",
     "start": "NODE_ENV=production node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/index.js",
     "seed": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/seed.js",
+    "forget-removed": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/forget-removed.js",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.mjs\""
   },
   "engines": {
@@ -21,7 +22,6 @@
     "fflate": "^0.8.3",
     "lucide-react": "^1.70.0",
     "multer": "^2.5.0",
-    "node-ical": "0.27.6",
     "nodemailer": "^10.4.0",
     "pdfjs-dist": "^6.5.438",
     "react": "^19.3.1",
