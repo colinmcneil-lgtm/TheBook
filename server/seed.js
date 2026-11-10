@@ -635,8 +635,11 @@ What is on offer
   cameThroughThePost(planner, plannerPost, 'Ffion Castellanos', 1.1, 'I plan stock for a cycling brand at the moment and would like a bigger range to look after.');
 });
 
-console.log(`Demo data loaded.
+// Any job made further down this file (the one behind the second confidential post) belongs to whoever made it,
+  // as a job made in the app does.
+  q.run('UPDATE jobs SET account_executive_id = created_by WHERE account_executive_id IS NULL AND created_by IS NOT NULL');
+  console.log(`Demo data loaded.
   Agency owner:  alex@harbourtalent.example / ${PASSWORD}
   Recruiters:    priya@harbourtalent.example and marcus@harbourtalent.example / ${PASSWORD}
   Client user:   maya@lumenhealth.example / ${PASSWORD}  (sees Lumen Health only)
-  Job board:     /board  (two confidential posts)`);
+  Website jobs:  /board  (two confidential posts)`);
