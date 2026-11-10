@@ -68,20 +68,27 @@ The Oracle is where recruiters record their calls with candidates.
    A browser recording is sent to the server in small pieces during the call and each piece is saved as it arrives,
    so a dropped connection, a reloaded page or a restart of the server does not lose what was already recorded. A
    recording can run for 3 hours, counted from when it started. The recruiter is warned ten minutes before, and at
-   3 hours the recording is stopped and saved; to carry on, they start a new one.
+   3 hours the recording is stopped and saved; to carry on, they start a new one. An upload shows how far it has
+   got and can be cancelled; it may take up to an hour to send.
 2. **Transcript.** The audio is written out as text with the speakers told apart and a time on every turn.
 3. **Notes.** A summary is drafted under headings a recruiter would use: background, why they are looking, relevant
    experience, pay, notice period, location, other processes, concerns to probe, next steps. Only what was said on
    the call goes in, and figures are kept as they were said. The recruiter can edit the notes and save them onto the
-   candidate's profile as an agency-only note.
+   candidate's profile as an agency-only note. If the notes cannot be written, the call says why and offers to try
+   again; the recruiter can always write their own.
 4. **Submission draft.** For a call that is on a candidate, one click drafts the write-up that goes to the client's
    hiring team. It is written to be read by the client: no fees, nothing copied from your private brief, no other
    clients, no names of other companies the candidate is talking to, nothing they said in confidence about their
-   employer. The recruiter reviews it before anything is sent.
+   employer, and nothing personal (health, pregnancy or family plans, caring responsibilities, disability, age,
+   religion, ethnicity, sexuality, immigration status): a gap or a need for flexibility is described neutrally. The
+   notes mark such points "(personal: not for the client)". The recruiter reviews the draft before anything is
+   sent, and once it has been sent the call says so and when.
 
 A call can be recorded with no candidate chosen and added to one afterwards: the call's page and the list of calls
-both have "Add to a candidate", which also offers to add someone who is not in The Book yet. Client users never see
-calls, audio, transcripts or notes, or the line on a candidate's history that says a call was recorded.
+both have "Add to a candidate", which also offers to add someone who is not in The Book yet. A call put on the wrong
+person can be moved: a title the call was given automatically changes to the new person's name, and the notes saved
+on the first person's profile from that call are removed from it. Client users never see calls, audio, transcripts
+or notes, or the line on a candidate's history that says a call was recorded.
 
 ### Recording a call
 
@@ -94,9 +101,18 @@ calls, audio, transcripts or notes, or the line on a candidate's history that sa
   candidate's profile or anything else in The Book while the call is recorded. Stop pressed on The Oracle opens the
   call; pressed from the strip anywhere else it saves the call and leaves the recruiter where they are.
 - Closing or reloading the tab ends the recording; the browser asks first. Whatever had been recorded, up to the
-  last few seconds, is saved the next time The Book is opened in that browser, and the call's page says it was cut
-  off. If the connection drops, or the server restarts, recording carries on and the missing part is sent when the
-  connection is back.
+  last few seconds, is saved the next time The Book is opened in that browser (or within about twenty seconds, if
+  another tab of The Book is open there), and the call's page says it was cut off. If the connection drops, or the
+  server restarts, recording carries on and the missing part is sent when the connection is back.
+- Audio that has not reached the server yet is kept in the browser until the server has it. If that browser is
+  away for more than a day, the server saves the call from what it has, and still takes the rest for a week after
+  that: when the browser comes back, the call becomes the whole recording. If the browser is gone for good (another
+  computer, cleared browsing data), the person who recorded the call, or an admin, can press **Save what was
+  recorded** on the call's page.
+- Several recruiters can use one computer: each person's unsent audio waits for them and is sent when they next sign
+  in there.
+- If the browser's own recorder stops working in the middle of a call, the page says so, saves the call up to that
+  point and asks the recruiter to start a new recording.
 
 ### The two keys
 
@@ -109,14 +125,18 @@ Claude cannot listen to audio, which is why transcription needs a service of its
 `ORACLE_MODEL` chooses a different Claude model for the Oracle (it otherwise follows `AUTOFILL_MODEL`, then
 `claude-opus-5-5`); `DEEPGRAM_LANGUAGE` sets the language of the calls (default `en`); `DEEPGRAM_API_URL` points at
 another Deepgram address, for example `https://api.eu.deepgram.com/v1/listen` to have audio processed in the EU.
+A request for notes or a draft that gets no answer is given up on after three minutes and one more try
+(`ORACLE_AI_TIMEOUT_MS` changes the three minutes); transcription is given up on after about five minutes and one
+more try. Either way the call says what happened and can be tried again.
 
 Recording needs the workspace to be served over HTTPS: browsers only allow the microphone on secure pages.
 
 ### Where audio is kept
 
 Finished audio is a file in `DATA_DIR/uploads`, next to résumés and photos (its name starts with `call-`). While a
-call is being recorded its pieces sit in `DATA_DIR/recordings`. Both are on the same persistent disk as the database,
-so the back-up that covers `DATA_DIR` covers them. An hour of recorded speech is about 15 MB; uploads are whatever
+call is being recorded its pieces sit in `DATA_DIR/recordings`; they are removed when the call is stopped, or a
+week after the server saved a call that was cut off (see above). Both are on the same persistent disk as the
+database, so the back-up that covers `DATA_DIR` covers them. An hour of recorded speech is about 15 MB; uploads are whatever
 size the file is. Transcripts and notes are in the database.
 
 ### What is sent outside your server
@@ -132,8 +152,9 @@ size the file is. Transcripts and notes are in the database.
 A call with a candidate is personal data, and in many places it is against the law to record a call unless everyone
 on it has agreed. The Book does not announce the recording to the candidate: the recruiter has to tell them and get
 their agreement. Before every recording and every upload the recruiter must confirm that everyone on the call has
-agreed, and the workspace stores who confirmed it, when, and the wording they confirmed. Nothing is recorded or kept
-without that. Check what the law requires where you and your candidates are, and say in your privacy notice that
+agreed, and the workspace stores who confirmed it, when, and the sentence they ticked. A recording cannot be started
+without that sentence; an upload sent without one is recorded against the standard sentence ("Everyone on this call
+knew it was being recorded and agreed."). Nothing is recorded or kept without that. Check what the law requires where you and your candidates are, and say in your privacy notice that
 calls may be recorded and transcribed.
 
 "Delete candidate data" on a profile also deletes that person's calls: the audio, the transcripts and the notes.
@@ -164,7 +185,8 @@ transcript comes back with two speakers. The notes and submission drafts were li
 for Claude, so read the first few real ones closely.
 
 Recording was tested in Chrome only. Edge, Safari, Firefox and phones have not been
-tried, and neither has a real call of an hour or more.
+tried, and neither has a real call of an hour or more. The cases where a day or a week passes (the server saving a
+call by itself, a browser coming back later with the rest) were run by putting the clock back, not by waiting.
 
 ## Chrome extension
 
@@ -323,6 +345,6 @@ they made at that client, their résumé files, and their recorded calls with th
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
 - Automated tests that drive the screens in a browser as part of `npm test`. `npm test` covers the résumé reader,
   job autofill, the Oracle's server side and the Oracle's uploader. The Oracle's screens were driven end to end in
-  Chrome with a simulated microphone while it was built (record, reload and server restart mid-call, transcript, notes,
-  add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude; the other screens were
-  verified by hand.
+  Chrome with a simulated microphone while it was built (record, reload and server restart mid-call, a lost connection,
+  two people on one computer, transcript, notes, add to a candidate, draft, submit, delete), against stand-ins for
+  Deepgram and Claude; the other screens were verified by hand.

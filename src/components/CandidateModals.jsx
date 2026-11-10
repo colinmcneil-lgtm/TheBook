@@ -193,12 +193,13 @@ export function EmailModal({ data, onClose }) {
 }
 
 /** `initialNote` starts the write-up from a draft (The Oracle's, written from a call) instead of the last one sent. */
-export function SubmitModal({ data, onClose, initialNote }) {
+export function SubmitModal({ data, onClose, initialNote, onSubmitted }) {
   const { bump } = useApp();
   const toast = useToast();
   const [note, setNote] = useState(initialNote ?? data.application.submission_note ?? '');
   const [save, busy] = useAction(async () => {
     await api.post(`/applications/${data.application.id}/submit`, { note });
+    onSubmitted?.(note.trim()); // whoever opened this with a draft learns what was actually sent
     toast(`Submitted to the ${data.client.name} hiring team`);
     bump();
     onClose();

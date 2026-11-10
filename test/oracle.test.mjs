@@ -3,6 +3,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { measureWebm } from '../server/webm.js';
@@ -62,6 +63,7 @@ async function record(who, { count = 4, application_id, durationMs = 9400 } = {}
   return { ...started.body, status: finished.body.status };
 }
 const uploadCall = (who, fields = {}) => who.upload('/oracle/calls/upload', { audio: { name: 'call.webm', bytes: RECORDING }, consent: 'true', ...fields });
+const notesOf = async (who, appId) => (await who.get(`/applications/${appId}`)).body.notes;
 const callOf = async (who, id) => (await who.get(`/oracle/calls/${id}`)).body;
 /** Wait until a call has left "transcribing" (and, when notes are expected, until they are written). */
 const settled = (who, id, alsoNotes = false) => until(() => callOf(who, id), (d) => d.call && d.call.status !== 'transcribing' && (!alsoNotes || d.call.notes));
@@ -129,14 +131,15 @@ test('a client user is refused on every route, and a visitor who is not signed i
   assert.ok(seenByClient.activities.length > 0);
   assert.ok(!JSON.stringify(seenByClient).includes('Varsity Freight'), 'no transcript or notes leak into what a client sees');
   // Not even the line on the candidate's history that says a call was recorded, which the agency does see.
-  assert.ok((await activities(priya, appA)).includes('Call recorded, 1 min'));
+  assert.ok((await activities(priya, appA)).includes('Call recorded, 9 sec'));
   assert.deepEqual(await activities(maya, appA), []);
   assert.ok((await priya.get('/dashboard')).body.recent.some((a) => a.type === 'call'));
   assert.ok(!JSON.stringify((await maya.get('/dashboard')).body).includes('Call recorded'));
 });
 
 test('nothing is recorded or uploaded without consent', async () => {
-  for (const consent of [undefined, {}, { confirmed: false }, { confirmed: 'yes' }, 'true']) {
+  // Consent has to be confirmed, and the sentence that was confirmed has to come with it: it is part of the record.
+  for (const consent of [undefined, {}, { confirmed: false }, { confirmed: 'yes' }, 'true', { confirmed: true }, { confirmed: true, wording: '  ' }]) {
     const refused = await priya.post('/oracle/recordings', { mimeType: WEBM, consent });
     assert.equal(refused.status, 400);
     assert.match(refused.body.error, /agreed to be recorded/);
@@ -177,7 +180,7 @@ test('a recording, from the first piece to a transcript with notes', async () =>
   assert.deepEqual((await put(2)).body, { seq: 2, bytes: parts[2].length });
   assert.deepEqual((await put(2, Buffer.from('something else entirely'))).body, { seq: 2, bytes: parts[2].length }, 'a repeat never replaces what was kept');
   assert.equal((await put(4)).status, 200);
-  assert.deepEqual((await priya.get(`/oracle/recordings/${id}`)).body, { status: 'recording', received: [0, 2, 4], call_id });
+  assert.deepEqual((await priya.get(`/oracle/recordings/${id}`)).body, { status: 'recording', received: [0, 2, 4], call_id, open: true, joined: null, interrupted: false });
 
   // Only the person recording can add to it, look at it or finish it: not a colleague, not even the owner.
   for (const other of [sam, admin]) {
@@ -270,7 +273,7 @@ test('a recording, from the first piece to a transcript with notes', async () =>
   assert.deepEqual(anthropic.requests.map((r) => r.kind), ['notes']);
 
   // It is on the candidate's history, with its length.
-  assert.ok((await activities(priya, appA)).includes('Call recorded, 1 min'));
+  assert.ok((await activities(priya, appA)).includes('Call recorded, 9 sec'));
   assert.deepEqual(detail.candidate, { id: detail.candidate.id, name: 'Dana Whitlock', photo: null, current_title: null, current_company: null });
   assert.equal(detail.application.id, appA);
   assert.equal(detail.application.job_title, 'Head of Sales');
@@ -285,6 +288,7 @@ test('a recording, from the first piece to a transcript with notes', async () =>
   const late = await put(5, parts[0]);
   assert.equal(late.status, 409);
   assert.match(late.body.error, /already been finished/);
+  assert.deepEqual((await priya.get(`/oracle/recordings/${id}`)).body, { status: 'ready', received: [], call_id, open: false, joined: 5, interrupted: false });
 });
 
 test('only real audio is kept as the start of a recording', async () => {
@@ -332,10 +336,11 @@ test('a recording that was cut short is finished from what arrived, and can be a
   assert.equal(detail.call.candidate_id, detail.candidate.id);
   assert.equal(detail.call.title, 'Call with Jonas Brandt');
   assert.equal(detail.application.job_title, 'Sales Manager');
-  assert.deepEqual(await activities(priya, appB), ['Call added, 1 min']);
+  assert.deepEqual(detail.call.speakers, { 0: 'Priya Nair', 1: 'Sam' }, 'a name that was said on the call is kept');
+  assert.deepEqual(await activities(priya, appB), ['Call added, 4 sec']);
   // Attaching it again to the same place changes nothing.
   await priya.patch(`/oracle/calls/${call_id}`, { application_id: appB });
-  assert.deepEqual(await activities(priya, appB), ['Call added, 1 min']);
+  assert.deepEqual(await activities(priya, appB), ['Call added, 4 sec']);
   assert.equal((await priya.patch(`/oracle/calls/${call_id}`, { application_id: 424242 })).status, 404);
 
   // The list: newest first, with what the app needs to draw a row, and the three filters.
@@ -361,21 +366,216 @@ test('a recording that was cut short is finished from what arrived, and can be a
   assert.equal(detached.call.candidate_id, null);
   assert.equal(detached.candidate, null);
   assert.ok(detached.call.notes, 'the notes are about the call, so they stay');
+  assert.equal(detached.call.title, 'Untitled call', 'the title it was given automatically does not keep the name of someone it is no longer on');
 });
 
 test('a recording stops being added to at the 3 hour limit, and what was recorded is still kept', async () => {
   const { id, call_id } = (await priya.post('/oracle/recordings', { mimeType: WEBM, consent: CONSENT })).body;
   const parts = pieces(RECORDING, 3);
   await priya.put(`/oracle/recordings/${id}/chunks/0`, parts[0]);
+  // The limit is on how much was recorded (a piece is five seconds), not on the clock: a piece that arrives a day
+  // late, because the browser was offline, is still taken.
   const db = new DatabaseSync(path.join(dataDir, 'app.db'));
-  db.prepare('UPDATE calls SET created_at = ? WHERE id = ?').run(new Date(Date.now() - 4.1 * HOUR).toISOString(), call_id);
+  db.prepare('UPDATE calls SET created_at = ? WHERE id = ?').run(new Date(Date.now() - 20 * HOUR).toISOString(), call_id);
   db.close();
-  const over = await priya.put(`/oracle/recordings/${id}/chunks/1`, parts[1]);
+  assert.equal((await priya.put(`/oracle/recordings/${id}/chunks/1`, parts[1])).status, 200);
+  assert.equal((await priya.put(`/oracle/recordings/${id}/chunks/2879`, parts[1])).status, 200, 'the last piece four hours of recording can have');
+  const over = await priya.put(`/oracle/recordings/${id}/chunks/2880`, parts[1]);
   assert.equal(over.status, 409);
   assert.match(over.body.error, /3 hour limit/);
   assert.equal((await priya.put(`/oracle/recordings/${id}/chunks/0`, parts[0])).status, 200, 'a piece already kept is still acknowledged');
-  assert.equal((await priya.post(`/oracle/recordings/${id}/finish`, { chunks: 1 })).status, 200);
+  assert.equal((await priya.post(`/oracle/recordings/${id}/finish`, { chunks: 2 })).status, 200);
   assert.equal((await settled(priya, call_id)).call.has_audio, true);
+});
+
+test('the 300 MB limit holds when pieces arrive at the same time', async () => {
+  const { id } = (await priya.post('/oracle/recordings', { mimeType: WEBM, consent: CONSENT })).body;
+  assert.equal((await priya.put(`/oracle/recordings/${id}/chunks/0`, RECORDING.subarray(0, 4000))).status, 200);
+  const big = Buffer.alloc(2 * 1024 * 1024 - 1, 7);
+  // 170 pieces of 2 MB, forty at a time: 340 MB offered.
+  const answers = [];
+  for (let from = 1; from <= 170; from += 40) {
+    const batch = Array.from({ length: Math.min(40, 171 - from) }, (_, i) => priya.put(`/oracle/recordings/${id}/chunks/${from + i}`, big));
+    answers.push(...await Promise.all(batch));
+  }
+  const dir = path.join(dataDir, 'recordings', id);
+  const onDisk = fs.readdirSync(dir).reduce((sum, name) => sum + fs.statSync(path.join(dir, name)).size, 0);
+  assert.ok(onDisk <= 300 * 1024 * 1024, `${Math.round(onDisk / 1048576)} MB was kept`);
+  assert.equal(answers.filter((a) => a.status === 200).length, 149);
+  const refused = answers.filter((a) => a.status !== 200);
+  assert.equal(refused.length, 21);
+  for (const answer of refused) { assert.equal(answer.status, 413); assert.match(answer.body.error, /300 MB limit/); }
+  assert.ok(!fs.readdirSync(dir).some((name) => name.endsWith('.tmp')));
+  assert.equal((await priya.del(`/oracle/calls/${(await priya.get(`/oracle/recordings/${id}`)).body.call_id}`)).status, 200);
+  await until(async () => fs.existsSync(dir), (there) => !there);
+});
+
+test('finishing with a number of pieces no recording can have is refused at once', async () => {
+  const { id, call_id } = (await priya.post('/oracle/recordings', { mimeType: WEBM, consent: CONSENT })).body;
+  const parts = pieces(RECORDING, 3);
+  await priya.put(`/oracle/recordings/${id}/chunks/0`, parts[0]);
+  const finish = (chunks) => priya.post(`/oracle/recordings/${id}/finish`, { chunks });
+  for (const chunks of [1000000000, 20000000, 2881, -1, 1.5, '3']) {
+    const started = Date.now();
+    const refused = await finish(chunks);
+    assert.equal(refused.status, 400, `chunks: ${chunks}`);
+    assert.match(refused.body.error, /not a number of pieces a recording can have/);
+    assert.ok(Date.now() - started < 500);
+  }
+  // A count that is possible but far more than arrived: the answer names the first missing pieces, not thousands.
+  const short = await finish(2880);
+  assert.equal(short.status, 409);
+  assert.deepEqual(short.body.missing, Array.from({ length: 50 }, (_, i) => i + 1));
+  assert.equal((await callOf(priya, call_id)).call.status, 'recording');
+  assert.equal((await finish(1)).status, 200);
+});
+
+/** Send a piece slowly: the request and the first bytes go now; `rest()` sends the remainder and resolves to the answer. */
+function slowPiece(who, base, pathname, bytes) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(`${base}/api${pathname}`, {
+      method: 'PUT', headers: { Cookie: who.cookie(), 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.length },
+    });
+    req.on('error', reject);
+    const answer = new Promise((done) => req.on('response', (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => done({ status: res.statusCode, body: JSON.parse(raw) }));
+    }));
+    req.write(bytes.subarray(0, 100), () => setTimeout(() => resolve({ rest: () => { req.end(bytes.subarray(100)); return answer; } }), 60));
+  });
+}
+
+test('a piece still on its way when the call is deleted or finished is not kept', async () => {
+  const parts = pieces(RECORDING, 4);
+  const start = async (application_id) => {
+    const made = (await priya.post('/oracle/recordings', { mimeType: WEBM, consent: CONSENT, application_id })).body;
+    await priya.put(`/oracle/recordings/${made.id}/chunks/0`, parts[0]);
+    return { ...made, dir: path.join(dataDir, 'recordings', made.id) };
+  };
+
+  // The call is deleted while piece 1 is arriving.
+  const gone = await start();
+  let piece = await slowPiece(priya, server.base, `/oracle/recordings/${gone.id}/chunks/1`, parts[1]);
+  assert.equal((await priya.del(`/oracle/calls/${gone.call_id}`)).status, 200);
+  await until(async () => fs.existsSync(gone.dir), (there) => !there);
+  let answer = await piece.rest();
+  assert.equal(answer.status, 404);
+  assert.match(answer.body.error, /recording was not found/);
+  await sleep(100);
+  assert.ok(!fs.existsSync(gone.dir), 'the folder is not brought back');
+
+  // The candidate is deleted (and the call with them) while piece 1 is arriving.
+  const erased = await admin.upload('/applications', { job_id: job, name: 'Kit Marlow', email: 'kit@mail.example' });
+  const theirs = await start(erased.body.id);
+  piece = await slowPiece(priya, server.base, `/oracle/recordings/${theirs.id}/chunks/1`, parts[1]);
+  const candidateId = (await callOf(priya, theirs.call_id)).candidate.id;
+  assert.equal((await admin.del(`/candidates/${candidateId}`)).status, 200);
+  assert.equal((await piece.rest()).status, 404);
+  await sleep(100);
+  assert.ok(!fs.existsSync(theirs.dir));
+
+  // The recording is finished while piece 1 is arriving: the piece is refused, not acknowledged and left behind.
+  const done = await start();
+  piece = await slowPiece(priya, server.base, `/oracle/recordings/${done.id}/chunks/1`, parts[1]);
+  assert.equal((await priya.post(`/oracle/recordings/${done.id}/finish`, { chunks: 1 })).status, 200);
+  answer = await piece.rest();
+  assert.equal(answer.status, 409);
+  assert.match(answer.body.error, /already been finished/);
+  assert.ok(!fs.existsSync(done.dir));
+  await settled(priya, done.call_id);
+});
+
+test('a recording saved from part of what was recorded takes the rest when the browser comes back with it', async () => {
+  deepgram.reset(); anthropic.reset();
+  const recordedLines = async () => (await activities(priya, appA)).filter((line) => line.startsWith('Call recorded')).length;
+  const linesBefore = await recordedLines();
+  const { id, call_id } = (await priya.post('/oracle/recordings', { mimeType: WEBM, consent: CONSENT, application_id: appA })).body;
+  const parts = pieces(RECORDING, 5);
+  const put = (seq) => priya.put(`/oracle/recordings/${id}/chunks/${seq}`, parts[seq]);
+  const dir = path.join(dataDir, 'recordings', id);
+  await put(0); await put(1);
+  // The connection drops. Somebody (the recruiter on another computer, or an admin) saves what the server has.
+  assert.equal((await sam.post(`/oracle/calls/${call_id}/save-recording`)).status, 403);
+  assert.match((await sam.post(`/oracle/calls/${call_id}/save-recording`)).body.error, /Only the person who recorded this call, or an admin/);
+  const saved = await admin.post(`/oracle/calls/${call_id}/save-recording`);
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.call_id, call_id);
+  let detail = await settled(priya, call_id, true);
+  assert.equal(detail.call.status, 'ready');
+  assert.equal(detail.call.interrupted, true);
+  const fileOf = (id) => { const db = new DatabaseSync(path.join(dataDir, 'app.db'), { readOnly: true }); try { return db.prepare('SELECT audio_file FROM calls WHERE id = ?').get(id).audio_file; } finally { db.close(); } };
+  const shortAudio = fileOf(call_id);
+  assert.equal(fs.statSync(path.join(dataDir, 'uploads', shortAudio)).size, parts[0].length + parts[1].length + 11, 'the audio is the two pieces that had arrived');
+  assert.ok(fs.existsSync(path.join(dir, '000001.part')), 'the pieces are kept, because more may come');
+  assert.deepEqual((await priya.get(`/oracle/recordings/${id}`)).body, { status: 'ready', received: [0, 1], call_id, open: true, joined: 2, interrupted: true });
+  // The recruiter had edited nothing, so the notes are as the AI wrote them.
+  const firstNotes = detail.call.notes_at;
+
+  // The browser comes back with the three pieces it was holding, and says how many there were in all.
+  assert.equal((await put(2)).status, 200);
+  assert.equal((await put(4)).status, 200);
+  const early = await priya.post(`/oracle/recordings/${id}/finish`, { chunks: 5 });
+  assert.equal(early.status, 409);
+  assert.deepEqual(early.body.missing, [3]);
+  assert.equal((await put(3)).status, 200);
+  deepgram.reset(); anthropic.reset();
+  const whole = await priya.post(`/oracle/recordings/${id}/finish`, { chunks: 5, durationMs: 9400 });
+  assert.deepEqual(whole.body, { call_id, status: 'transcribing' });
+  detail = await settled(priya, call_id, true);
+  assert.equal(detail.call.interrupted, false, 'it is the whole call now');
+  assert.ok(Math.abs(detail.call.duration_ms - 9362) < 60);
+  assert.equal((await priya.get(`/oracle/calls/${call_id}/audio`)).body.length, RECORDING.length + 11);
+  assert.ok(!audioFiles().includes(shortAudio), 'the shorter audio file was removed');
+  assert.ok(!fs.existsSync(dir), 'and the pieces, now that nothing more can come');
+  // The whole recording was transcribed, and the notes written again from it.
+  assert.equal(deepgram.requests.length, 1);
+  assert.equal(deepgram.requests[0].bytes, RECORDING.length + 11);
+  assert.deepEqual(anthropic.requests.map((r) => r.kind), ['notes']);
+  assert.notEqual(detail.call.notes_at, firstNotes);
+  assert.equal(await recordedLines(), linesBefore + 1, 'one line on the history for this call, not two');
+  // Nothing more can be added now.
+  assert.equal((await priya.put(`/oracle/recordings/${id}/chunks/5`, parts[0])).status, 409);
+
+  // Notes the recruiter wrote or changed are never replaced when the rest of a recording arrives.
+  const second = (await priya.post('/oracle/recordings', { mimeType: WEBM, consent: CONSENT })).body;
+  for (const seq of [0, 1]) await priya.put(`/oracle/recordings/${second.id}/chunks/${seq}`, parts[seq]);
+  await priya.post(`/oracle/calls/${second.call_id}/save-recording`);
+  await settled(priya, second.call_id, true);
+  await priya.patch(`/oracle/calls/${second.call_id}`, { notes: 'My own notes.' });
+  for (const seq of [2, 3, 4]) await priya.put(`/oracle/recordings/${second.id}/chunks/${seq}`, parts[seq]);
+  // The page that recovers a cut-off recording does not know how many pieces there were: it keeps the unbroken run.
+  assert.equal((await priya.post(`/oracle/recordings/${second.id}/finish`, { interrupted: true })).status, 200);
+  detail = await settled(priya, second.call_id);
+  assert.equal(detail.call.notes, 'My own notes.');
+  assert.equal(detail.call.interrupted, true);
+  assert.equal((await priya.get(`/oracle/calls/${second.call_id}/audio`)).body.length, RECORDING.length + 11);
+  // The recording browser has now handed over everything it had, so the pieces are not kept any longer.
+  assert.ok(!fs.existsSync(path.join(dataDir, 'recordings', second.id)));
+  // Asking again changes nothing.
+  const files = audioFiles().length;
+  assert.equal((await priya.post(`/oracle/recordings/${second.id}/finish`, { interrupted: true })).status, 200);
+  assert.equal(audioFiles().length, files);
+
+  // The server had every piece all along and only the last request (the one that says "that was all") was missing.
+  // When the browser comes back and says so, the call is no longer marked as cut off.
+  const third = (await priya.post('/oracle/recordings', { mimeType: WEBM, consent: CONSENT })).body;
+  for (const seq of [0, 1, 2, 3, 4]) await priya.put(`/oracle/recordings/${third.id}/chunks/${seq}`, parts[seq]);
+  await priya.post(`/oracle/calls/${third.call_id}/save-recording`);
+  assert.equal((await settled(priya, third.call_id)).call.interrupted, true);
+  const before = audioFiles().length;
+  assert.equal((await priya.post(`/oracle/recordings/${third.id}/finish`, { chunks: 5 })).status, 200);
+  assert.equal((await callOf(priya, third.call_id)).call.interrupted, false);
+  assert.equal(audioFiles().length, before, 'the audio was already whole, so it is not made again');
+  assert.ok(!fs.existsSync(path.join(dataDir, 'recordings', third.id)));
+
+  // Saving a recording nothing has arrived for is refused, and the call is left for the browser that is recording it.
+  const empty = (await priya.post('/oracle/recordings', { mimeType: WEBM, consent: CONSENT })).body;
+  const nothing = await priya.post(`/oracle/calls/${empty.call_id}/save-recording`);
+  assert.equal(nothing.status, 409);
+  assert.match(nothing.body.error, /None of this call has reached The Book yet/);
+  assert.equal((await callOf(priya, empty.call_id)).call.status, 'recording');
+  await priya.del(`/oracle/calls/${empty.call_id}`);
 });
 
 test('uploading a recording made somewhere else', async () => {
@@ -390,11 +590,15 @@ test('uploading a recording made somewhere else', async () => {
   assert.equal(detail.call.consent_wording, 'Everyone agreed.');
   assert.equal(detail.call.consent_by_name, 'Priya Nair');
   assert.ok(Math.abs(detail.call.duration_ms - 9362) < 60);
-  assert.ok((await activities(priya, appA)).includes('Call added, 1 min'));
+  assert.ok((await activities(priya, appA)).includes('Call added, 9 sec'));
   // The file is sent to the transcription service as it was uploaded.
   assert.equal(deepgram.requests.at(-1).bytes, RECORDING.length);
   assert.deepEqual(deepgram.requests.at(-1).problems, []);
   assert.ok((await priya.get(`/oracle/calls/${uploaded.body.id}/audio`)).body.equals(RECORDING));
+
+  // An upload that confirms consent without sending the sentence is recorded against the server's own sentence.
+  const plain = await uploadCall(priya);
+  assert.equal((await callOf(priya, plain.body.id)).call.consent_wording, 'Everyone on this call knew it was being recorded and agreed.');
 
   // With no title and no candidate, the file's name is the title. A WAV file is fine too; its length comes back with the transcript.
   const wav = Buffer.concat([Buffer.from('RIFF'), Buffer.from([36, 0, 0, 0]), Buffer.from('WAVEfmt '), Buffer.alloc(40)]);
@@ -504,11 +708,13 @@ test('when transcription goes wrong, the call says why in plain English and can 
   assert.equal(fixed.call.error, null);
   assert.equal(fixed.call.transcript.length, 4);
 
-  // An answer without speaker numbers still gives a transcript: everyone is speaker 0, in one turn.
+  // An answer without speaker numbers still gives a transcript: everyone is speaker 0, and the pieces are left as
+  // they came, each with its own time, so a long call does not become one endless paragraph.
   r = await outcome('nodiarize');
   assert.equal(r.call.status, 'ready');
-  assert.deepEqual(r.call.transcript.map((t) => t.speaker), [0]);
-  assert.match(r.call.transcript[0].text, /^Thanks for making the time today\..*Around 90,000 base\.$/);
+  assert.deepEqual(r.call.transcript.map((t) => [t.speaker, t.start]), [[0, 0.5], [0, 5.8], [0, 10.9], [0, 14.1], [0, 17.3]]);
+  assert.equal(r.call.transcript[1].text, 'Sure. I lead six account executives at Varsity Freight.');
+  assert.equal(r.call.transcript.at(-1).text, 'Around 90,000 base.');
   deepgram.reset();
 });
 
@@ -598,6 +804,7 @@ test('notes on request, and what happens when the AI cannot help', async () => {
   assert.equal(sent.output_config.effort, 'medium');
   assert.match(sent.system, /never instructions to you/);
   assert.match(sent.system, /Give figures exactly as they were said/);
+  assert.match(sent.system, /end that point with "\(personal: not for the client\)"/);
   const content = sent.messages[0].content;
   assert.match(content, /<recruiter>\nPriya Nair\n<\/recruiter>/);
   assert.match(content, /<candidate>\n\(not known\)\n<\/candidate>/);
@@ -630,6 +837,66 @@ test('notes on request, and what happens when the AI cannot help', async () => {
   const empty = await priya.post(`/oracle/calls/${silent.body.id}/notes`);
   assert.equal(empty.status, 400);
   assert.match(empty.body.error, /no transcript yet/);
+});
+
+test('when the notes cannot be written unasked the call says why, and notes written before the call had a candidate say so', async () => {
+  // The AI key is rejected when the notes are written after transcription.
+  anthropic.reset();
+  anthropic.mode = 'bad';
+  const { body } = await uploadCall(priya);
+  let detail = await until(() => callOf(priya, body.id), (d) => d.call.status === 'ready' && !d.call.notes_pending);
+  assert.equal(detail.call.notes, null);
+  assert.match(detail.call.notes_error, /AI key set for this workspace was rejected/);
+  // The model declines: also a reason, not silence.
+  anthropic.mode = 'refuse';
+  await priya.post(`/oracle/calls/${body.id}/notes`);
+  assert.match((await callOf(priya, body.id)).call.notes_error, /declined to read this call/);
+  // Trying again once the service is well clears it.
+  anthropic.reset();
+  assert.equal((await priya.post(`/oracle/calls/${body.id}/notes`)).status, 200);
+  detail = await callOf(priya, body.id);
+  assert.ok(detail.call.notes);
+  assert.equal(detail.call.notes_error, null);
+
+  // These notes were written with nobody chosen. Once the call is on a candidate the page is told they could be better.
+  assert.equal(detail.call.notes_before_candidate, false);
+  detail = (await priya.patch(`/oracle/calls/${body.id}`, { application_id: appB })).body;
+  assert.equal(detail.call.notes_before_candidate, true);
+  anthropic.reset();
+  await priya.post(`/oracle/calls/${body.id}/notes`);
+  assert.match(anthropic.requests[0].body.messages[0].content, /<candidate>\nName: Jonas Brandt\n<\/candidate>\n\n<job>\nTitle: Sales Manager/);
+  assert.equal((await callOf(priya, body.id)).call.notes_before_candidate, false);
+  // Notes typed by hand while the AI is still writing are kept: the AI's do not replace them when they arrive.
+  const slowly = await uploadCall(priya);
+  await settled(priya, slowly.body.id, true);
+  await priya.patch(`/oracle/calls/${slowly.body.id}`, { notes: '' });
+  anthropic.delay = 400;
+  const asked = priya.post(`/oracle/calls/${slowly.body.id}/notes`);
+  await until(async () => (await callOf(priya, slowly.body.id)).call.notes_pending, Boolean);
+  await priya.patch(`/oracle/calls/${slowly.body.id}`, { notes: 'Typed while waiting.' });
+  assert.deepEqual((await asked).body, { notes: 'Typed while waiting.' });
+  assert.equal((await callOf(priya, slowly.body.id)).call.notes, 'Typed while waiting.');
+  anthropic.delay = 0;
+  // Notes the recruiter wrote by hand are never called out of date, and a failed attempt after them is not shown over them.
+  const other = await uploadCall(priya);
+  await settled(priya, other.body.id, true);
+  await priya.patch(`/oracle/calls/${other.body.id}`, { notes: 'Typed by me.' });
+  detail = (await priya.patch(`/oracle/calls/${other.body.id}`, { application_id: appB })).body;
+  assert.equal(detail.call.notes_before_candidate, false);
+  assert.equal(detail.call.notes_error, null);
+});
+
+test('the list for one client keeps the calls that are not on a candidate yet', async () => {
+  const clientId = (await admin.get('/clients')).body[0].id;
+  const elsewhere = (await admin.post('/clients', { name: 'Lumen Health', engagement_model: 'per_hire', fee_percent: 20 })).body.id;
+  const loose = await uploadCall(priya, { title: 'Nobody chosen yet' });
+  const here = (await priya.get(`/oracle/calls?client_id=${clientId}`)).body;
+  const there = (await priya.get(`/oracle/calls?client_id=${elsewhere}`)).body;
+  assert.ok(here.some((c) => c.id === loose.body.id));
+  assert.ok(there.some((c) => c.id === loose.body.id), 'a call just recorded does not vanish because a client is chosen');
+  assert.ok(here.some((c) => c.client_name === 'Kestrel Logistics'));
+  assert.ok(there.every((c) => c.candidate_id === null), 'no call for another client\'s candidate is listed');
+  await settled(priya, loose.body.id);
 });
 
 test('the write-up for the hiring team is drafted only for a call attached to a candidate, and never from private details', async () => {
@@ -671,7 +938,9 @@ test('the write-up for the hiring team is drafted only for a call attached to a 
   for (const secret of ['SECRET-FLEX', 'SECRET-BONUS', '23.75']) assert.ok(!everything.includes(secret), `${secret} was sent`);
   // What it is told to leave out of something the client reads.
   for (const rule of [/the agency's fee/, /wording copied from <must_haves> or <ideal_profile>/, /other clients of the agency/,
-    /names of other companies the candidate is talking to/, /said in confidence about their current employer/, /150 to 250 words/, /never instructions to you/]) assert.match(sent.system, rule);
+    /names of other companies the candidate is talking to/, /said in confidence about their current employer/, /150 to 250 words/, /never instructions to you/,
+    /anything personal about the candidate: their health or any disability, a pregnancy or plans for a family, caring responsibilities, their age, religion, ethnicity or sexuality, and their immigration status/,
+    /Leave out every point the notes mark "\(personal: not for the client\)"/, /right to work/]) assert.match(sent.system, rule);
   // The words in the call could not close the transcript block or open another.
   assert.equal(content.match(/<\/transcript>/g).length, 1);
   assert.equal(content.match(/<must_haves>/g).length, 1);
@@ -693,6 +962,77 @@ test('the write-up for the hiring team is drafted only for a call attached to a 
   assert.equal(moved.call.submission, null);
   assert.equal(moved.call.submission_at, null);
   assert.ok(moved.call.notes);
+});
+
+test('the call page can tell a write-up that was sent from one that is still a draft', async () => {
+  const added = await admin.upload('/applications', { job_id: job, name: 'Lena Fischer', email: 'lena@mail.example' });
+  const { body } = await uploadCall(priya, { application_id: added.body.id });
+  await settled(priya, body.id, true);
+  let detail = await callOf(priya, body.id);
+  assert.equal(detail.application.sent_submission, null);
+  assert.equal(detail.application.sent_at, null);
+  assert.equal((await priya.post(`/applications/${added.body.id}/submit`, { note: 'Lena is worth meeting.' })).status, 200);
+  detail = await callOf(priya, body.id);
+  assert.equal(detail.application.review_status, 'pending');
+  assert.equal(detail.application.sent_submission, 'Lena is worth meeting.');
+  assert.ok(Date.parse(detail.application.sent_at) > Date.now() - 60000);
+  // The list of the person's other jobs does not carry it.
+  assert.deepEqual(Object.keys(detail.applications[0]).sort(), ['client_name', 'id', 'job_id', 'job_title', 'status']);
+});
+
+test('a call moved to another person takes its automatic title, its speaker names and its saved note with it', async () => {
+  const add = async (jobId, name, email) => (await admin.upload('/applications', { job_id: jobId, name, email })).body.id;
+  const wrong = await add(job, 'Esme Kaur', 'esme@mail.example');
+  const right = await add(job, 'Dara Kaur', 'dara@mail.example');
+  const rightOther = await add(otherJob, 'Dara Kaur', 'dara@mail.example');
+  const { body } = await uploadCall(priya);
+  await settled(priya, body.id, true);
+  const patch = async (changes) => (await priya.patch(`/oracle/calls/${body.id}`, changes)).body;
+  const callNotes = async (appId) => (await notesOf(priya, appId)).filter((n) => n.body.startsWith('Notes from')).map((n) => n.body.split('\n')[0]);
+  await patch({ title: 'Untitled call', speakers: { 1: 'Candidate' } });
+
+  // Added to the wrong person: named after her, and its summary saved on her profile.
+  let detail = await patch({ application_id: wrong });
+  assert.equal(detail.call.title, 'Call with Esme Kaur');
+  assert.deepEqual(detail.call.speakers, { 0: 'Priya Nair', 1: 'Esme Kaur' });
+  assert.equal(detail.call.note_saved, false);
+  assert.equal((await priya.post(`/oracle/calls/${body.id}/save-note`)).status, 200);
+  assert.equal((await callOf(priya, body.id)).call.note_saved, true);
+  assert.deepEqual(await callNotes(wrong), ['Notes from Call with Esme Kaur']);
+
+  // Moved to the right person: nothing of it stays with the first.
+  detail = await patch({ application_id: right });
+  assert.equal(detail.candidate.name, 'Dara Kaur');
+  assert.equal(detail.call.title, 'Call with Dara Kaur');
+  assert.deepEqual(detail.call.speakers, { 0: 'Priya Nair', 1: 'Dara Kaur' });
+  assert.equal(detail.call.note_saved, false);
+  assert.deepEqual(await callNotes(wrong), [], 'the summary of somebody else\'s call does not stay on the first profile');
+  assert.equal((await priya.get(`/oracle/calls?candidate_id=${detail.candidate.id}`)).body[0].title, 'Call with Dara Kaur');
+  await priya.post(`/oracle/calls/${body.id}/save-note`);
+  assert.deepEqual(await callNotes(right), ['Notes from Call with Dara Kaur']);
+
+  // Moved to another job of the same person: the saved note goes with it, and is still the one that saving again updates.
+  detail = await patch({ application_id: rightOther });
+  assert.equal(detail.call.title, 'Call with Dara Kaur');
+  assert.equal(detail.call.note_saved, true);
+  assert.deepEqual(await callNotes(right), []);
+  assert.deepEqual(await callNotes(rightOther), ['Notes from Call with Dara Kaur']);
+  await patch({ notes: 'Changed since.' });
+  await priya.post(`/oracle/calls/${body.id}/save-note`);
+  assert.deepEqual((await notesOf(priya, rightOther)).filter((n) => n.body.startsWith('Notes from')).map((n) => n.body), ['Notes from Call with Dara Kaur\n\nChanged since.']);
+
+  // A title somebody typed is never rewritten.
+  await patch({ title: 'Second conversation' });
+  assert.equal((await patch({ application_id: wrong })).call.title, 'Second conversation');
+  await patch({ title: 'Call with Esme Kaur', application_id: right });
+
+  // Taken off everyone: no name is left on it, and the note saved from it is gone from the profile.
+  await priya.post(`/oracle/calls/${body.id}/save-note`);
+  detail = await patch({ application_id: null });
+  assert.equal(detail.candidate, null);
+  assert.equal(detail.call.title, 'Untitled call');
+  assert.deepEqual(detail.call.speakers, { 0: 'Priya Nair', 1: 'Candidate' });
+  assert.deepEqual(await callNotes(right), []);
 });
 
 test('saving the notes onto the candidate as a note only the agency sees', async () => {
@@ -723,6 +1063,41 @@ test('saving the notes onto the candidate as a note only the agency sees', async
   const nothing = await priya.post(`/oracle/calls/${fresh.body.id}/save-note`);
   assert.equal(nothing.status, 400);
   assert.match(nothing.body.error, /no notes on this call/);
+});
+
+test('saving the notes again never writes over a note that is not the call\'s own', async () => {
+  const added = await admin.upload('/applications', { job_id: job, name: 'Nico Brandt', email: 'nico@mail.example' });
+  const appId = added.body.id;
+  const { body } = await uploadCall(priya, { application_id: appId, title: 'Pay call' });
+  await settled(priya, body.id);
+  await priya.patch(`/oracle/calls/${body.id}`, { notes: 'PRIVATE: on 78,000, wants 90,000.' });
+  await priya.post(`/oracle/calls/${body.id}/save-note`);
+  const first = (await notesOf(priya, appId)).find((n) => n.body.startsWith('Notes from Pay call'));
+  assert.equal(first.private, 1);
+
+  // The recruiter deletes that note from the profile; the hiring manager then writes one of her own.
+  assert.equal((await priya.del(`/notes/${first.id}`)).status, 200);
+  assert.equal((await callOf(priya, body.id)).call.note_saved, false);
+  const hers = (await maya.post(`/applications/${appId}/notes`, { body: 'Met Nico at the trade show. Keen.' })).body.id;
+  assert.notEqual(hers, first.id, 'a note is never given the number of one that was deleted');
+
+  // Saving the call's notes again adds an agency-only note. The hiring manager's note is untouched, and she sees nothing new.
+  await priya.patch(`/oracle/calls/${body.id}`, { notes: 'PRIVATE: on 78,000, wants 90,000. Also talking to a competitor.' });
+  assert.equal((await priya.post(`/oracle/calls/${body.id}/save-note`)).status, 200);
+  const seenByClient = await notesOf(maya, appId);
+  assert.deepEqual(seenByClient.map((n) => n.body), ['Met Nico at the trade show. Keen.']);
+  assert.ok(!JSON.stringify((await maya.get(`/applications/${appId}`)).body).includes('PRIVATE'));
+  const seenByAgency = await notesOf(priya, appId);
+  assert.equal(seenByAgency.length, 2);
+  assert.equal(seenByAgency.find((n) => n.id === hers).body, 'Met Nico at the trade show. Keen.');
+  assert.equal(seenByAgency.find((n) => n.id !== hers).private, 1);
+
+  // Even if the number the call remembers pointed at a note the client can see, that note is not written over.
+  const db = new DatabaseSync(path.join(dataDir, 'app.db'));
+  db.prepare('UPDATE calls SET note_id = ? WHERE id = ?').run(hers, body.id);
+  db.close();
+  await priya.post(`/oracle/calls/${body.id}/save-note`);
+  assert.deepEqual((await notesOf(maya, appId)).map((n) => n.body), ['Met Nico at the trade show. Keen.']);
 });
 
 test('deleting a call removes its audio, and only its recorder or an admin may', async () => {
@@ -828,8 +1203,9 @@ test('merging two records of one person moves the calls to the record that is ke
 });
 
 test('with neither service connected, calls are still recorded, kept and played, and a transcript can be pasted', async () => {
+  // The data folder sits under a folder whose name starts with a dot (as ~/.thebook would): audio is still served from it.
   const dir = tempDir('oracle-bare');
-  const bare = await startServer({ port: PORTS.bare, dataDir: dir });
+  const bare = await startServer({ port: PORTS.bare, dataDir: path.join(dir, '.the-book', 'data') });
   try {
     const w = await workspace(bare.base);
     assert.deepEqual((await w.recruiter.get('/oracle/status')).body, { transcription: false, ai: false, maxUploadMb: 200, maxRecordingMinutes: 180 });
@@ -839,7 +1215,9 @@ test('with neither service connected, calls are still recorded, kept and played,
     assert.equal(detail.call.status, 'uploaded');
     assert.equal(detail.call.transcript, null);
     assert.equal(detail.call.notes, null);
-    assert.equal((await w.recruiter.get(`/oracle/calls/${call_id}/audio`)).body.length, RECORDING.length + 11);
+    const played = await w.recruiter.get(`/oracle/calls/${call_id}/audio`);
+    assert.equal(played.status, 200);
+    assert.equal(played.body.length, RECORDING.length + 11);
     assert.equal((await uploadCall(w.recruiter)).status, 201);
 
     const noService = await w.recruiter.post(`/oracle/calls/${call_id}/transcribe`);
@@ -885,17 +1263,23 @@ test('a restart loses nothing: pieces already sent, transcriptions under way and
     const live = await start(); await send(live, [0, 1, 2]);
     const abandoned = await start(); await send(abandoned, [0, 1, 3]);
     const empty = await start();
+    const paused = await start(); await send(paused, [0, 1]);
     // 5. Files that belong to no call.
     fs.writeFileSync(path.join(dir, 'uploads', 'call-0000.webm'), 'left behind');
     fs.mkdirSync(path.join(dir, 'recordings', 'ffffffffffffffffffffffffffffffff'));
     fs.writeFileSync(path.join(dir, 'uploads', 'resume-of-someone.pdf'), 'not ours to touch');
 
     await again.stop('SIGKILL'); // no warning, as in a crash
-    const old = new Date(Date.now() - 2 * HOUR);
+    // A recording paused or offline for a few hours is left alone by a restart: the browser gets a day to come back.
+    const recent = new Date(Date.now() - 5 * HOUR);
+    const old = new Date(Date.now() - 25 * HOUR);
     const db = new DatabaseSync(path.join(dir, 'app.db'));
     db.prepare('UPDATE calls SET created_at = ? WHERE id IN (?, ?)').run(old.toISOString(), abandoned.call_id, empty.call_id);
+    db.prepare('UPDATE calls SET created_at = ? WHERE id = ?').run(recent.toISOString(), paused.call_id);
     db.close();
-    for (const seq of [0, 1, 3]) fs.utimesSync(path.join(dir, 'recordings', abandoned.id, `${String(seq).padStart(6, '0')}.part`), old, old);
+    const partFile = (rec, seq) => path.join(dir, 'recordings', rec.id, `${String(seq).padStart(6, '0')}.part`);
+    for (const seq of [0, 1, 3]) fs.utimesSync(partFile(abandoned, seq), old, old);
+    for (const seq of [0, 1]) fs.utimesSync(partFile(paused, seq), recent, recent);
 
     deepgram.reset();
     again = await startServer({ port: PORTS.restart, dataDir: dir, env });
@@ -905,7 +1289,8 @@ test('a restart loses nothing: pieces already sent, transcriptions under way and
     assert.equal(transcribed.call.status, 'ready');
     assert.equal(transcribed.call.transcript.length, 4);
     // 2. The recording carries on where it was: the pieces sent before the restart are still there.
-    assert.deepEqual((await w.recruiter.get(`/oracle/recordings/${live.id}`)).body, { status: 'recording', received: [0, 1, 2], call_id: live.call_id });
+    assert.deepEqual((await w.recruiter.get(`/oracle/recordings/${live.id}`)).body, { status: 'recording', received: [0, 1, 2], call_id: live.call_id, open: true, joined: null, interrupted: false });
+    assert.equal((await w.recruiter.get(`/oracle/recordings/${paused.id}`)).body.status, 'recording', 'five hours without a piece is not long enough to give up on');
     await send(live, [3, 4]);
     assert.equal((await w.recruiter.post(`/oracle/recordings/${live.id}/finish`, { chunks: 5 })).status, 200);
     assert.equal((await w.recruiter.get(`/oracle/calls/${live.call_id}/audio`)).body.length, RECORDING.length + 11);
@@ -914,7 +1299,8 @@ test('a restart loses nothing: pieces already sent, transcriptions under way and
     assert.equal(rescued.call.interrupted, true);
     assert.equal(rescued.call.status, 'ready');
     assert.equal((await w.recruiter.get(`/oracle/calls/${abandoned.call_id}/audio`)).body.length, parts[0].length + parts[1].length + 11);
-    assert.ok(!fs.existsSync(path.join(dir, 'recordings', abandoned.id)));
+    // Its pieces are kept for now, the stray one included, in case the browser that recorded it comes back with the rest.
+    assert.deepEqual((await w.recruiter.get(`/oracle/recordings/${abandoned.id}`)).body, { status: 'ready', received: [0, 1, 3], call_id: abandoned.call_id, open: true, joined: 2, interrupted: true });
     // 4. The empty one is gone.
     assert.equal((await w.recruiter.get(`/oracle/calls/${empty.call_id}`)).status, 404);
     assert.ok(!fs.existsSync(path.join(dir, 'recordings', empty.id)));
@@ -922,7 +1308,18 @@ test('a restart loses nothing: pieces already sent, transcriptions under way and
     assert.ok(!fs.existsSync(path.join(dir, 'uploads', 'call-0000.webm')));
     assert.ok(!fs.existsSync(path.join(dir, 'recordings', 'ffffffffffffffffffffffffffffffff')));
     assert.ok(fs.existsSync(path.join(dir, 'uploads', 'resume-of-someone.pdf')));
-    assert.equal(audioFiles(dir).length, (await w.recruiter.get('/oracle/calls')).body.length);
+    assert.equal(audioFiles(dir).length, (await w.recruiter.get('/oracle/calls')).body.filter((c) => c.status !== 'recording').length);
+
+    // A week on, nobody has come back for the abandoned recording: at the next start its pieces are removed, and
+    // nothing more can be added to it. The call and its audio stay.
+    await again.stop('SIGKILL');
+    const weekAgo = new Date(Date.now() - 8 * 24 * HOUR);
+    for (const seq of [0, 1, 3]) fs.utimesSync(partFile(abandoned, seq), weekAgo, weekAgo);
+    again = await startServer({ port: PORTS.restart, dataDir: dir, env });
+    await until(async () => fs.existsSync(path.join(dir, 'recordings', abandoned.id)), (there) => !there);
+    assert.deepEqual((await w.recruiter.get(`/oracle/recordings/${abandoned.id}`)).body, { status: 'ready', received: [], call_id: abandoned.call_id, open: false, joined: 2, interrupted: true });
+    assert.equal((await w.recruiter.put(`/oracle/recordings/${abandoned.id}/chunks/2`, parts[2])).status, 409);
+    assert.equal((await w.recruiter.get(`/oracle/calls/${abandoned.call_id}/audio`)).status, 200);
 
     // A server restarted without the transcription key leaves a waiting call as "uploaded" instead of stuck.
     deepgram.mode = 'slow';
@@ -934,6 +1331,50 @@ test('a restart loses nothing: pieces already sent, transcriptions under way and
   } finally {
     deepgram.reset();
     await again.stop();
+    await sleep(50);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a service that stops answering, or refuses a newer setting, does not leave calls stuck', async () => {
+  const dir = tempDir('oracle-timeouts');
+  deepgram.reset(); anthropic.reset();
+  const other = await startServer({ port: PORTS.restart, dataDir: dir, env: { ...connected(), ORACLE_AI_TIMEOUT_MS: '300' } });
+  try {
+    const w = await workspace(other.base);
+    // The transcription service refuses "diarize_model": the request is sent again with the older switch, and so is every one after it.
+    deepgram.mode = 'olddiarize';
+    const first = await uploadCall(w.recruiter);
+    let detail = await settled(w.recruiter, first.body.id, true);
+    assert.equal(detail.call.status, 'ready');
+    assert.equal(detail.call.transcript.length, 4, 'speakers are still told apart');
+    assert.deepEqual(deepgram.requests.map((r) => [r.query.diarize_model, r.query.diarize]), [['latest', undefined], [undefined, 'true']]);
+    assert.deepEqual(deepgram.requests[1].problems, []);
+    const second = await uploadCall(w.recruiter);
+    await settled(w.recruiter, second.body.id, true);
+    assert.equal(deepgram.requests.length, 3);
+    assert.equal(deepgram.requests[2].query.diarize, 'true');
+    deepgram.reset();
+
+    // The AI service takes the request and never answers: the recruiter is told, in seconds here and minutes in real use.
+    anthropic.reset();
+    anthropic.mode = 'hang';
+    const started = Date.now();
+    const stuck = await w.recruiter.post(`/oracle/calls/${first.body.id}/notes`);
+    assert.equal(stuck.status, 502);
+    assert.match(stuck.body.error, /took too long to answer/);
+    assert.equal(anthropic.requests.length, 2, 'tried once more, then given up');
+    assert.ok(Date.now() - started < 5000);
+    // The notes that were there are still there, and hand-written notes are taken while the AI is not answering.
+    assert.ok((await callOf(w.recruiter, first.body.id)).call.notes);
+    const slow = w.recruiter.post(`/oracle/calls/${second.body.id}/notes`);
+    await until(async () => (await callOf(w.recruiter, second.body.id)).call.notes_pending, Boolean);
+    assert.equal((await w.recruiter.patch(`/oracle/calls/${second.body.id}`, { notes: 'Written by hand meanwhile.' })).status, 200);
+    assert.equal((await slow).status, 502);
+    assert.equal((await callOf(w.recruiter, second.body.id)).call.notes, 'Written by hand meanwhile.');
+  } finally {
+    deepgram.reset(); anthropic.reset();
+    await other.stop();
     await sleep(50);
     fs.rmSync(dir, { recursive: true, force: true });
   }

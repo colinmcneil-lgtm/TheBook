@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { CircleAlert } from 'lucide-react';
 import { api } from './lib.js';
 import { AppContext } from './state.jsx';
-import { ToastProvider, Loading } from './ui.jsx';
+import { ToastProvider, Loading, Empty, Button } from './ui.jsx';
 import Layout from './components/Layout.jsx';
 import Login, { Join } from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
@@ -22,6 +23,32 @@ import { Careers, CareersJob } from './pages/Careers.jsx';
 
 const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
 const store = (key, value) => { try { value == null ? localStorage.removeItem(key) : localStorage.setItem(key, value); } catch { /* storage unavailable */ } };
+
+/**
+ * A page that fails to draw must not take the rest of the workspace down with it. Without this, one broken page
+ * empties the whole window, and with it goes the recorder: a call being recorded would stop without a word.
+ * The menu, the recording strip and the recorder sit outside this, so they carry on. Going to another page clears it.
+ */
+class PageBoundary extends React.Component {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error) { console.error('A page could not be shown:', error); }
+  componentDidUpdate(before) { if (this.state.failed && before.at !== this.props.at) this.setState({ failed: false }); }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div className="p-8">
+        <Empty icon={CircleAlert} title="This page could not be shown" action={<Button onClick={() => this.setState({ failed: false })}>Try again</Button>}>
+          Something went wrong while showing it. The rest of The Book still works: choose another page from the menu, or try this one again.
+        </Empty>
+      </div>
+    );
+  }
+}
+function Pages({ children }) {
+  const { pathname } = useLocation();
+  return <PageBoundary at={pathname}>{children}</PageBoundary>;
+}
 
 function Workspace() {
   const [me, setMe] = useState(undefined); // undefined = loading, null = signed out
@@ -64,6 +91,7 @@ function Workspace() {
     <AppContext.Provider value={ctx}>
       <Recorder>
       <Layout>
+        <Pages>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/inbox" element={<Inbox />} />
@@ -79,6 +107,7 @@ function Workspace() {
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Pages>
       </Layout>
       </Recorder>
     </AppContext.Provider>

@@ -6,8 +6,10 @@ import { api } from '../lib.js';
 import { useToast, cx } from '../ui.jsx';
 import { CallRecorder, ChunkUploader, formatElapsed } from './recorder.js';
 
-/** The sentence the recruiter ticks before a call is recorded or uploaded. It is stored with the call. */
+/** The sentence the recruiter ticks before a call is recorded. It is stored with the call. */
 export const CONSENT_WORDING = 'Everyone on this call knows it is being recorded and has agreed.';
+/** The same for a recording made earlier and uploaded: the call is over, so it says so. */
+export const UPLOAD_CONSENT_WORDING = 'Everyone on this call knew it was being recorded and agreed.';
 
 const IDLE = {
   state: 'idle', live: false, session: null, waiting: 0, callAudio: null, note: null, limitMinutes: null, minutesLeft: null,
@@ -64,7 +66,10 @@ export function RecorderProvider({ children }) {
   const [waiting, setWaiting] = useState(0); // parts of the recording waiting for the connection to come back
   const [callAudio, setCallAudio] = useState(null); // { surface } while the other side of the call is being recorded
   const [note, setNote] = useState(null); // { tone: 'info' | 'warn', text } shown with the recording controls
-  const [recovered, setRecovered] = useState(null); // { call_id } once an interrupted recording was saved, { failed: true } while it cannot be
+  // { call_id, ... } once a recording was saved without the recruiter being taken to it (see the strip for the
+  // flags that say how it ended), { failed: true } while an interrupted one cannot be saved yet.
+  const [recovered, setRecovered] = useState(null);
+  const stopRef = useRef(null);
   const [limitMinutes, setLimitMinutes] = useState(null); // the longest a call can be recorded, once the server has said
   const [minutesLeft, setMinutesLeft] = useState(null); // set for the last ten minutes before that limit
   const startedAt = useRef(0);
@@ -75,8 +80,11 @@ export function RecorderProvider({ children }) {
   const recover = useCallback(() => {
     recovering.current ??= ChunkUploader.recover({ userId: user.id })
       .then((result) => {
-        setRecovered(result?.call_id ? { call_id: result.call_id, late: stoppedShort.current } : null);
-        if (!result?.busy) stoppedShort.current = false;
+        if (result?.busy) return result; // still being recorded in another tab: nothing to say here
+        // A notice already on show for another call stays; "could not be saved yet" is cleared once there is nothing left to save.
+        // (late: the recruiter had stopped the call themselves, so "cut off" would be the wrong word for it.)
+        setRecovered((was) => (result?.call_id ? { call_id: result.call_id, late: stoppedShort.current || result.whole, lost: result.lost } : was?.failed ? null : was));
+        stoppedShort.current = false;
         return result;
       })
       .catch(() => { setRecovered({ failed: true }); return { failed: true }; })
@@ -86,10 +94,17 @@ export function RecorderProvider({ children }) {
 
   useEffect(() => {
     recover();
-    const online = () => { if (!rec.current && ChunkUploader.interrupted(user.id)) recover(); };
-    window.addEventListener('online', online);
+    // A recording can be cut off while this tab stays open: it was being made in another tab that closed, or its
+    // last parts are waiting for the connection. So look again every so often, not only when the page loads.
+    const check = () => { if (!rec.current && !recovering.current && ChunkUploader.interrupted(user.id)) recover(); };
+    const seen = () => { if (document.visibilityState === 'visible') check(); };
+    const timer = setInterval(check, 20_000);
+    window.addEventListener('online', check);
+    document.addEventListener('visibilitychange', seen);
     return () => {
-      window.removeEventListener('online', online);
+      clearInterval(timer);
+      window.removeEventListener('online', check);
+      document.removeEventListener('visibilitychange', seen);
       // Signed out (or the session ended) in the middle of a call: let go of the microphone. What was recorded stays in
       // this browser and is sent the next time this person opens The Book here.
       rec.current?.abandon();
@@ -126,6 +141,8 @@ export function RecorderProvider({ children }) {
       throw new Error(startProblem(err));
     }
     r.addEventListener('statechange', () => { if (r.state === 'recording' || r.state === 'paused' || r.state === 'stopping') setState(r.state); });
+    // The browser's recorder stopped by itself. Nothing more is being recorded, so save what there is and say so.
+    r.addEventListener('broken', () => stopRef.current?.({ broke: true }));
     r.addEventListener('micended', () => setNote({ tone: 'warn', text: 'The microphone was disconnected. What was recorded up to now is safe: press Stop to save the call.' }));
     r.addEventListener('callaudioended', () => { setCallAudio(null); setNote({ tone: 'info', text: 'The call’s tab is no longer being shared. Your microphone is still recording.' }); });
     r.uploader.addEventListener('retry', (e) => setWaiting(e.detail.pending));
@@ -149,16 +166,17 @@ export function RecorderProvider({ children }) {
     const r = rec.current;
     if (!r || (r.state !== 'recording' && r.state !== 'paused')) return;
     const atLimit = how?.atLimit === true; // stopped by the clock below, not by the recruiter
+    const broke = how?.broke === true; // the browser's recorder gave up; the call is saved up to that point and marked as cut off
     try {
-      const result = await r.stop();
+      const result = await r.stop({ interrupted: broke });
       reset();
       // Stopped from The Oracle, the recruiter goes straight to the call. Stopped from the strip while working somewhere
       // else (a candidate's profile, with a note half typed), they stay where they are and are offered the call.
-      if (onOracle.current && !atLimit) {
+      if (onOracle.current && !atLimit && !broke) {
         toast('Call saved');
         navigate(`/oracle/${result.call_id}`);
       } else {
-        setRecovered({ call_id: result.call_id, late: true, atLimit });
+        setRecovered({ call_id: result.call_id, late: true, atLimit, broke });
       }
     } catch (err) {
       // Whatever went wrong, the parts not yet sent are still in this browser. Say why if the server gave a reason,
@@ -170,6 +188,7 @@ export function RecorderProvider({ children }) {
       recover();
     }
   }, [navigate, toast, recover]);
+  stopRef.current = stop;
 
   // A call can only be so long. The server refuses anything after that, so the recording is stopped and saved here
   // when the time comes, and the recruiter is warned for the ten minutes before.
@@ -271,6 +290,8 @@ export function RecorderStrip() {
 
   if (live || state === 'stopping') {
     const paused = state === 'paused';
+    // Once Stop has been pressed nothing is being recorded any more: the call is only waiting to be sent.
+    const offline = state === 'stopping' ? 'Connection lost. The call will be saved when it is back.' : 'Connection lost. Still recording.';
     const button = 'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-colors';
     return (
       <div ref={strip} role="region" aria-label="Call recording" className={cx('no-print flex h-11 shrink-0 items-center gap-3 px-3 text-sm text-white sm:px-4', paused ? 'bg-stone-800' : 'bg-red-700')}>
@@ -285,7 +306,7 @@ export function RecorderStrip() {
         </Link>
         <LevelMeter className="w-12 shrink-0 bg-white/25 min-[420px]:w-20 sm:w-28" barClassName="bg-white" />
         <Link to="/oracle" className="hidden min-w-0 truncate text-white/90 underline decoration-white/40 underline-offset-2 hover:text-white md:block">{sessionLabel(session)}</Link>
-        {waiting > 0 && <span className="inline-flex min-w-0 items-center gap-1.5 text-[13px] text-white/90" title="Connection lost. Still recording."><WifiOff className="size-3.5 shrink-0" /><span className="truncate max-sm:sr-only">Connection lost. Still recording.</span></span>}
+        {waiting > 0 && <span className="inline-flex min-w-0 items-center gap-1.5 text-[13px] text-white/90" title={offline}><WifiOff className="size-3.5 shrink-0" /><span className="truncate max-sm:sr-only">{offline}</span></span>}
         {minutesLeft !== null && state !== 'stopping' && <span className="hidden text-[13px] font-medium whitespace-nowrap text-white sm:inline">About {Math.max(1, Math.round(minutesLeft))} min left</span>}
         <span className="flex-1" />
         {state === 'stopping' ? <LoaderCircle className="size-4 animate-spin" aria-label="Saving" /> : (
@@ -303,16 +324,20 @@ export function RecorderStrip() {
   }
 
   if (recovered?.call_id) {
+    // Saved, but not all of it: said in amber, because the recruiter may want to call the candidate back or start again.
+    const short = recovered.broke || recovered.lost;
     return (
-      <div ref={strip} role="status" className="no-print flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-brand-200 bg-brand-50 px-4 py-2.5 text-sm text-brand-950">
-        <CircleCheck className="size-4 shrink-0 text-brand-700" />
+      <div ref={strip} role="status" className={cx('no-print flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2.5 text-sm', short ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-brand-200 bg-brand-50 text-brand-950')}>
+        {short ? <TriangleAlert className="size-4 shrink-0 text-amber-700" /> : <CircleCheck className="size-4 shrink-0 text-brand-700" />}
         <span className="min-w-0 flex-1 basis-64">
-          {recovered.atLimit ? `This call reached the longest a call can be recorded${limitMinutes ? ` (${limitWords(limitMinutes)})` : ''}, so the recording was stopped. It has been saved.`
+          {recovered.broke ? 'Your browser stopped recording by itself. The call has been saved up to that point. To carry on, start a new recording.'
+            : recovered.lost ? 'The call you recorded has been saved, but the last part of it could not be added and is missing.'
+            : recovered.atLimit ? `This call reached the longest a call can be recorded${limitMinutes ? ` (${limitWords(limitMinutes)})` : ''}, so the recording was stopped. It has been saved.`
             : recovered.late ? 'The call you recorded has been saved.'
-            : 'You were recording a call when this page closed. What was recorded has been saved.'}
+            : 'A call you were recording was cut off. What was recorded has been saved.'}
         </span>
-        <Link to={`/oracle/${recovered.call_id}`} onClick={dismissRecovered} className="font-medium text-brand-800 underline underline-offset-2 hover:text-brand-950">Open the call</Link>
-        <button type="button" onClick={dismissRecovered} aria-label="Dismiss" className="rounded-md p-1 text-brand-700 hover:bg-brand-100"><X className="size-4" /></button>
+        <Link to={`/oracle/${recovered.call_id}`} onClick={dismissRecovered} className={cx('font-medium underline underline-offset-2', short ? 'text-amber-900 hover:text-amber-950' : 'text-brand-800 hover:text-brand-950')}>Open the call</Link>
+        <button type="button" onClick={dismissRecovered} aria-label="Dismiss" className={cx('rounded-md p-1', short ? 'text-amber-700 hover:bg-amber-100' : 'text-brand-700 hover:bg-brand-100')}><X className="size-4" /></button>
       </div>
     );
   }

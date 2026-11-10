@@ -225,10 +225,14 @@ CREATE TABLE IF NOT EXISTS calls (
   audio_file TEXT, audio_type TEXT, audio_size INTEGER, -- the finished audio: a file in the uploads folder
   duration_ms INTEGER,
   interrupted INTEGER NOT NULL DEFAULT 0,            -- 1 = finished from what had arrived after the recording was cut short
+  joined_parts INTEGER,                              -- how many pieces of the recording the audio file was made from
   transcript TEXT,                                   -- JSON: [{ speaker, start, end, text }]
   transcript_source TEXT,                            -- deepgram | pasted
   speakers TEXT NOT NULL DEFAULT '{}',               -- JSON: speaker number -> name
   notes TEXT, notes_at TEXT,
+  notes_auto INTEGER NOT NULL DEFAULT 0,             -- 1 = the notes are as the AI wrote them; 0 once somebody has typed or changed them
+  notes_blind INTEGER NOT NULL DEFAULT 0,            -- 1 = the AI wrote them before the call was on a candidate, so without the person or the job
+  notes_error TEXT,                                  -- why the last attempt to write the notes failed, in plain English
   submission TEXT, submission_at TEXT,
   note_id INTEGER,                                   -- the candidate note the summary was last saved as
   -- Removing an application leaves the call with the candidate; removing the candidate removes their calls.
@@ -291,6 +295,11 @@ db.exec(`UPDATE clients SET fee_percent = 0 WHERE engagement_model = 'retainer' 
 addColumn('users', 'requested_company', 'TEXT');
 addColumn('applications', 'consent_at', 'TEXT');
 addColumn('candidates', 'photo_file', 'TEXT');
+// Columns the calls table gained after it was first made.
+addColumn('calls', 'joined_parts', 'INTEGER');
+addColumn('calls', 'notes_auto', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('calls', 'notes_blind', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('calls', 'notes_error', 'TEXT');
 if (!db.prepare('PRAGMA table_info(applications)').all().some((c) => c.name === 'owner_id')) {
   db.exec('ALTER TABLE applications ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL');
   // Existing candidates belong to whoever added them, where that is known.
@@ -298,7 +307,9 @@ if (!db.prepare('PRAGMA table_info(applications)').all().some((c) => c.name === 
     SELECT ac.user_id FROM activities ac JOIN users u ON u.id = ac.user_id AND u.role != 'client'
     WHERE ac.application_id = applications.id AND ac.type = 'added' ORDER BY ac.id LIMIT 1)`);
 }
-for (const table of ['users', 'candidates', 'applications', 'interviews']) ensureAutoincrement(table);
+// Notes are in this list because a recorded call remembers the note its summary was saved as: a number handed out
+// twice would let it write over somebody else's note.
+for (const table of ['users', 'candidates', 'applications', 'interviews', 'notes']) ensureAutoincrement(table);
 // People sourced from a profile often have no known email yet, so it is no longer required.
 rebuildTable('candidates', (sql) => sql.replace(/\bemail TEXT NOT NULL\b/, 'email TEXT'));
 // Profile links used to be saved as typed. People are recognised by the stored form of a LinkedIn profile link, so

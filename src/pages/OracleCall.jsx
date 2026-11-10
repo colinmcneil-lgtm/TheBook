@@ -16,6 +16,13 @@ const speakerName = (call, n) => call.speakers?.[n]?.trim() || `Speaker ${Number
 const transcriptText = (call) => (call.transcript || []).map((t) => `${speakerName(call, t.speaker)}: ${t.text}`).join('\n\n');
 const APP_STATUS = { hired: 'Hired', rejected: 'Rejected', withdrawn: 'Withdrawn' };
 
+/** Text typed into a box on this page and not saved yet is saved when the recruiter leaves the page, not lost. */
+function useSaveOnLeave(unsaved, save) {
+  const latest = useRef(null);
+  latest.current = { unsaved, save };
+  useEffect(() => () => { if (latest.current.unsaved) latest.current.save(); }, []);
+}
+
 /** The title, with a pencil to rename the call. */
 function Title({ call, onPatch }) {
   const [editing, setEditing] = useState(false);
@@ -48,9 +55,16 @@ function CandidateCard({ data, onPatch, onAttach }) {
     await onPatch({ application_id: applicationId });
   });
   const [detach] = useAction(async () => {
-    if (!window.confirm(`Take this call off ${candidate.name}? The call is kept, and you can add it to a candidate again later.${call.submission ? ' The submission draft is removed, because it was written for this job.' : ''}`)) return;
+    if (!window.confirm(`Take this call off ${candidate.name}? The call is kept, and you can add it to a candidate again later.${call.submission ? ' The submission draft is removed, because it was written for this job.' : ''}${call.note_saved ? ` The notes saved to ${firstName(candidate.name)}’s profile from this call are removed from it.` : ''}`)) return;
     await onPatch({ application_id: null });
   });
+  const changeWho = (
+    <Menu trigger={<Button aria-label="Change who this call is with" icon={Ellipsis} className="!px-2.5" />}
+      items={[
+        { label: 'Move to another candidate', icon: ArrowLeftRight, onClick: onAttach },
+        candidate && { label: `Take off ${firstName(candidate.name)}’s profile`, icon: X, onClick: detach },
+      ]} />
+  );
   if (!candidate) {
     return (
       <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-dashed border-amber-300 bg-amber-50/70 px-4 py-3.5">
@@ -61,6 +75,35 @@ function CandidateCard({ data, onPatch, onAttach }) {
         </div>
         <Button variant="primary" icon={UserPlus} onClick={onAttach}>Add to a candidate</Button>
       </div>
+    );
+  }
+  if (!application) {
+    // The call is on a person but on none of their jobs: the job it was about was removed, or they were taken off
+    // it. Everything that needs a job (saving notes to the profile, the submission) waits until one is chosen.
+    const profile = applications[0] ? `?c=${applications[0].id}` : null;
+    return (
+      <Card className="flex flex-wrap items-center gap-x-4 gap-y-3 border-amber-300 px-4 py-3.5">
+        <Avatar name={candidate.name} size={44} src={photoUrl(candidate.id, candidate.photo)} />
+        <div className="min-w-0 flex-1 basis-64">
+          {profile ? <Link to={profile} className="truncate text-[15px] font-semibold text-stone-900 hover:text-brand-700 hover:underline">{candidate.name}</Link>
+            : <span className="truncate text-[15px] font-semibold text-stone-900">{candidate.name}</span>}
+          {(candidate.current_title || candidate.current_company) && <p className="truncate text-[13px] text-stone-600">{[candidate.current_title, candidate.current_company].filter(Boolean).join(' at ')}</p>}
+          <p className="mt-1 text-[13px] text-amber-900">The job this call was about is no longer on {firstName(candidate.name)}’s profile.{applications.length ? ' Choose which of their jobs it is about, to save its notes there and draft a submission.' : ''}</p>
+          {applications.length > 0 && (
+            <label className="mt-1.5 flex flex-wrap items-center gap-2 text-[13px] text-stone-500">
+              This call is about
+              <Select value="" disabled={moving} onChange={(e) => e.target.value && setJob(Number(e.target.value))} aria-label="Which job this call is about" className="!h-8 !w-auto max-w-72 !text-[13px] font-medium">
+                <option value="">Choose a job…</option>
+                {applications.map((a) => <option key={a.id} value={a.id}>{a.job_title} · {a.client_name}</option>)}
+              </Select>
+            </label>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {profile && <Link to={profile} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-white px-3.5 text-sm font-medium text-stone-800 shadow-sm hover:bg-stone-50"><UserRound className="size-4" />Open profile</Link>}
+          {changeWho}
+        </div>
+      </Card>
     );
   }
   return (
@@ -86,11 +129,7 @@ function CandidateCard({ data, onPatch, onAttach }) {
       </div>
       <div className="flex items-center gap-2">
         <Link to={`?c=${application.id}`} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-white px-3.5 text-sm font-medium text-stone-800 shadow-sm hover:bg-stone-50"><UserRound className="size-4" />Open profile</Link>
-        <Menu trigger={<Button aria-label="Change who this call is with" icon={Ellipsis} className="!px-2.5" />}
-          items={[
-            { label: 'Move to another candidate', icon: ArrowLeftRight, onClick: onAttach },
-            { label: `Take off ${firstName(candidate.name)}’s profile`, icon: X, onClick: detach },
-          ]} />
+        {changeWho}
       </div>
     </Card>
   );
@@ -191,6 +230,9 @@ function TranscriptCard({ data, status, onPatch, reload, onSeek, activeTurn, cla
         <LoaderCircle className="mb-3 size-6 animate-spin text-brand-600" />
         <p className="text-sm font-medium text-stone-900">Writing the transcript</p>
         <p className="mt-1 max-w-sm text-sm text-stone-500">This usually takes a minute or two. You can leave this page; the transcript will be here when you come back.</p>
+        {/* The service may be slow or not answering: the recruiter is never left with nothing to do but wait. */}
+        <p className="mt-4 mb-2 text-xs text-stone-500">Already have a transcript of this call?</p>
+        {pasteButton}
       </div>
     );
   } else if (call.status === 'failed') {
@@ -241,9 +283,10 @@ function TranscriptCard({ data, status, onPatch, reload, onSeek, activeTurn, cla
 
 function NotesCard({ data, status, onPatch, reload, awaited, className }) {
   const toast = useToast();
-  const { call, candidate } = data;
+  const { call, candidate, application } = data;
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
+  useSaveOnLeave(editing && text.trim() !== (call.notes || ''), () => api.patch(`/oracle/calls/${call.id}`, { notes: text }).catch(() => {}));
   const [write, writing] = useAction(async () => {
     if (call.notes && !window.confirm('Write the notes again from the transcript? This replaces the notes shown here, including any changes you made.')) return;
     await api.post(`/oracle/calls/${call.id}/notes`);
@@ -271,27 +314,38 @@ function NotesCard({ data, status, onPatch, reload, awaited, className }) {
             </div>
           </form>
         ) : writing || (awaited && !call.notes) ? (
-          <div className="flex items-center gap-3 py-4 text-sm text-stone-600" role="status"><LoaderCircle className="size-5 shrink-0 animate-spin text-brand-600" />Writing the notes summary from the transcript. This can take up to a minute.</div>
+          <>
+            <div className="flex items-center gap-3 py-4 text-sm text-stone-600" role="status"><LoaderCircle className="size-5 shrink-0 animate-spin text-brand-600" />Writing the notes summary from the transcript. This can take up to a minute.</div>
+            {/* If the AI service is slow or not answering, the recruiter can get on with their own. Notes typed meanwhile are kept. */}
+            {!call.notes && <Button size="sm" icon={NotebookPen} onClick={edit}>Write notes yourself</Button>}
+          </>
         ) : call.notes ? (
           <>
+            {call.notes_before_candidate && status?.ai && hasTranscript && (
+              <Notice>These notes were written before the call was added to {firstName(candidate?.name) || 'a candidate'}, so they do not take the job into account. Press “Write again” to have them written for {application?.job_title || 'the job'}.</Notice>
+            )}
             <NotesText text={call.notes} />
             <div className="flex flex-wrap gap-2 border-t border-line pt-3">
               <Button size="sm" icon={Pencil} onClick={edit}>Edit</Button>
               {status?.ai && hasTranscript && <Button size="sm" icon={RefreshCw} onClick={write}>Write again</Button>}
               <CopyButton text={call.notes} />
-              {candidate && <Button size="sm" variant="primary" icon={StickyNote} busy={copying} onClick={toProfile} className="ml-auto">Save to their profile</Button>}
+              {application && <Button size="sm" variant="primary" icon={StickyNote} busy={copying} onClick={toProfile} className="ml-auto">Save to their profile</Button>}
             </div>
-            {!candidate && <p className="text-xs text-stone-500">Add the call to a candidate to save these notes on their profile.</p>}
+            {!candidate ? <p className="text-xs text-stone-500">Add the call to a candidate to save these notes on their profile.</p>
+              : !application ? <p className="text-xs text-stone-500">Choose which job this call is about (above) to save these notes on {firstName(candidate.name)}’s profile.</p> : null}
           </>
         ) : (
           <>
-            <p className="text-sm text-stone-600">
-              {!hasTranscript ? 'The notes summary is written from the transcript, so there is nothing to summarise yet.'
-                : status && !status.ai ? 'Notes summaries are not connected yet, so The Oracle cannot write these for you. You can write your own.'
-                : 'There are no notes for this call yet.'}
-            </p>
+            {/* The notes are written unasked once the transcript is ready. When that failed, say why: not "no notes yet". */}
+            {hasTranscript && call.notes_error ? <Notice tone="bad"><span className="font-medium">The notes could not be written.</span> {call.notes_error}</Notice> : (
+              <p className="text-sm text-stone-600">
+                {!hasTranscript ? 'The notes summary is written from the transcript, so there is nothing to summarise yet.'
+                  : status && !status.ai ? 'Notes summaries are not connected yet, so The Oracle cannot write these for you. You can write your own.'
+                  : 'There are no notes for this call yet.'}
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
-              {hasTranscript && status?.ai && <Button size="sm" variant="primary" icon={Sparkles} onClick={write}>Write the notes</Button>}
+              {hasTranscript && status?.ai && <Button size="sm" variant="primary" icon={call.notes_error ? RefreshCw : Sparkles} onClick={write}>{call.notes_error ? 'Try again' : 'Write the notes'}</Button>}
               <Button size="sm" icon={NotebookPen} onClick={edit}>Write notes yourself</Button>
             </div>
           </>
@@ -309,6 +363,12 @@ function SubmissionCard({ data, status, onPatch, reload, className }) {
   const saved = call.submission || '';
   useEffect(() => setText(saved), [saved]);
   const dirty = text !== saved;
+  // Edits are saved when the recruiter clicks away from the box or leaves the page, so a draft is never lost by going to look at something else.
+  useSaveOnLeave(dirty, () => api.patch(`/oracle/calls/${call.id}`, { submission: text }).catch(() => {}));
+  const card = useRef(null);
+  // What the hiring team has now. When it is this very text, the card says it was sent; it does not go on calling it a draft.
+  const sent = application?.sent_submission || '';
+  const wasSent = Boolean(sent) && sent.trim() === text.trim();
   const [warning, setWarning] = useState(null); // something the server wants said about the draft it wrote
   const [draft, drafting] = useAction(async () => {
     if (saved && !window.confirm('Write the draft again? This replaces the text shown here, including any changes you made.')) return;
@@ -324,6 +384,7 @@ function SubmissionCard({ data, status, onPatch, reload, className }) {
   });
   const hasMaterial = Boolean(call.transcript?.length || call.notes);
   const blocked = !candidate ? 'Add this call to a candidate first. The draft is written for the hiring team of the job they are being considered for.'
+    : !application ? `Choose which of ${firstName(candidate.name)}’s jobs this call is about first (above). The draft is written for that job’s hiring team.`
     : !hasMaterial ? 'There is nothing to draft from until this call has a transcript or notes.'
     : status && !status.ai ? 'Drafting is not connected yet, so The Oracle cannot write this for you. You can write it yourself.'
     : null;
@@ -332,38 +393,49 @@ function SubmissionCard({ data, status, onPatch, reload, className }) {
     <>
     <Card className={cx('overflow-hidden', className)}>
       <CardHeader title="Submission draft" action={call.submission && call.submission_at ? <span className="text-xs text-stone-500">Updated {ago(call.submission_at)}</span> : null} />
-      <div className="space-y-3 p-4">
+      <div ref={card} className="space-y-3 p-4">
         {drafting ? (
           <div className="flex items-center gap-3 py-4 text-sm text-stone-600" role="status"><LoaderCircle className="size-5 shrink-0 animate-spin text-brand-600" />Drafting the write-up for the hiring team. This can take up to a minute.</div>
         ) : saved || open ? (
           <>
             {warning && <Notice tone="warn">{warning}</Notice>}
-            <Textarea rows={12} value={text} onChange={(e) => setText(e.target.value)} aria-label="Submission draft" placeholder="Why this person is worth meeting, in a few lines." />
+            {/* Clicking one of this card's own buttons is not "clicking away": each of them deals with unsaved text itself. */}
+            <Textarea rows={12} value={text} onChange={(e) => setText(e.target.value)} aria-label="Submission draft" placeholder="Why this person is worth meeting, in a few lines."
+              onBlur={(e) => { if (dirty && !card.current?.contains(e.relatedTarget)) save(); }} />
             <div className="flex flex-wrap gap-2">
               {dirty && <Button size="sm" busy={saving} icon={Check} onClick={save}>Save changes</Button>}
               {!blocked && <Button size="sm" icon={RefreshCw} onClick={draft}>Write again</Button>}
               <CopyButton text={text} disabled={!text.trim()} />
-              {candidate && <Button size="sm" variant="primary" icon={Send} busy={loading} disabled={!text.trim()} onClick={submit} className="ml-auto">Submit to the hiring team</Button>}
+              {application && !wasSent && <Button size="sm" variant="primary" icon={Send} busy={loading} disabled={!text.trim()} onClick={submit} className="ml-auto">Submit to the hiring team</Button>}
             </div>
-            <p className="text-xs text-stone-500">
-              {candidate
-                ? `Nothing has been sent. “Submit to the hiring team” opens this text for a last read, and only then is it sent to ${application.client_name}.${application.review_status === 'pending' ? ' They already have an earlier write-up, which this one would replace.' : ''}`
-                : 'Nothing is sent to anyone from here. Add the call to a candidate to submit them to the hiring team.'}
-            </p>
+            {wasSent ? (
+              <p className="flex items-start gap-1.5 text-xs font-medium text-brand-800">
+                <Check className="mt-px size-3.5 shrink-0" />
+                <span>This write-up was sent to the {application.client_name} hiring team{application.sent_at ? ` on ${fmtDateTime(application.sent_at)}` : ''}. Change the text here if you want to send them a new one.</span>
+              </p>
+            ) : (
+              <p className="text-xs text-stone-500">
+                {application
+                  ? `${sent ? 'This text has not been sent.' : 'Nothing has been sent.'} “Submit to the hiring team” opens this text for a last read, and only then is it sent to ${application.client_name}.${sent ? ' They already have an earlier write-up, which this one would replace.' : ''}`
+                  : candidate ? 'Nothing is sent to anyone from here. Choose which job this call is about to submit them to its hiring team.'
+                  : 'Nothing is sent to anyone from here. Add the call to a candidate to submit them to the hiring team.'}
+              </p>
+            )}
           </>
         ) : (
           <>
             <p className="text-sm text-stone-600">{blocked || `The Oracle can draft the write-up that goes to ${application.client_name} when you submit ${firstName(candidate.name)}: why they are worth meeting, in your words, from what was said on the call.`}</p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="primary" icon={Sparkles} disabled={Boolean(blocked)} title={blocked || undefined} onClick={draft}>Draft the submission</Button>
-              {candidate && <Button size="sm" icon={NotebookPen} onClick={() => setOpen(true)}>Write it yourself</Button>}
+              {application && <Button size="sm" icon={NotebookPen} onClick={() => setOpen(true)}>Write it yourself</Button>}
             </div>
             {!blocked && <p className="text-xs text-stone-500">Nothing is sent until you have read it and pressed Submit yourself.</p>}
           </>
         )}
       </div>
     </Card>
-    {submitting && <SubmitModal data={submitting} initialNote={text} onClose={() => setSubmitting(null)} />}
+    {/* What was sent may have been changed in the dialog's last read: the draft here is brought into line with it. */}
+    {submitting && <SubmitModal data={submitting} initialNote={text} onClose={() => setSubmitting(null)} onSubmitted={(note) => onPatch({ submission: note }).catch(() => {})} />}
     </>
   );
 }
@@ -377,7 +449,9 @@ export default function OracleCall() {
   const opened = useRef(Date.now());
   // Check again while the call is being transcribed, while the server is writing the notes that follow a new
   // transcript, and for a few seconds after opening a call that was only just saved (transcribing may be about to start).
+  // Also while it is being recorded somewhere other than this tab: it changes here when it is stopped, or saved after being cut off, over there.
   const live = useLive(`/oracle/calls/${id}`, (d) => d.call.status === 'transcribing' || d.call.notes_pending
+    || (d.call.status === 'recording' && recorder.session?.callId !== d.call.id)
     || (d.call.status === 'uploaded' && d.call.has_audio && status?.transcription && Date.now() - opened.current < 15_000), 3000);
   const { data, error, reload, set } = live;
   const audio = useRef(null);
@@ -395,6 +469,14 @@ export default function OracleCall() {
     await api.del(`/oracle/calls/${id}`);
     toast('Call deleted');
     navigate('/oracle');
+  });
+
+  // A recording that was cut off and cannot be finished from the browser that made it (another computer, cleared
+  // browser data): save the call from what reached the server.
+  const [saveRecording, savingRecording] = useAction(async () => {
+    await api.post(`/oracle/calls/${id}/save-recording`);
+    toast('Call saved');
+    await reload();
   });
 
   if (!data) return <Pending error={error} className="p-8" />;
@@ -439,8 +521,17 @@ export default function OracleCall() {
 
         {call.status === 'recording' ? (
           <Notice tone={beingRecordedHere ? 'info' : 'warn'}>
-            {beingRecordedHere ? 'This call is being recorded now. It can be played back here once you stop the recording.'
-              : 'This call is still being recorded, or its recording was cut off. If it was cut off, open The Book in the browser it was recorded in and what was recorded is saved.'}
+            {beingRecordedHere ? 'This call is being recorded now. It can be played back here once you stop the recording.' : (
+              <>
+                This call is still being recorded, or its recording was cut off. If it was cut off, opening The Book in the browser it was recorded in saves everything that was recorded.
+                {data.can_delete && (
+                  <>
+                    {' '}If that is not possible, you can save what has reached The Book so far. Nothing is lost by doing so: if the call is in fact still being recorded, the rest is added when it stops.
+                    <span className="mt-2 block"><Button size="sm" variant="primary" icon={Check} busy={savingRecording} onClick={saveRecording}>Save what was recorded</Button></span>
+                  </>
+                )}
+              </>
+            )}
           </Notice>
         ) : call.has_audio ? (
           <Card className="space-y-2 px-4 py-3">

@@ -69,6 +69,10 @@ if (isProd) {
 }
 
 const server = app.listen(PORT, () => console.log(`The Book is running on http://localhost:${PORT}`));
+// Node gives up on any request that has not wholly arrived within five minutes. An hour-long recording uploaded on an
+// ordinary home connection takes longer than that, so uploads get an hour. A connection that sends nothing is still
+// dropped after a minute by the separate limit on how long the headers may take.
+server.requestTimeout = 60 * 60 * 1000;
 
 // Stop cleanly when the host asks (deploys, restarts): finish open requests, then close the database.
 for (const signal of ['SIGTERM', 'SIGINT']) {

@@ -1,5 +1,6 @@
 // Pieces shared by The Oracle's pages and the Calls tab on a candidate's profile.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Check, Copy, Info, LoaderCircle, Search, UserPlus, X } from 'lucide-react';
 import { api, url, fmtDate, photoUrl } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
@@ -105,13 +106,17 @@ export function CandidatePicker({ value, onChange, label = 'Who is this call wit
     );
   }
 
-  // One entry per person, in the order the search returned them, each with the jobs they are in.
+  // One entry per person, each with the jobs they are in. The search also looks at job titles, employers and email
+  // addresses, so people whose name matches come first: typing "ma" for Maya must not bury her under every manager.
   const people = [];
   for (const row of (searching && rows) || []) {
     let person = people.find((p) => p.candidate_id === row.candidate_id);
     if (!person) people.push(person = { ...row, jobs: [] });
     person.jobs.push(row);
   }
+  const named = (p) => (p.name || '').toLowerCase().includes(query.toLowerCase());
+  people.sort((a, b) => named(b) - named(a)); // keeps the server's order within each group
+  const SHOWN = 12;
   const who = (p) => [p.current_title, p.current_company].filter(Boolean).join(' at ') || p.email || '';
   const where = (row) => [row.job_title, row.client_name].filter(Boolean).join(' · ');
   const standing = (row) => (row.status === 'active' ? row.stage_name : row.status === 'hired' ? 'Hired' : row.status === 'rejected' ? 'Rejected' : 'Withdrawn');
@@ -122,7 +127,9 @@ export function CandidatePicker({ value, onChange, label = 'Who is this call wit
         <span className="mb-1 block text-[13px] font-medium text-stone-700">{label}</span>
         <span className="relative block">
           <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-stone-400" />
-          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search candidates by name" className="pl-9" autoFocus={autoFocus} autoComplete="off" />
+          {/* Enter here must not submit the form around it: on The Oracle that form starts a recording. */}
+          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search candidates by name" className="pl-9" autoFocus={autoFocus} autoComplete="off"
+            onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} />
         </span>
       </label>
       {searching ? (
@@ -132,7 +139,7 @@ export function CandidatePicker({ value, onChange, label = 'Who is this call wit
             : !people.length ? <p className="px-3 py-2.5 text-sm text-stone-500">Nobody in The Book matches “{query}”.</p>
             : (
               <ul className="divide-y divide-line">
-                {people.slice(0, 12).map((p) => (p.jobs.length === 1 ? (
+                {people.slice(0, SHOWN).map((p) => (p.jobs.length === 1 ? (
                   <li key={p.candidate_id}>
                     <button type="button" role="option" aria-selected="false" onClick={() => onChange(pickOf(p))} className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-stone-50">
                       <Avatar name={p.name} size={30} src={photoUrl(p.candidate_id, p.photo)} />
@@ -162,6 +169,7 @@ export function CandidatePicker({ value, onChange, label = 'Who is this call wit
                     </span>
                   </li>
                 )))}
+                {people.length > SHOWN && <li className="px-3 py-2 text-[13px] text-stone-500">More people match. Type more of the name to find them.</li>}
               </ul>
             )}
         </div>
@@ -178,6 +186,11 @@ export function AttachModal({ call, current, onClose, onDone }) {
   const toast = useToast();
   const [picked, setPicked] = useState(null);
   const [adding, setAdding] = useState(false);
+  // A call goes on a candidate, and a candidate is always someone being considered for a job. With no job to put
+  // them on (a new workspace), say so here: the Add candidate form, which lists the same jobs, could not be completed.
+  const { scope } = useApp();
+  const { data: jobs } = useApi(url('/jobs', { client_id: scope }));
+  const noJobs = Boolean(jobs) && !jobs.some((j) => j.status !== 'closed');
   const attach = async (applicationId, name) => {
     const updated = await api.patch(`/oracle/calls/${call.id}`, { application_id: applicationId });
     toast(name ? `Call added to ${name}` : 'Call added to the candidate');
@@ -192,11 +205,19 @@ export function AttachModal({ call, current, onClose, onDone }) {
       footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={!picked}>{current ? 'Move call' : 'Add call'}</Button></>}>
       <CandidatePicker value={picked} onChange={setPicked} autoFocus hint="Type at least two letters of their name." />
       {current && call.submission && <Notice tone="warn">The submission draft was written for the job this call is on now, so it is removed when the call moves.</Notice>}
-      <p className="text-[13px] text-stone-600">
-        Not in The Book yet?{' '}
-        <button type="button" onClick={() => setAdding(true)} className="inline-flex items-center gap-1 font-medium text-brand-700 hover:underline"><UserPlus className="size-3.5" />Add them as a new candidate</button>
-        {' '}and the call is added to them.
-      </p>
+      {current && call.note_saved && <Notice tone="warn">The notes saved to {call.candidate_name ? `${call.candidate_name}’s` : 'the current'} profile from this call are removed from it if the call moves to somebody else. You can save them to the new profile afterwards.</Notice>}
+      {noJobs ? (
+        <Notice>
+          Someone new is added as a candidate for a job, and there are no jobs yet. <Link to="/jobs" onClick={onClose} className="font-medium text-brand-700 hover:underline">Add a job</Link> first
+          (and the client it is for), then come back and add this call to the candidate.
+        </Notice>
+      ) : (
+        <p className="text-[13px] text-stone-600">
+          Not in The Book yet?{' '}
+          <button type="button" onClick={() => setAdding(true)} className="inline-flex items-center gap-1 font-medium text-brand-700 hover:underline"><UserPlus className="size-3.5" />Add them as a new candidate</button>
+          {' '}and the call is added to them.
+        </p>
+      )}
     </Modal>
   );
 }

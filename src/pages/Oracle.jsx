@@ -4,7 +4,7 @@ import { AudioLines, FileAudio, Mic, MonitorSpeaker, Pause, Play, Square, Upload
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, url, fmtDateTime, photoUrl } from '../lib.js';
 import { Avatar, Button, Card, CardHeader, Checkbox, Empty, Field, Input, Modal, Page, useAction, useToast, cx } from '../ui.jsx';
-import { CONSENT_WORDING, Elapsed, LevelMeter, MicBadge, limitWords, sessionLabel, useRecorder } from '../oracle/RecorderProvider.jsx';
+import { CONSENT_WORDING, UPLOAD_CONSENT_WORDING, Elapsed, LevelMeter, MicBadge, limitWords, sessionLabel, useRecorder } from '../oracle/RecorderProvider.jsx';
 import { CallRecorder } from '../oracle/recorder.js';
 import { AttachModal, CallStatus, CandidatePicker, Notice, callName, fmtLength, pickOf, useLive } from '../oracle/bits.jsx';
 
@@ -34,10 +34,10 @@ function ConnectionNotice({ status }) {
 }
 
 /** The consent tick box, shared by recording and uploading. It turns red when someone tries to go on without it. */
-function ConsentTick({ checked, onChange, missing }) {
+function ConsentTick({ checked, onChange, missing, wording = CONSENT_WORDING }) {
   return (
     <div className={cx('rounded-lg border px-3 py-2.5', missing ? 'border-red-300 bg-red-50' : 'border-line bg-stone-50')}>
-      <Checkbox checked={checked} onChange={(e) => onChange(e.target.checked)} label={CONSENT_WORDING}
+      <Checkbox checked={checked} onChange={(e) => onChange(e.target.checked)} label={wording}
         hint={missing ? 'Tick this box first. Calls may only be recorded when everyone on them has agreed.' : 'Your confirmation is kept with the call.'} />
     </div>
   );
@@ -64,7 +64,8 @@ function RecordForm({ picked, setPicked }) {
 
   return (
     <form className="flex-1 space-y-4 p-5" onSubmit={(e) => { e.preventDefault(); begin(); }}>
-      <div className="grid gap-4 lg:grid-cols-2">
+      {/* grid-cols-1 lets the columns shrink: without it a long name or job title pushes the card wider than a phone. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <CandidatePicker value={picked} onChange={setPicked} hint="Optional. You can add the call to a candidate afterwards." />
         <Field label="Title" hint="Optional, for example “First call” or “Salary follow-up”.">
           <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} placeholder={picked ? `Call with ${picked.name}` : 'Candidate call'} />
@@ -118,7 +119,9 @@ function RecordingPanel() {
 
       {waiting > 0 && (
         <Notice tone="warn">
-          <span className="font-medium">The connection dropped.</span> The call is still being recorded and is kept on this computer. It is sent as soon as the connection is back, so carry on.
+          <span className="font-medium">The connection dropped.</span>{' '}
+          {stopping ? 'The call is kept on this computer and is saved as soon as the connection is back. Keep The Book open in this browser until then.'
+            : 'The call is still being recorded and is kept on this computer. It is sent as soon as the connection is back, so carry on.'}
         </Notice>
       )}
       {note && <Notice tone={note.tone === 'warn' ? 'warn' : 'info'}>{note.text}</Notice>}
@@ -145,9 +148,10 @@ function RecordingPanel() {
         <Button icon={paused ? Play : Pause} disabled={stopping} onClick={paused ? resume : pause}>{paused ? 'Resume' : 'Pause'}</Button>
         <Button variant="dangerSolid" icon={Square} busy={stopping} onClick={stop}>{stopping ? 'Saving the call…' : 'Stop and save'}</Button>
         <span className="min-w-0 flex-1 basis-56 text-[13px] text-stone-500">
-          {session?.subject
-            ? `Recording carries on while you look at ${session.subject.name.split(' ')[0]}’s profile or anything else in The Book.`
-            : 'Recording carries on while you use the rest of The Book. You can add the call to a candidate when it is saved.'}
+          {stopping ? 'The recording has stopped and the call is being saved.'
+            : session?.subject
+              ? `Recording carries on while you look at ${session.subject.name.split(' ')[0]}’s profile or anything else in The Book.`
+              : 'Recording carries on while you use the rest of The Book. You can add the call to a candidate when it is saved.'}
         </span>
       </div>
     </div>
@@ -192,6 +196,34 @@ function RecordCard({ picked, setPicked }) {
 
 const UPLOAD_TYPES = /\.(mp3|m4a|mp4|wav|webm|ogg)$/i;
 
+/**
+ * Send the upload form. A long recording can take many minutes on an ordinary connection, so unlike the usual
+ * request helper this says how far it has got and can be cancelled. Returns { done, cancel }: `done` resolves to
+ * the server's answer, and fails with a sentence for the recruiter (or with `cancelled` set when they cancelled).
+ */
+function sendUpload(form, onProgress) {
+  const xhr = new XMLHttpRequest();
+  const done = new Promise((resolve, reject) => {
+    const fail = (message, extra) => reject(Object.assign(new Error(message), extra));
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch { /* not an answer from The Book itself */ }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+      if (xhr.status === 401) window.dispatchEvent(new Event('auth:expired'));
+      return fail(data?.error
+        || (xhr.status === 408 ? 'This upload took too long and was stopped. Try again on a faster connection, or upload a shorter recording.'
+          : xhr.status === 413 ? 'This file is too large to upload here.'
+          : 'The recording could not be uploaded. Please try again.'));
+    };
+    xhr.onerror = () => fail('The upload was cut off before it finished. Check your connection and try again. On a slow connection a long recording may take too long to send.');
+    xhr.onabort = () => fail('Upload cancelled', { cancelled: true });
+    xhr.open('POST', '/api/oracle/calls/upload');
+    xhr.send(form);
+  });
+  return { done, cancel: () => xhr.abort() };
+}
+
 /** For calls recorded somewhere else (a phone app, a meeting tool's download). */
 function UploadModal({ maxMb, initial, onClose }) {
   const navigate = useNavigate();
@@ -201,24 +233,43 @@ function UploadModal({ maxMb, initial, onClose }) {
   const [title, setTitle] = useState('');
   const [agreed, setAgreed] = useState(false);
   const [missing, setMissing] = useState(false);
+  const [sent, setSent] = useState(null); // how much of the file has gone, 0 to 1, while it is uploading
+  const [problem, setProblem] = useState(null);
+  const upload = useRef(null);
+  useEffect(() => () => upload.current?.cancel(), []); // leaving the dialog any other way stops the upload too
+  const busy = sent !== null;
   const tooBig = file && maxMb && file.size > maxMb * 1024 * 1024;
   const wrongType = file && !UPLOAD_TYPES.test(file.name);
-  const [save, busy] = useAction(async () => {
-    if (!agreed) return setMissing(true);
+  const save = async () => {
+    if (busy) return;
+    if (!agreed) { setMissing(true); return; }
     const fd = new FormData();
     fd.append('consent', 'true'); // fields first, so the server has them before the file arrives
-    fd.append('consent_wording', CONSENT_WORDING);
+    fd.append('consent_wording', UPLOAD_CONSENT_WORDING);
     if (title.trim()) fd.append('title', title.trim());
     if (picked) fd.append('application_id', picked.application_id);
     fd.append('audio', file);
-    const { id } = await api.post('/oracle/calls/upload', fd);
-    toast('Recording uploaded');
-    onClose();
-    navigate(`/oracle/${id}`);
-  });
+    setProblem(null);
+    setSent(0);
+    upload.current = sendUpload(fd, setSent);
+    try {
+      const { id } = await upload.current.done;
+      upload.current = null;
+      toast('Recording uploaded');
+      onClose();
+      navigate(`/oracle/${id}`);
+    } catch (err) {
+      upload.current = null;
+      setSent(null);
+      if (!err.cancelled) setProblem(err.message);
+    }
+  };
+  // While a file is on its way, Cancel stops the upload and leaves the dialog as it was; otherwise it closes it.
+  const cancel = () => (busy ? upload.current?.cancel() : onClose());
+  const percent = Math.min(99, Math.floor((sent || 0) * 100));
   return (
     <Modal title="Upload a recording" subtitle="For a call you recorded somewhere else." onClose={busy ? () => {} : onClose} onSubmit={save}
-      footer={<><Button onClick={onClose} disabled={busy}>Cancel</Button><Button type="submit" variant="primary" icon={Upload} busy={busy} disabled={!file || tooBig || wrongType}>{busy ? 'Uploading…' : 'Upload'}</Button></>}>
+      footer={<><Button onClick={cancel}>{busy ? 'Cancel upload' : 'Cancel'}</Button><Button type="submit" variant="primary" icon={Upload} busy={busy} disabled={!file || tooBig || wrongType}>{busy ? 'Uploading…' : 'Upload'}</Button></>}>
       <label className="flex cursor-pointer items-center gap-3 rounded-xl border-2 border-dashed border-stone-300 bg-stone-50 px-4 py-3.5 transition-colors hover:border-stone-400">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-white text-brand-700 ring-1 ring-line"><FileAudio className="size-5" /></span>
         <span className="min-w-0 flex-1 text-sm">
@@ -229,11 +280,20 @@ function UploadModal({ maxMb, initial, onClose }) {
               : file ? `${(file.size / 1048576).toFixed(1)} MB` : `MP3, M4A, MP4, WAV, WebM or OGG${maxMb ? `, up to ${maxMb} MB` : ''}.`}
           </span>
         </span>
-        <input type="file" accept=".mp3,.m4a,.mp4,.wav,.webm,.ogg,audio/*" className="sr-only" aria-label="Recording" onChange={(e) => setFile(e.target.files[0] || null)} />
+        <input type="file" accept=".mp3,.m4a,.mp4,.wav,.webm,.ogg,audio/*" className="sr-only" aria-label="Recording" disabled={busy} onChange={(e) => { setFile(e.target.files[0] || null); setProblem(null); }} />
       </label>
+      {busy && (
+        <div role="status" aria-live="polite">
+          <div className="mb-1 flex justify-between text-[13px] text-stone-600"><span>{sent >= 1 ? 'Uploaded. Saving the recording…' : 'Uploading. Keep this window open.'}</span><span className="tabular">{percent}%</span></div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-stone-200" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label="Upload progress">
+            <div className="h-full rounded-full bg-brand-600 transition-[width]" style={{ width: `${percent}%` }} />
+          </div>
+        </div>
+      )}
+      {problem && <Notice tone="bad">{problem}</Notice>}
       <CandidatePicker value={picked} onChange={setPicked} hint="Optional. You can add the call to a candidate afterwards." />
       <Field label="Title" hint="Optional."><Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} placeholder={picked ? `Call with ${picked.name}` : 'Candidate call'} /></Field>
-      <ConsentTick checked={agreed} onChange={(v) => { setAgreed(v); if (v) setMissing(false); }} missing={missing} />
+      <ConsentTick checked={agreed} onChange={(v) => { setAgreed(v); if (v) setMissing(false); }} missing={missing} wording={UPLOAD_CONSENT_WORDING} />
     </Modal>
   );
 }
@@ -265,15 +325,20 @@ function CallRow({ call, onAttach }) {
 }
 
 export default function Oracle() {
+  const { scope } = useApp();
   const recorder = useRecorder();
   const [params, setParams] = useSearchParams();
   const { data: status } = useApi('/oracle/status');
   const everyone = params.get('show') === 'everyone';
-  // Check again while anything is being transcribed, and for a short while after opening the page in case a call
-  // that was only just saved is about to be.
+  // Check again while anything is being transcribed, for a short while after opening the page in case a call that
+  // was only just saved is about to be, and while a call is being recorded somewhere other than this tab (it loses
+  // its "Recording" chip here when it is stopped, or saved after being cut off, over there).
+  // The list follows the client chosen in the sidebar, like the rest of the workspace.
   const opened = useRef(Date.now());
-  const calls = useLive(url('/oracle/calls', { mine: everyone ? '' : 1 }),
-    (rows) => rows.some((c) => c.status === 'transcribing' || (c.status === 'uploaded' && status?.transcription && Date.now() - opened.current < 20_000)));
+  const recordingHere = recorder.session?.callId;
+  const calls = useLive(url('/oracle/calls', { mine: everyone ? '' : 1, client_id: scope }),
+    (rows) => rows.some((c) => c.status === 'transcribing' || (c.status === 'recording' && c.id !== recordingHere)
+      || (c.status === 'uploaded' && status?.transcription && Date.now() - opened.current < 20_000)));
   const [picked, setPicked] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [attaching, setAttaching] = useState(null);

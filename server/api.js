@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
 import { registerAutofill } from './autofill.js';
-import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCalls } from './oracle.js';
+import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCalls, forgetSavedNote } from './oracle.js';
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
 
 export const api = express.Router();
@@ -1236,7 +1236,10 @@ api.post('/applications/:id/notes', (req, res) => {
 api.delete('/notes/:id', (req, res) => {
   const note = q.get('SELECT * FROM notes WHERE id = ?', int(req.params.id));
   if (!note || note.user_id !== req.user.id) bad('You can only delete your own notes.', 403);
-  q.run('DELETE FROM notes WHERE id = ?', note.id);
+  tx(() => {
+    q.run('DELETE FROM notes WHERE id = ?', note.id);
+    forgetSavedNote(note.id); // a call whose summary was saved as this note must not write over whatever is written next
+  });
   res.json({ ok: true });
 });
 
@@ -1271,7 +1274,8 @@ api.get('/applications/:id/resume', (req, res) => {
   const safeName = (a.resume_name || 'resume').replace(/[^\w.\- ]+/g, '_');
   // Always a download, never rendered inside this site: the file came from an anonymous upload.
   res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-  res.sendFile(path.join(UPLOAD_DIR, path.basename(a.resume_file)), (err) => {
+  // Sent by name from the uploads folder, so a data folder under a hidden folder (~/.thebook, say) is served like any other.
+  res.sendFile(path.basename(a.resume_file), { root: UPLOAD_DIR, dotfiles: 'allow' }, (err) => {
     if (err && !res.headersSent) res.status(404).json({ error: 'The résumé file is missing.' });
   });
 });
@@ -1317,7 +1321,7 @@ api.get('/candidates/:id/photo', (req, res) => {
   if (!cand || !cand.photo_file || !canSee(req.user, cand.client_id) || !seesPhotos(req.user)) bad('Not found', 404);
   res.setHeader('Content-Type', PHOTO_TYPES[path.extname(cand.photo_file)] || 'application/octet-stream');
   res.setHeader('Cache-Control', 'private, max-age=604800'); // the address changes with the photo, so this copy never goes stale
-  res.sendFile(path.join(UPLOAD_DIR, path.basename(cand.photo_file)), (err) => {
+  res.sendFile(path.basename(cand.photo_file), { root: UPLOAD_DIR, dotfiles: 'allow' }, (err) => {
     if (err && !res.headersSent) res.status(404).json({ error: 'Not found' });
   });
 });

@@ -12,16 +12,34 @@ export function pickMimeType() {
 
 const SPEECH_BITRATE = 32_000; // bits per second: about 14 MB an hour, clear speech in Opus
 const TIMESLICE_MS = 5_000; // a part every 5 s: a crash loses at most the last few seconds
+const STALL_MS = 20_000; // no part for this long while recording means the browser's recorder has stopped working
 
 // ---- one recording at a time, across every tab of this browser ---------------------------------------------------------
 const DB_NAME = 'oracle-recorder';
 const STORE = 'chunks';
-const ACTIVE_KEY = 'oracle:active-recording'; // localStorage: the recording this browser was in the middle of
+// localStorage: the recording a person was in the middle of in this browser. Each person has their own marker
+// (the key ends in their user number), so on a shared computer one recruiter's recording never wipes the only
+// pointer to a colleague's interrupted one.
+const ACTIVE_KEY = 'oracle:active-recording';
 const LOCK = 'oracle-recording';
 const BEAT_STALE_MS = 20_000;
 
-const readMarker = () => { try { return JSON.parse(localStorage.getItem(ACTIVE_KEY) || 'null'); } catch { return null; } };
-const writeMarker = (marker) => { try { marker ? localStorage.setItem(ACTIVE_KEY, JSON.stringify(marker)) : localStorage.removeItem(ACTIVE_KEY); } catch { /* storage unavailable */ } };
+const markerKey = (userId) => `${ACTIVE_KEY}:${userId}`;
+const readMarker = (userId) => { try { return JSON.parse(localStorage.getItem(markerKey(userId)) || 'null'); } catch { return null; } };
+const writeMarker = (userId, marker) => {
+  try { marker ? localStorage.setItem(markerKey(userId), JSON.stringify(marker)) : localStorage.removeItem(markerKey(userId)); } catch { /* storage unavailable */ }
+};
+/** The recordings that somebody's marker points at, whoever they are. */
+function markedRecordings() {
+  const ids = new Set();
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(`${ACTIVE_KEY}:`)) ids.add(JSON.parse(localStorage.getItem(key) || 'null')?.id);
+    }
+  } catch { /* storage unavailable */ }
+  return ids;
+}
 
 /**
  * The tab that is recording holds a lock for as long as it records, and the browser lets go of it when that tab is
@@ -62,6 +80,54 @@ const putChunk = (base, id, seq, data, signal) => fetch(`/api${base}/${id}/chunk
 /** The server will never take this part (signed out, the recording was finished or deleted elsewhere). Anything else is worth retrying. */
 const refused = (status) => status >= 400 && status < 500 && status !== 408 && status !== 429;
 
+/**
+ * Send what this browser still holds of one recording, then close it on the server with everything that arrived.
+ * Used for a recording that was cut off, and for one the server closed by itself in the meantime (it keeps taking
+ * the rest for some days). Resolves to { gone: true } when there is no such call any more or nothing was ever
+ * recorded, otherwise to { call_id, status, lost, whole }: `lost` says some of what this browser held could not be
+ * added, because the server will not take it now; `whole` that Stop had been pressed and every part is now there.
+ * Throws when the server cannot be reached or the person is signed out, and then nothing has been given up: the
+ * caller keeps every part for another try.
+ */
+async function deliver(db, base, id, { elapsedMs, chunks } = {}) {
+  let status;
+  try {
+    status = await api.get(`${base}/${id}`);
+  } catch (err) {
+    if (err.status === 404) return { gone: true }; // the call was deleted in the meantime
+    throw err;
+  }
+  const rows = db ? await idb(db, 'readonly', (s) => s.getAll(rowsOf(id))) : [];
+  const have = new Set(status.received);
+  let lost = false;
+  if (!status.open) {
+    // Closed for good. Parts the audio was made from are only copies; anything past them never made it.
+    lost = rows.some((row) => row.seq >= (status.joined ?? Infinity));
+    return { call_id: status.call_id, status: status.status, lost, whole: status.interrupted === false && !lost };
+  }
+  for (const row of rows) {
+    if (have.has(row.seq)) continue;
+    const res = await putChunk(base, id, row.seq, row.data);
+    if (res.ok) have.add(row.seq);
+    else if (res.status === 401 || !refused(res.status)) throw Object.assign(new Error('The rest of the interrupted recording could not be sent.'), { status: res.status });
+    else lost = true; // the server will never take this part (the call reached its limit)
+  }
+  // Keep the unbroken run from part 0: the file is only valid as part 0, 1, 2 ... with no gap.
+  let n = 0;
+  while (have.has(n)) n++;
+  if (!n && status.status !== 'recording') return { call_id: status.call_id, status: status.status, lost };
+  // When the recorder stopped cleanly it left the number of parts behind. If all of them arrived, this is the whole
+  // call, and it is not marked as cut off.
+  const whole = Boolean(chunks) && n === chunks;
+  try {
+    const result = await api.post(`${base}/${id}/finish`, { chunks: n, durationMs: elapsedMs || undefined, ...(whole ? {} : { interrupted: true }) });
+    return { call_id: result.call_id ?? status.call_id, status: result.status, lost, whole };
+  } catch (err) {
+    if (n > 0 || err.status === 401 || !refused(err.status || 0)) throw err;
+    return { gone: true }; // nothing was recorded before the page closed, so there is nothing to keep
+  }
+}
+
 // ---- upload: parts during the call, kept in IndexedDB until the server has them ------------------------------------------
 export class ChunkUploader extends EventTarget {
   #queue = []; // { seq, data: ArrayBuffer } in order; an item leaves only after the server has acknowledged it
@@ -73,6 +139,7 @@ export class ChunkUploader extends EventTarget {
   #idle = [];
   #release = null;
   #stuck = false; // the server refused a part: stop sending, keep storing
+  #sealed = 0; // the number of parts in the whole call, once the recruiter has stopped it
   uploaded = 0;
   failures = 0;
   id = null;
@@ -111,7 +178,19 @@ export class ChunkUploader extends EventTarget {
     return made;
   }
   #beat() {
-    writeMarker({ id: this.id, call_id: this.callId, userId: this.userId, startedAt: this.startedAt, beat: Date.now(), elapsedMs: Math.round(this.elapsed()) });
+    writeMarker(this.userId, {
+      id: this.id, call_id: this.callId, userId: this.userId, startedAt: this.startedAt, beat: Date.now(), elapsedMs: Math.round(this.elapsed()),
+      ...(this.#sealed ? { chunks: this.#sealed } : {}),
+    });
+  }
+  /**
+   * The recruiter pressed Stop and every part is in this browser's store. Leave the number of parts with the marker:
+   * if the page closes before they have all been sent, whoever finishes the job knows when it has the whole call.
+   */
+  seal() {
+    if (!this.#db) return; // nothing is stored in this browser, so nobody could finish the job from it
+    this.#sealed = this.#nextSeq;
+    this.#beat();
   }
 
   /** Called from MediaRecorder.ondataavailable. Order is fixed here, synchronously, before any await. */
@@ -184,67 +263,53 @@ export class ChunkUploader extends EventTarget {
     await this.drained();
     const result = await api.post(`${this.base}/${this.id}/finish`, { chunks: this.#nextSeq, ...extra });
     this.letGo();
-    writeMarker(null);
+    writeMarker(this.userId, null);
     return result;
   }
 
-  /** Is a recording by this person waiting to be recovered (and not simply going on in another tab)? */
+  /** Is a recording by this person waiting to be recovered (or going on in another tab)? */
   static interrupted(userId) {
-    const marker = readMarker();
-    return Boolean(marker?.id && marker.userId === userId);
+    return Boolean(readMarker(userId)?.id);
   }
 
   /**
    * After a crash, an accidental reload or a lost connection at the end of a call: send what this browser still holds
-   * for the interrupted recording, then finish it with what the server has.
+   * for the interrupted recording, then finish it with what the server has. Nothing held here is thrown away until
+   * the server has it, or has said it can never take it.
    * Returns null when there is nothing to recover, { busy: true } when the recording is still going in another tab,
-   * otherwise the finished call { call_id, status }. Throws when the server cannot be reached, leaving everything in
-   * place for another try.
+   * otherwise the finished call { call_id, status, lost, whole } (see deliver). Throws when the server cannot be reached,
+   * leaving everything in place for another try.
    */
   static async recover({ base = '/oracle/recordings', userId } = {}) {
-    const marker = readMarker();
-    // Someone else's recording on a shared computer is left for them: it is recovered when they next sign in here.
-    if (!marker?.id || marker.userId !== userId) return null;
+    const marker = readMarker(userId);
     const release = await holdLock();
-    if (!release) return { busy: true };
+    if (!release) return marker?.id ? { busy: true } : null;
     try {
-      if (!navigator.locks && Date.now() - (marker.beat || 0) < BEAT_STALE_MS) return { busy: true };
+      if (marker?.id && !navigator.locks && Date.now() - (marker.beat || 0) < BEAT_STALE_MS) return { busy: true };
       let db = null;
       try { db = await openDb(); } catch { /* no safety net in this browser */ }
-      const forget = async () => {
-        if (db) await idb(db, 'readwrite', (s) => s.delete(rowsOf(marker.id))).catch(() => {});
-        writeMarker(null);
-      };
-      let status;
-      try {
-        status = await api.get(`${base}/${marker.id}`);
-      } catch (err) {
-        if (err.status === 404) { await forget(); return null; } // the call was deleted in the meantime
-        throw err;
+      const forget = (id) => (db ? idb(db, 'readwrite', (s) => s.delete(rowsOf(id))).catch(() => {}) : null);
+      let result = null;
+      if (marker?.id) {
+        const done = await deliver(db, base, marker.id, marker);
+        await forget(marker.id);
+        writeMarker(userId, null);
+        if (!done.gone) result = { call_id: done.call_id ?? marker.call_id, status: done.status, lost: done.lost, whole: Boolean(done.whole) };
       }
-      if (status.status !== 'recording') { await forget(); return { call_id: status.call_id ?? marker.call_id, status: status.status }; }
-
-      const have = new Set(status.received);
-      const rows = db ? await idb(db, 'readonly', (s) => s.getAll(rowsOf(marker.id))) : [];
-      for (const row of rows) {
-        if (have.has(row.seq)) continue;
-        const res = await putChunk(base, marker.id, row.seq, row.data);
-        if (!res.ok && !refused(res.status)) throw new Error('The rest of the interrupted recording could not be sent.');
-        if (res.ok) have.add(row.seq);
+      // Parts in this browser that no marker points at any more (a marker lost to cleared site data, say). If they
+      // are this person's, they are sent and the call saved like any other; if the call is gone, they are removed.
+      // Somebody else's are refused by the server and left for them.
+      const keys = db ? await idb(db, 'readonly', (s) => s.getAllKeys()).catch(() => []) : [];
+      const marked = markedRecordings();
+      for (const id of new Set(keys.map(([recordingId]) => recordingId))) {
+        if (marked.has(id)) continue;
+        try {
+          const done = await deliver(db, base, id);
+          await forget(id);
+          if (!done.gone) result ??= { call_id: done.call_id, status: done.status, lost: done.lost, whole: false };
+        } catch { /* not this person's, or the server cannot be reached: left for another time */ }
       }
-      // Keep the unbroken run from part 0: the file is only valid as part 0, 1, 2 ... with no gap.
-      let n = 0;
-      while (have.has(n)) n++;
-      let result;
-      try {
-        result = await api.post(`${base}/${marker.id}/finish`, { chunks: n, durationMs: marker.elapsedMs || undefined, interrupted: true });
-      } catch (err) {
-        if (n > 0 || !refused(err.status || 0)) throw err;
-        await forget(); // nothing was recorded before the page closed, so there is nothing to keep
-        return null;
-      }
-      await forget();
-      return { call_id: result.call_id ?? marker.call_id, status: result.status };
+      return result;
     } finally {
       release();
     }
@@ -259,6 +324,7 @@ export class CallRecorder extends EventTarget {
   #mic = null; #display = null; #nodes = [];
   #analysers = {}; #buffers = {};
   #startedAt = 0; #pausedAt = 0; #pausedTotal = 0; #endedAt = null;
+  #lastPart = 0; #watch = null;
   uploader = null;
 
   /**
@@ -298,14 +364,24 @@ export class CallRecorder extends EventTarget {
     }
 
     uploader.elapsed = () => this.elapsedMs;
-    this.#recorder.ondataavailable = (e) => uploader.add(e.data);
-    this.#recorder.onerror = (e) => this.dispatchEvent(new CustomEvent('error', { detail: e.error }));
+    this.#recorder.ondataavailable = (e) => { this.#lastPart = performance.now(); uploader.add(e.data); };
+    // The browser's recorder can give up on its own: an error, or it simply stops. Nothing more is being recorded
+    // then, whatever the clock on the page says, so say so ('broken') and let the page save what there is.
+    const broken = (reason) => {
+      if (this.state === 'recording' || this.state === 'paused') this.dispatchEvent(new CustomEvent('broken', { detail: { reason } }));
+    };
+    this.#recorder.onerror = () => broken('error');
+    this.#recorder.addEventListener('stop', () => broken('stopped'));
+    // And it can go quiet without saying anything: no part for a long while, when one is due every few seconds.
+    this.#watch = setInterval(() => {
+      if (this.state === 'recording' && performance.now() - this.#lastPart > Math.max(STALL_MS, timeslice * 4)) broken('stalled');
+    }, 5_000);
     this.#mic.getAudioTracks()[0].addEventListener('ended', () => {
       // The microphone was unplugged or permission was withdrawn: keep what we have.
       if (this.state === 'recording' || this.state === 'paused') this.dispatchEvent(new CustomEvent('micended'));
     });
     this.#recorder.start(timeslice);
-    this.#startedAt = performance.now();
+    this.#startedAt = this.#lastPart = performance.now();
     this.#setState('recording');
     return made;
   }
@@ -404,6 +480,7 @@ export class CallRecorder extends EventTarget {
   resume() {
     if (this.state !== 'paused') return;
     this.#recorder.resume();
+    this.#lastPart = performance.now(); // nothing was due while paused
     this.#pausedTotal += performance.now() - this.#pausedAt;
     this.#setState('recording');
   }
@@ -412,21 +489,33 @@ export class CallRecorder extends EventTarget {
   async #end() {
     if (this.state === 'paused') this.#pausedTotal += performance.now() - this.#pausedAt;
     this.#endedAt = performance.now();
+    clearInterval(this.#watch);
     this.#setState('stopping');
     // 'stop' fires after the last 'dataavailable', so the uploader has every part when this resolves.
-    if (this.#recorder.state !== 'inactive') await new Promise((resolve) => { this.#recorder.addEventListener('stop', resolve, { once: true }); this.#recorder.stop(); });
+    // (A recorder that has stopped working may never say it has stopped, so this does not wait for it for ever.)
+    if (this.#recorder.state !== 'inactive') {
+      await new Promise((resolve) => {
+        this.#recorder.addEventListener('stop', resolve, { once: true });
+        setTimeout(resolve, 3_000);
+        try { this.#recorder.stop(); } catch { resolve(); }
+      });
+    }
     this.#release();
   }
 
-  /** Stop, upload what is left, and return the server's record of the call: { call_id, status }. */
-  async stop() {
+  /**
+   * Stop, upload what is left, and return the server's record of the call: { call_id, status }.
+   * `interrupted` marks the call as cut off, for a recording that ended before the recruiter stopped it.
+   */
+  async stop({ interrupted = false } = {}) {
     if (this.state !== 'recording' && this.state !== 'paused') return null;
     await this.#end();
+    // The connection may be down, and the recruiter may close the page before it is back: say now that this is the whole call.
+    await this.uploader.stored().then(() => { if (!interrupted) this.uploader.seal(); }, () => {});
     try {
-      return await this.uploader.finish({ durationMs: Math.round(this.elapsedMs) });
+      return await this.uploader.finish({ durationMs: Math.round(this.elapsedMs), ...(interrupted ? { interrupted: true } : {}) });
     } catch (err) {
       // The parts not yet sent stay in this browser with the marker, so ChunkUploader.recover() can finish the job later.
-      await this.uploader.stored().catch(() => {});
       this.uploader.letGo();
       throw err;
     } finally {
@@ -447,6 +536,7 @@ export class CallRecorder extends EventTarget {
   }
 
   #release() {
+    clearInterval(this.#watch);
     this.#mic?.getTracks().forEach((t) => t.stop()); // this is what turns the browser's recording indicator off
     this.#display?.getTracks().forEach((t) => t.stop()); // and this ends "Sharing this tab"
     this.#display = null;

@@ -18,9 +18,11 @@ export const FIXTURES = path.join(HERE, 'fixtures');
 export const RECORDING = fs.readFileSync(path.join(FIXTURES, 'call.webm'));
 export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-canned.json'), 'utf8'));
 
-// Ports: five in a row from ORACLE_TEST_PORT (3610 unless set).
+// Ports: five in a row from ORACLE_TEST_PORT (3610 unless set): three for servers, then one for each stand-in.
+// Node refuses to fetch from a few ports whatever is listening there, and the tests then fail with nothing but
+// "Connection error" in the server's log. Keep all five clear of 3659, 4045, 5060, 5061, 6000 and 6665 to 6669.
 const BASE_PORT = Number(process.env.ORACLE_TEST_PORT) || 3610;
-export const PORTS = { main: BASE_PORT, bare: BASE_PORT + 1, restart: BASE_PORT + 2, deepgram: BASE_PORT + 5, anthropic: BASE_PORT + 6 };
+export const PORTS = { main: BASE_PORT, bare: BASE_PORT + 1, restart: BASE_PORT + 2, deepgram: BASE_PORT + 3, anthropic: BASE_PORT + 4 };
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const tempDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `the-book-${name}-`));
@@ -58,6 +60,7 @@ const close = (server) => new Promise((resolve) => { server.closeAllConnections?
  *   busy        429 every time                 busy-once 429 once, then good     corrupt  400, audio unreadable
  *   gateway     504 with a web page as body    slow     never answers            silent   200 with no speech
  *   nodiarize   200 with no speaker numbers    newshape 400 in the newer error shape      text  500 as plain text
+ *   olddiarize  400 naming diarize_model whenever it is sent, good with the older "diarize=true"
  * Setting `delay` (milliseconds) makes every answer take that long, as the real service does.
  */
 export async function deepgramStandIn(port = PORTS.deepgram) {
@@ -78,7 +81,7 @@ export async function deepgramStandIn(port = PORTS.deepgram) {
       if (query.model !== 'nova-3') problems.push('model is not nova-3: the real service would quietly use an old model');
       for (const name of ['utterances', 'punctuate', 'smart_format', 'paragraphs']) if (query[name] !== 'true') problems.push(`${name} is not true: the real answer would lack that part`);
       if (query.mip_opt_out !== 'true') problems.push('mip_opt_out is not true: the call would be kept and used for training');
-      if (!('diarize_model' in query)) problems.push('diarize_model is missing: no speaker numbers would come back');
+      if (!('diarize_model' in query) && query.diarize !== 'true') problems.push('diarize_model and diarize are both missing: no speaker numbers would come back');
       if (Number(req.headers['content-length']) !== body.length) problems.push('Content-Length does not match the body');
       state.requests.push({
         method: req.method, path: url.pathname, query, authorization: auth, contentType: req.headers['content-type'],
@@ -94,6 +97,7 @@ export async function deepgramStandIn(port = PORTS.deepgram) {
       if (mode === 'gateway') { res.writeHead(504, { 'Content-Type': 'text/html' }); return res.end('<html>504 Gateway Time-out</html>'); }
       if (mode === 'text') { res.writeHead(500, { 'Content-Type': 'text/plain' }); return res.end('upstream connect error'); }
       if (mode === 'newshape') return send(400, { category: 'INVALID_REQUEST', message: 'The audio could not be decoded.', details: 'corrupt or unsupported data', request_id: 'req_stub' });
+      if (mode === 'olddiarize' && 'diarize_model' in query) return err(400, 'INVALID_QUERY_PARAMETER', 'Invalid query parameter: diarize_model');
       if ('diarize' in query && 'diarize_model' in query) return err(400, 'INVALID_QUERY_PARAMETER', 'diarize and diarize_model cannot both be set.');
       // The start of a real recording: WebM, MP4 (as Safari records), or one of the other kinds people upload.
       const ascii = (from, to) => body.subarray(from, to).toString('latin1');
@@ -132,10 +136,11 @@ export const SUBMISSION_DRAFT = { submission: 'I spoke to this candidate on Mond
  * Stand-in for the Anthropic Messages API. It tells the two Oracle requests apart by the answer shape each asks
  * for, and replies according to the API key, or `mode` when a test sets it:
  *   good  a valid answer      bad  401, key rejected      busy  429 every time      refuse  the model declines
+ *   hang  takes the request and never answers
  * Setting `delay` (milliseconds) makes every answer take that long, as the real service does.
  */
 export async function anthropicStandIn(port = PORTS.anthropic) {
-  const state = { requests: [], mode: null, delay: 0 };
+  const state = { requests: [], mode: null, delay: 0, hanging: [] };
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk) => { raw += chunk; });
@@ -148,6 +153,7 @@ export async function anthropicStandIn(port = PORTS.anthropic) {
       const kind = 'submission' in wants ? 'submission' : 'overview' in wants ? 'notes' : 'other';
       state.requests.push({ method: req.method, url: req.url, key, beta: req.headers['anthropic-beta'], body, kind, mode });
       const send = (status, value) => { res.writeHead(status, { 'Content-Type': 'application/json', 'request-id': 'req_stub' }); res.end(JSON.stringify(value)); };
+      if (mode === 'hang') return state.hanging.push(res);
       if (mode === 'bad') return send(401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } });
       if (mode === 'busy') return send(429, { type: 'error', error: { type: 'rate_limit_error', message: 'rate limited' } });
       const base = { id: 'msg_stub', type: 'message', role: 'assistant', model: body?.model, stop_sequence: null, usage: { input_tokens: 1000, output_tokens: 500 } };
@@ -159,7 +165,7 @@ export async function anthropicStandIn(port = PORTS.anthropic) {
   return Object.assign(state, {
     url: `http://127.0.0.1:${port}`,
     reset: () => { state.requests.length = 0; state.mode = null; state.delay = 0; },
-    stop: () => close(server),
+    stop: () => { state.hanging.forEach((res) => res.destroy()); return close(server); },
   });
 }
 
@@ -186,6 +192,8 @@ export function session(base) {
     return data;
   };
   return {
+    /** The sign-in cookie, for a test that has to make a request by hand. */
+    cookie: () => cookie,
     get: (p, headers) => call('GET', p, { headers }),
     post: (p, json = {}) => call('POST', p, { json }),
     patch: (p, json = {}) => call('PATCH', p, { json }),

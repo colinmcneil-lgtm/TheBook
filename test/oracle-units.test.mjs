@@ -8,7 +8,7 @@ import { RECORDING, CANNED, tempDir, pieces } from './oracle-helpers.mjs';
 
 // The module opens the database when it loads, so it is pointed at a folder of its own first.
 process.env.DATA_DIR = tempDir('oracle-units');
-const { turnsFrom, deepgramError, parsePastedTranscript, audioKind, notesText, transcriptText } = await import('../server/oracle.js');
+const { turnsFrom, deepgramError, parsePastedTranscript, audioKind, notesText, transcriptText, lengthWords } = await import('../server/oracle.js');
 test.after(() => fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }));
 
 test('a transcription answer becomes turns: one per speaker change, with only speaker, times and text', () => {
@@ -176,4 +176,23 @@ test('a transcript too long to send in one go is cut at the end of a turn, and s
   const one = transcriptText([{ speaker: 0, start: 0, end: 9, text: 'x'.repeat(500) }], {}, 100);
   assert.equal(one.text.length, 100);
   assert.equal(one.cut, true);
+});
+
+test('an answer with no speaker numbers keeps each piece and its time, and does not become one block', () => {
+  const unlabelled = { results: { utterances: CANNED.results.utterances.map(({ speaker, ...rest }) => rest) } };
+  const { turns } = turnsFrom(unlabelled);
+  assert.deepEqual(turns.map((t) => [t.speaker, t.start]), CANNED.results.utterances.map((u) => [0, u.start]));
+  // With numbers, one person's pieces in a row are still joined into a turn.
+  assert.equal(turnsFrom(CANNED).turns.length, 4);
+  assert.deepEqual(Object.keys(turns[0]).sort(), ['end', 'speaker', 'start', 'text']);
+});
+
+test('a call\'s length on the candidate\'s history reads the way the app shows it', () => {
+  assert.equal(lengthWords(12000), ', 12 sec');
+  assert.equal(lengthWords(59400), ', 59 sec');
+  assert.equal(lengthWords(89000), ', 1 min');
+  assert.equal(lengthWords(45 * 60000), ', 45 min');
+  assert.equal(lengthWords(65 * 60000), ', 1 h 05 min');
+  assert.equal(lengthWords(0), '');
+  assert.equal(lengthWords(null), '');
 });
