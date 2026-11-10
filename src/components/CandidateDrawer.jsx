@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines,
@@ -7,7 +7,7 @@ import { api, url, ago, since, extUrl, photoUrl, fmtDate, fmtDateTime, money, fi
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import ResumeViewer from './ResumeViewer.jsx';
-import { CallStatus, PhoneMark, callName, fmtLength, madeBy } from '../oracle/bits.jsx';
+import { CallStatus, PhoneMark, callName, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
 import { personOf, usePhone } from '../oracle/phone.jsx';
 import { telHref } from '../oracle/calls.js';
 import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal } from './CandidateModals.jsx';
@@ -46,7 +46,11 @@ function CandidateView({ data, onClose }) {
     bump();
   });
   // Recorded calls (The Oracle) belong to the agency: the hiring team never sees that they exist.
-  const { data: calls, error: callsError } = useApi(isAgency ? url('/oracle/calls', { candidate_id: candidate.id }) : null);
+  // The list is looked at again while a call is being written up or its recording is on its way, and as soon as a
+  // phone call placed from here changes, so a call made from this profile shows up on it without reopening it.
+  const { data: calls, error: callsError, reload: reloadCalls } = useLive(isAgency ? url('/oracle/calls', { candidate_id: candidate.id }) : null,
+    (rows) => rows.some((c) => c.status === 'transcribing' || (c.status === 'recording' && c.source === 'phone')));
+  useEffect(() => { reloadCalls(); }, [phone.call?.status, phone.call?.call_id, phone.call?.message]);
 
   const [restore] = useAction(async () => { await api.post(`/applications/${app.id}/restore`); bump(); });
   const [withdraw] = useAction(async () => { await api.post(`/applications/${app.id}/withdraw`); toast('Marked as withdrawn'); bump(); });

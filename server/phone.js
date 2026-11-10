@@ -34,6 +34,7 @@ import { appUrl, notify } from './mail.js';
 import { validateWebhook } from './twilio-signature.js';
 import { toE164, placeOf, displayNumber, spokenNumber, searchDigits, KNOWN_COUNTRIES } from './phone-numbers.js';
 import { transcriptionConfigured, startTranscription, onCallReady, lengthWords, UNTITLED, VOICEMAIL } from './oracle.js';
+import { tieCallToEvent } from './calendar.js';
 
 // ---------- settings ----------
 const env = (name) => (process.env[name] || '').trim();
@@ -309,6 +310,9 @@ function newOracleCall(pc) {
     crypto.randomBytes(16).toString('hex'), name ? `Call with ${name}` : UNTITLED, pc.direction === 'inbound' ? 'inbound' : 'outbound', pc.to_number,
     JSON.stringify(SPEAKERS[pc.direction]), pc.event_key, pc.application_id, pc.candidate_id, pc.user_id ?? firstAdmin()?.id ?? null, t, t);
   q.run('UPDATE phone_calls SET call_id = ?, call_made = 1 WHERE id = ?', id, pc.id);
+  // Placed from an event in the recruiter's day: the event then shows this call. If the call reaches nobody the
+  // entry is removed again and the event goes back to having no call.
+  if (pc.event_key && pc.user_id) tieCallToEvent(pc.user_id, pc.event_key, id);
   return id;
 }
 /** A call that ended with nothing recorded has no place in the Oracle: remove the entry made for it when it was placed. */
@@ -834,7 +838,7 @@ export function registerPhoneWebhooks(api) {
     const member = from ? q.get(`SELECT * FROM users WHERE phone = ? AND ${AGENCY_USER}`, from) : null;
     if (member) {
       if (member.phone_locked_until && member.phone_locked_until > t) return xml(`${say('The switchboard is locked for this phone after three wrong PINs. Try again in a quarter of an hour.')}${HANGUP}`);
-      if (!member.phone_pin_hash) return xml(`${say('To place calls from this phone, first choose a PIN in The Book, under Phone. Goodbye.')}${HANGUP}`);
+      if (!member.phone_pin_hash) return xml(`${say('To place calls from this phone, first choose a PIN in The Book, in Settings under Your account. Goodbye.')}${HANGUP}`);
       const id = known?.id ?? q.insert(
         `INSERT INTO phone_calls (user_id, direction, status, user_number, call_sid, started_at, updated_at) VALUES (?, 'switchboard', 'waiting_for_you', ?, ?, ?, ?)`,
         member.id, from, sid, t, t);
@@ -891,7 +895,7 @@ export function registerPhoneWebhooks(api) {
       q.run(`UPDATE phone_calls SET reason = 'locked' WHERE id = ?`, pc.id);
       notify({
         to: member.email, subject: 'Your phone was locked out of The Book\'s switchboard',
-        body: `Hi ${firstName(member.name) || 'there'},\n\nThree wrong PINs were keyed in on a call to The Book's number from your mobile, so calls cannot be placed from it for ${LOCK_MINUTES} minutes.\n\nIf that was not you, choose a new PIN in The Book, under Phone.\n\n${agencyName() || 'The Book'}\n`,
+        body: `Hi ${firstName(member.name) || 'there'},\n\nThree wrong PINs were keyed in on a call to The Book's number from your mobile, so calls cannot be placed from it for ${LOCK_MINUTES} minutes.\n\nIf that was not you, choose a new PIN in The Book: Settings, Your account, Your mobile number.\n\n${agencyName() || 'The Book'}\n`,
       }).catch(() => {});
       return xml(`${say('That PIN is not right. The switchboard is now locked for this phone for fifteen minutes. Goodbye.')}${HANGUP}`);
     }

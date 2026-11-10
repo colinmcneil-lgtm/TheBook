@@ -92,6 +92,33 @@ person can be moved: a title the call was given automatically changes to the new
 on the first person's profile from that call are removed from it. Client users never see calls, audio, transcripts
 or notes, or the line on a candidate's history that says a call was recorded.
 
+### One tab, three ways to start a call
+
+The Oracle's page opens on three cards, with the list of calls underneath. On a computer, calling and recording sit
+on the left and the day on the right; on a phone they stack in that order.
+
+- **Call a candidate.** "Find & call candidate" searches by name or by the digits of a number, or takes a number
+  typed in full. It shows who will be rung and from which of your phones, with "Record this call" ticked, and then
+  follows the call. Closing the dialog or going to another page does not end the call: it stays on the card, and
+  is a strip across the top everywhere else, with Hang up. "Or call from your own phone" shows The Book's number
+  and the three steps for calling with no screen at all. See [Phone calls](#phone-calls).
+- **Record a live conversation.** For a call on Meet, Zoom or Teams, on speaker, or in person. See
+  [Recording a call](#recording-a-call).
+- **Your calendar.** The day's events with "+ Add" on each. Two minutes before an added event starts, a prompt
+  appears across the top of whatever page you are on, with Record, Call and Join; with your permission the browser
+  also shows a desktop notification. The Book has to be open in a tab for either, and a phone's browser shows only
+  the prompt. A call recorded or placed from an event is shown on the event afterwards. See
+  [Your calendar in The Oracle](#your-calendar-in-the-oracle).
+
+One call at a time: while a phone call is under way Record now is held back, and while a browser recording is
+running Call is, each saying why. A call that comes in during a recording cannot be held back, so the card says
+both are running. A candidate's profile has a Call button beside their number (an ordinary dial link when phone
+calls are not connected), and its Calls tab lists phone calls with their direction.
+
+Each person sets up their own side under **Settings, Your account**: "Your mobile number" (the phone The Book rings,
+and the PIN for ringing in) and "Your calendar" (the private link). Whether phone calls are connected, and what is
+needed to connect them, is under **Settings, Agency**.
+
 ### Recording a call
 
 - Press **Record now** on The Oracle, or **Record a call** on the Calls tab of a candidate's profile, which starts
@@ -290,8 +317,8 @@ and everything else works as before. People can still save their mobile and PIN 
 5. In Twilio, open Phone Numbers, Active numbers, your number, Voice configuration. For **A call comes in** choose
    Webhook, `https://<your address>/api/phone/twilio/inbound`, HTTP POST. For **Call status changes** enter
    `https://<your address>/api/phone/twilio/status`, HTTP POST. Save.
-6. In The Book, each person on the agency team saves their own mobile number, and a PIN of 4 to 6 digits if they
-   want to ring in. Save The Book's number in your phone as "The Book".
+6. In The Book, each person on the agency team saves their own mobile number under Settings, Your account, and a
+   PIN of 4 to 6 digits if they want to ring in. Save The Book's number in your phone as "The Book".
 
 ### What stops it running up a bill
 
@@ -382,7 +409,8 @@ each recruiter pastes one private link from their calendar.
 
 ### Getting your link
 
-The steps below are as Google, Microsoft and Apple describe them. They were not tried while this was built (see
+The link is pasted in under Settings, Your account, "Your calendar", which also has these steps. They are as
+Google, Microsoft and Apple describe them, and were not tried while this was built (see
 [Before you rely on it](#before-you-rely-on-the-calendar)).
 
 - **Google Calendar** (on a computer, not the phone app): open Google Calendar, click the gear, then **Settings**.
@@ -429,7 +457,9 @@ The Oracle, and to be sure, also reset it where it came from: **Reset** beside t
   guests, two people with one name, and one person on file at two clients and in progress at both. The recruiter
   can always choose the candidate themselves, and their choice wins.
 - **"+ Add"** marks an event to be recorded. The mark stays with the event when it is renamed or moved, and a call
-  recorded from an event is shown on it afterwards.
+  recorded from an event, or a phone call placed from it, is shown on it afterwards. An added event is prompted two
+  minutes before it starts, while The Book is open in a tab. The Book's own interviews are in the day like any
+  other event and are added the same way.
 
 A recruiter only ever sees and changes their own day. Client users see none of this.
 
@@ -636,6 +666,7 @@ server/
 src/
   App.jsx, state.jsx, lib.js, ui.jsx   App shell, data hooks, helpers, shared components
   components/                           Candidate profile, modals, forms, layout
+  oracle/                               The recorder, the phone line and the day: what The Oracle's cards share with the rest of the app
   pages/                                One file per screen, plus the public careers pages
 ```
 
@@ -655,8 +686,9 @@ they made at that client, their résumé files, and their recorded calls with th
 - Calendar integration (Google or Microsoft) for live availability and automatic invites; today you get a calendar file to
   download. The Oracle reads a recruiter's own calendar from a private link, but writes nothing to it, and is not told
   the moment something changes.
-- A reminder when an added event is about to start, and a sign-in to Google or Microsoft in place of the pasted link
-  (which would also bring guest lists for Outlook).
+- A reminder for an added event that reaches you when The Book is not open in a tab (the prompt and the desktop
+  notification are made by the open page), and a sign-in to Google or Microsoft in place of the pasted link (which
+  would also bring guest lists for Outlook).
 - Self-service password reset by email. Until then, an agency user deactivates the account and invites the person
   again at the same address (see "Accounts and getting back in").
 - Declining many account requests at once; each is declined on its own, and unanswered ones expire after 14 days.
@@ -664,7 +696,12 @@ they made at that client, their résumé files, and their recorded calls with th
 - Joining a video call to record it. The Oracle records in the recruiter's browser, or takes an uploaded recording.
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
 - Automated tests that drive the screens in a browser as part of `npm test`. `npm test` covers the résumé reader,
-  job autofill, the Oracle's server side, the Oracle's uploader, and phone calls against a stand-in for Twilio. The Oracle's screens were driven end to end in
-  Chrome with a simulated microphone while it was built (record, reload and server restart mid-call, a lost connection,
-  two people on one computer, transcript, notes, add to a candidate, draft, submit, delete), against stand-ins for
-  Deepgram and Claude; the other screens were verified by hand.
+  job autofill, the Oracle's server side, the Oracle's uploader, phone calls against a stand-in for Twilio, and the
+  calendar against calendar files. The Oracle's screens were driven end to end in Chrome with a simulated microphone
+  while it was built (record, reload and server restart mid-call, a lost connection, two people on one computer,
+  transcript, notes, add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude. The
+  phone and calendar screens were driven the same way at 1280 and 390 wide (save a mobile and PIN, call and watch
+  each state, calls that do not connect, an unrecorded call, the switchboard, a call coming in, connect a calendar,
+  add an event, the prompt, record and call from an event, a client user seeing none of it), against the same
+  stand-ins, the stand-in for Twilio and a calendar file: no real phone rang and no real calendar link was read.
+  The other screens were verified by hand.

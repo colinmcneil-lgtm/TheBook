@@ -22,7 +22,7 @@ const HOW = {
 };
 
 /** The time zone this browser is in, which is the zone the recruiter reads their day in. */
-const browserZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } };
+export const browserZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } };
 const dayPath = (date, refresh) => url('/calendar/day', { date, tz: browserZone(), refresh: refresh ? 1 : '' });
 // Which reminders were already shown or closed, kept for the life of the tab so a reload does not bring them back.
 const kept = (name) => { try { return JSON.parse(sessionStorage.getItem(name)) || []; } catch { return []; } };
@@ -304,9 +304,9 @@ function EventRow({ event, now, onChange, onChoose }) {
           <div className={cx('min-w-0 flex-1', past && 'opacity-60')}>
             <p className="line-clamp-2 text-sm font-medium break-words text-stone-900" title={event.title}>{event.title}</p>
             {event.match ? (
-              <p className="mt-0.5 flex items-center gap-1.5 text-[13px]" title={HOW[event.match.how]}>
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[13px]" title={HOW[event.match.how]}>
                 <Avatar name={event.match.name} size={20} src={photoUrl(event.match.candidate_id, event.match.photo)} />
-                <Link to={`?c=${event.match.application_id}`} className="min-w-0 truncate font-medium text-stone-800 hover:text-brand-700 hover:underline">{event.match.name}</Link>
+                <Link to={`?c=${event.match.application_id}`} className="max-w-[calc(100%-26px)] min-w-0 truncate font-medium text-stone-800 hover:text-brand-700 hover:underline">{event.match.name}</Link>
                 {event.source !== 'interview' && <button type="button" onClick={onChoose} className="shrink-0 text-xs text-stone-500 underline underline-offset-2 hover:text-stone-800">Change</button>}
               </p>
             ) : canChoose || guests.length > 0 ? (

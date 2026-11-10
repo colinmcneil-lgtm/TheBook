@@ -8,6 +8,7 @@ import { ApproveForm, InviteForm } from '../components/Forms.jsx';
 import { Notice } from '../oracle/bits.jsx';
 import { PHONE_SETTINGS, settingNames, usePhone } from '../oracle/phone.jsx';
 import { showNumber } from '../oracle/calls.js';
+import { browserZone } from '../oracle/calendar.jsx';
 
 /** A link such as /settings?tab=account#phone lands on that card, not at the top of the page. */
 function useScrollToHash(ready) {
@@ -144,7 +145,8 @@ function CalendarLinkCard() {
     setProblem(null);
     setBusy(true);
     try {
-      const made = await api.put('/calendar/link', { url: link.trim() });
+      // The time zone goes with it so that "events today" counts this person's own today, not the server's.
+      const made = await api.put('/calendar/link', { url: link.trim(), tz: browserZone() });
       setLink('');
       toast(`Calendar connected. ${made.events_today === 1 ? '1 event' : `${made.events_today} events`} today.`);
       bump();

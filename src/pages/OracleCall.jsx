@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, ArrowLeftRight, AudioLines, Check, ClipboardPaste, Copy, Ellipsis, LoaderCircle, NotebookPen, Pencil, RefreshCw, Send, Sparkles, StickyNote, Trash2, UserPlus, UserRound, X,
+  ArrowLeft, ArrowLeftRight, AudioLines, Check, CircleAlert, ClipboardPaste, Copy, Ellipsis, LoaderCircle, NotebookPen, Pencil, RefreshCw, Send, Sparkles, StickyNote, Trash2, UserPlus, UserRound, X,
 } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, ago, firstName, fmtDateTime, photoUrl } from '../lib.js';
@@ -13,6 +13,28 @@ import { usePhone } from '../oracle/phone.jsx';
 import { AttachModal, CallStatus, CopyButton, NotesText, Notice, PhoneMark, callName, fmtClock, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
 
 const SPEAKER_TONES = ['text-brand-700', 'text-amber-700', 'text-violet-700', 'text-sky-700', 'text-rose-700', 'text-lime-700'];
+/**
+ * What the call's record says about recording it. In the browser the recruiter ticked a box; on the phone line nobody
+ * ticked anything: The Book played a notice (or was set not to), and the record says which, in its own words.
+ */
+function ConsentLine({ call }) {
+  if (!call.consent_at) return null;
+  if (call.source === 'phone' && call.consent_wording) {
+    const played = call.consent_wording.startsWith('The Book played this notice');
+    return (
+      <p className="mt-1 flex max-w-3xl items-start gap-1.5 text-xs leading-relaxed text-stone-500">
+        {played ? <Check className="mt-0.5 size-3.5 shrink-0 text-brand-600" /> : <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600" />}
+        <span>{call.consent_wording}</span>
+      </p>
+    );
+  }
+  return (
+    <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-stone-500">
+      <Check className="size-3.5 text-brand-600" />{call.consent_by_name || call.created_by_name || 'The recruiter'} confirmed that everyone on the call agreed to be recorded.
+    </p>
+  );
+}
+
 const speakerName = (call, n) => call.speakers?.[n]?.trim() || `Speaker ${Number(n) + 1}`;
 const transcriptText = (call) => (call.transcript || []).map((t) => `${speakerName(call, t.speaker)}: ${t.text}`).join('\n\n');
 const APP_STATUS = { hired: 'Hired', rejected: 'Rejected', withdrawn: 'Withdrawn' };
@@ -512,11 +534,7 @@ export default function OracleCall() {
             {onThePhone ? <Badge tone="red">On the phone now</Badge> : <CallStatus status={call.status} source={call.source} />}
             <span>{madeBy(call)}{call.phone_display ? <span className="tabular"> · {call.direction === 'inbound' ? 'from' : 'to'} {call.phone_display}</span> : null} · {fmtDateTime(call.created_at)}{call.duration_ms ? ` · ${fmtLength(call.duration_ms)}` : ''}</span>
           </p>
-          {call.consent_at && (
-            <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-stone-500">
-              <Check className="size-3.5 text-brand-600" />{call.consent_by_name || call.created_by_name || 'The recruiter'} confirmed that everyone on the call agreed to be recorded.
-            </p>
-          )}
+          <ConsentLine call={call} />
         </div>
         {/* A recording that was cut off and never recovered can still be deleted; the one being made right now cannot. */}
         {data.can_delete && !beingRecordedHere && !onThePhone && <Button variant="danger" icon={Trash2} busy={removing} onClick={remove}>Delete call</Button>}

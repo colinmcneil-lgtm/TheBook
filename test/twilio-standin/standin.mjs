@@ -102,7 +102,9 @@ export async function startStandin(options = {}) {
   //   deleteFailures    how many attempts to delete a recording answer 500 first
   //   firstLegDigits  what the person rung by the REST API keys in at each <Gather>, instead of "1"
   //   absent          <Dial> recordings come to nothing: the callback says "absent" and there is no audio to fetch
-  const behaviour = { drop: [], twice: false, mono: false, monoReported: 1, downloadFailures: 0, deleteFailures: 0, firstLegDigits: null, absent: false };
+  //   keyMs           real milliseconds a person takes to key something in at a <Gather> (0 unless a screen is being watched)
+  //   talkMs          real milliseconds an answered call lasts, unless the app hangs it up sooner (0 likewise)
+  const behaviour = { drop: [], twice: false, mono: false, monoReported: 1, downloadFailures: 0, deleteFailures: 0, firstLegDigits: null, absent: false, keyMs: 0, talkMs: 0 };
   const realPause = (ms) => new Promise((r) => setTimeout(r, ms));
 
   const audio = { call2: callWav(SECONDS.talk, 2), call1: callWav(SECONDS.talk, 1), voicemail: voicemailWav(SECONDS.voicemailMessage) };
@@ -282,6 +284,8 @@ export async function startStandin(options = {}) {
     // What is keyed in: scripted for this call, or else a person presses 1 and a machine presses nothing.
     const digits = call.digits ? call.digits.shift() : call.machine ? undefined : '1';
     if (digits === undefined) { note(call, 'no key was pressed; <Gather> timed out and the next verb runs'); return null; }
+    for (let waited = 0; !call.hangupRequested && waited < behaviour.keyMs; waited += 20) await realPause(20);
+    if (call.hangupRequested) { note(call, `hung up by the REST API (Status=${call.hangupRequested}) before a key was pressed`); return false; }
     return (await fetchTwiml('gather-action', call, resolve(el.attrs.action || base, base), el.attrs.method, { Digits: String(digits) })) || false;
   }
   async function runDial(parent, el, base) {
@@ -362,7 +366,7 @@ export async function startStandin(options = {}) {
         await recordingCallback(rec, 'in-progress', recCb);
       }
       note(parent, `the two legs are joined; they talk for ${talk} seconds${outcome === 'voicemail' ? ' (the called side is a voicemail greeting)' : ''}`);
-      if (outcome === 'talks-on') for (let waited = 0; !parent.hangupRequested && waited < 4000; waited += 20) await realPause(20);
+      for (let waited = 0; !parent.hangupRequested && waited < (outcome === 'talks-on' ? 4000 : behaviour.talkMs); waited += 20) await realPause(20);
       tick(child, talk);
     }
     parent.clock = child.clock;

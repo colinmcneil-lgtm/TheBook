@@ -101,7 +101,7 @@ async function calendarDay(link, ymd, tz, force) {
   const warnings = [];
   try {
     const url = unseal(link.link_sealed, 'calendar-link');
-    if (!url) throw new FeedFetchError('sealed', 'Your saved calendar link can no longer be opened. Paste it in again under "Your calendar".');
+    if (!url) throw new FeedFetchError('sealed', 'Your saved calendar link can no longer be opened. Paste it in again in Settings, under "Your calendar".');
     const feed = await cache.get(link.user_id, url, { force });
     const read = await readDay({ version: feed.version, text: feed.text, zone: tz, ymd });
     if (feed.stale) {

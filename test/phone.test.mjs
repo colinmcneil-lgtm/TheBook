@@ -806,6 +806,37 @@ test('a call made from a calendar event carries the event\'s key into the Oracle
   assert.equal(db('SELECT event_key FROM calls WHERE id = ?', placed.call_id)[0].event_key, 'evt_2026-11-10.abc~1');
 });
 
+test('a phone call placed from an event in the day is shown on that event, and comes off it again if nobody is reached', async () => {
+  // One of The Book's own interviews, an hour from now: it is in Priya's day whether or not she has a calendar connected.
+  const soon = new Date(Date.now() + 3600000);
+  const tz = 'America/Toronto';
+  const dayOf = soon.toLocaleDateString('en-CA', { timeZone: tz });
+  for (const application_id of [appDana, appKevin]) {
+    assert.equal((await priya.post('/interviews', { application_id, title: 'Recruiter screen', kind: 'phone', starts_at: soon.toISOString(), duration_min: 30 })).status, 200);
+  }
+  const eventFor = async (name) => (await priya.get(`/calendar/day?date=${dayOf}&tz=${encodeURIComponent(tz)}`)).body.events.find((e) => e.source === 'interview' && e.match.name === name);
+  const dana = await eventFor('Dana Whitlock');
+  assert.equal(dana.call_id, null);
+
+  const { placed } = await callAndWait(priya, { application_id: appDana, event_key: dana.key });
+  assert.equal((await eventFor('Dana Whitlock')).call_id, placed.call_id, 'the event reports the call made for it');
+  await writtenOut(priya, placed.call_id);
+  assert.equal((await eventFor('Dana Whitlock')).call_id, placed.call_id);
+
+  // Kevin's phone is always busy: the call made for his event leaves nothing in the Oracle, and nothing on the event.
+  const kevin = await eventFor('Kevin Asante');
+  const { placed: tried, call } = await callAndWait(priya, { application_id: appKevin, event_key: kevin.key });
+  assert.equal(call.outcome, 'busy');
+  assert.equal((await priya.get(`/oracle/calls/${tried.call_id}`)).status, 404);
+  assert.equal((await eventFor('Kevin Asante')).call_id, null);
+
+  // Somebody else's key ties nothing: the call is still placed, and Priya's event is untouched.
+  assert.equal((await savePhone(sam, N.sam)).status, 200);
+  const { placed: other } = await callAndWait(sam, { application_id: appJonas, event_key: dana.key });
+  await writtenOut(sam, other.call_id);
+  assert.equal((await eventFor('Dana Whitlock')).call_id, placed.call_id);
+});
+
 test('a client user is refused on every phone route, a visitor is asked to sign in, and nothing about calls shows to a client', async () => {
   const { placed } = await callAndWait(priya, { application_id: appDana });
   await writtenOut(priya, placed.call_id);
