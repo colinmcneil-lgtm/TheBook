@@ -10,6 +10,7 @@ import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCall
 import { registerMetaview, conversationsWith, forgetConversations } from './metaview.js';
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
 import * as reporting from './reporting.js';
+import * as todos from './todos.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -504,6 +505,9 @@ registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, takeHit });
 // Reporting (the Individual and Clients reports, and the record of the moments they count) is a module of its own too.
 // The routes below tell it when one of those moments happens: each call to `reporting.` is one of them.
 reporting.registerReporting(api, { agencyOnly, adminOnly, bad, int, loadApp: (id, user) => loadApp(id, user) });
+// To do (each agency user's own list of jobs to work on and people to prep and debrief) is a module of its own as well.
+// The routes below tell it when an interview is scheduled, changed or cancelled: each call to `todos.` is one of those.
+todos.registerTodos(api, { agencyOnly, bad, clean, text, int });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);
@@ -545,6 +549,8 @@ api.get('/nav', (req, res) => {
       JOIN applications a ON a.id = i.application_id JOIN jobs j ON j.id = a.job_id
       WHERE p.user_id = ? AND i.status != 'cancelled' AND i.starts_at < ?
       AND NOT EXISTS (SELECT 1 FROM scorecards sc WHERE sc.interview_id = i.id AND sc.user_id = p.user_id) ${where}`, req.user.id, now(), ...p),
+    // What is still on this person's own to-do list, whichever client the workspace is showing. The agency's only.
+    ...(isAgency(req.user) ? { todo: todos.openCount(req.user.id) } : {}),
   });
 });
 
@@ -1245,6 +1251,7 @@ api.post('/applications/:id/move', (req, res) => {
 function cancelUpcomingInterviews(appId, userId) {
   const cancelled = q.run(`UPDATE interviews SET status = 'cancelled' WHERE application_id = ? AND status = 'scheduled' AND starts_at >= ?`, appId, now()).changes;
   if (cancelled) logActivity(appId, userId, 'interview', cancelled === 1 ? 'Cancelled the upcoming interview' : `Cancelled ${cancelled} upcoming interviews`);
+  todos.interviewChanged(appId);
 }
 
 api.post('/applications/:id/reject', async (req, res) => {
@@ -1550,6 +1557,7 @@ api.post('/interviews', async (req, res) => {
     setPanel(iid, a.client_id, Array.isArray(b.panel) ? b.panel.slice(0, 20) : []);
     logActivity(a.id, req.user.id, 'interview_booked', `Scheduled ${title}`); // its own type: a title can start with "Scheduled" too
     reporting.interviewScheduled(a.id);
+    todos.interviewChanged(a.id);
     return iid;
   });
   if (b.notify && a.candidate_email) await sendTemplate('interview_invite', {
@@ -1577,6 +1585,7 @@ api.patch('/interviews/:id', (req, res) => {
       if (starts.toISOString() !== i.starts_at) logActivity(i.application_id, req.user.id, 'interview', `Rescheduled ${title}`);
     }
     if (Array.isArray(b.panel)) setPanel(i.id, i.client_id, b.panel.slice(0, 20));
+    todos.interviewChanged(i.application_id);
   });
   res.json({ ok: true });
 });
@@ -1610,6 +1619,7 @@ api.post('/interviews/:id/scorecard', (req, res) => {
     q.run('INSERT OR IGNORE INTO interview_panel (interview_id, user_id) VALUES (?, ?)', i.id, req.user.id);
     if (i.status === 'scheduled') q.run(`UPDATE interviews SET status = 'completed' WHERE id = ?`, i.id);
     logActivity(i.application_id, req.user.id, 'scorecard', `Submitted a scorecard for ${i.title}: ${label}`);
+    todos.interviewChanged(i.application_id); // a scorecard marks the interview completed
   });
   res.json({ ok: true });
 });

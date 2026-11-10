@@ -527,6 +527,45 @@ CREATE INDEX IF NOT EXISTS idx_report_events_job ON report_events(job_id);
 CREATE INDEX IF NOT EXISTS idx_report_events_client ON report_events(client_id);`);
 // ---------- end of reporting ----------
 
+// ---------- to do ----------
+// Each agency user's own to-do list (see todos.js): the jobs they have picked to work on, and the people to prep
+// before an interview and to debrief after one. Everything here is new: no existing row is rewritten.
+db.exec(`
+-- One row for each thing on somebody's list. A job to work on names the job; a person to prep or debrief names the
+-- candidate in a job (the application) and, when The Book knows one, the interview it is about. Deleting the job,
+-- the candidate or the person whose list it is removes their rows; merging two candidate records keeps them,
+-- because the application they hang from is kept.
+CREATE TABLE IF NOT EXISTS todos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused, so an old tab cannot tick somebody else's newer item
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,          -- whose list it is on; nobody else sees it
+  kind TEXT NOT NULL,                                -- job | prep | debrief
+  job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,                     -- for a job to work on
+  application_id INTEGER REFERENCES applications(id) ON DELETE CASCADE,     -- for a person to prep or debrief
+  interview_id INTEGER REFERENCES interviews(id) ON DELETE SET NULL,        -- the interview it is about, when there is one in The Book
+  note TEXT,
+  position INTEGER NOT NULL DEFAULT 0,               -- where it sits among what is still to do on that list, from 0
+  auto INTEGER NOT NULL DEFAULT 0,                   -- 1 = The Book added it by itself, for that interview
+  created_at TEXT NOT NULL,
+  done_at TEXT,                                      -- when it was ticked; done items are shown for seven days and then only kept
+  auto_done INTEGER NOT NULL DEFAULT 0,              -- 1 = The Book ticked it itself, because the interview's end had passed
+  -- When it was taken off the list. The row is kept: taken off by the person, so that The Book does not put the same
+  -- person back for the same interview; taken off by The Book (set_aside), so that the note on it is still there if
+  -- the same interview brings it back.
+  removed_at TEXT,
+  set_aside INTEGER NOT NULL DEFAULT 0               -- 1 = The Book took it off by itself: the interview was moved over a week away or cancelled, or the candidate changed hands
+);
+CREATE INDEX IF NOT EXISTS idx_todos_list ON todos(user_id, kind);
+CREATE INDEX IF NOT EXISTS idx_todos_job ON todos(job_id);
+CREATE INDEX IF NOT EXISTS idx_todos_application ON todos(application_id);
+CREATE INDEX IF NOT EXISTS idx_todos_interview ON todos(interview_id);
+-- A job, or a person to prep or to debrief, is on one person's list once at a time (a person can be on both the
+-- prep and the debrief list). Items that are done or removed do not count.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_job_once ON todos(user_id, job_id) WHERE kind = 'job' AND done_at IS NULL AND removed_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_person_once ON todos(user_id, kind, application_id) WHERE kind != 'job' AND done_at IS NULL AND removed_at IS NULL;`);
+// A to-do table made before items could be set aside gets the column; its rows are left as they are.
+addColumn('todos', 'set_aside', 'INTEGER NOT NULL DEFAULT 0');
+// ---------- end of to do ----------
+
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
   get: (sql, ...p) => db.prepare(sql).get(...p),
