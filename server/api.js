@@ -8,6 +8,7 @@ import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.j
 import { registerAutofill } from './autofill.js';
 import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCalls, forgetSavedNote } from './oracle.js';
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
+import { registerCalendar } from './calendar.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -465,6 +466,8 @@ const adminOnly = (req, res, next) => (req.user.role === 'admin' ? next() : res.
 registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, briefFields: (b) => briefFields(b) });
 // The Oracle (recording calls with candidates, transcripts, notes and submission drafts) lives in its own module too.
 registerOracle(api, { agencyOnly, bad, clean, int, takeHit, logActivity, loadApp: (id, user) => loadApp(id, user) });
+// Your calendar in The Oracle (a saved calendar link, the day's events and who they are with) is a module of its own as well.
+registerCalendar(api, { agencyOnly, bad, takeHit, loadApp: (id, user) => loadApp(id, user) });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);

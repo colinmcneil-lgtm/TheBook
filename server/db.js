@@ -343,6 +343,72 @@ CREATE INDEX IF NOT EXISTS idx_calls_candidate ON calls(candidate_id);
 CREATE INDEX IF NOT EXISTS idx_calls_application ON calls(application_id);
 CREATE INDEX IF NOT EXISTS idx_calls_created_by ON calls(created_by);`);
 
+// ---------- your calendar in The Oracle ----------
+// Kept together and after everything above: the tables below point at users, applications and calls, and the indexes
+// and triggers on candidates have to be made again whenever that table has been rebuilt by a migration.
+/**
+ * A candidate's phone number with the usual punctuation taken out, cut to its last ten characters. A number found in
+ * a calendar event is looked up by this, using the index on the same expression, so the look-up does not read every
+ * candidate. Numbers are stored as they were typed, which is why the tidying happens here.
+ */
+export const PHONE_TAIL = `substr(replace(replace(replace(replace(replace(replace(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), '+', ''), -10)`;
+db.exec(`
+-- The private calendar link each agency user may save. The link is a password to that person's whole calendar, so
+-- it is stored sealed (see secret.js), never returned by any route and never written to a log.
+CREATE TABLE IF NOT EXISTS calendar_links (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,                            -- google | outlook | icloud | other, going by the link's host
+  link_sealed TEXT NOT NULL,
+  tz TEXT,                                           -- the time zone the person last looked at their day in
+  created_at TEXT NOT NULL,
+  last_read_at TEXT,                                 -- when the calendar was last read successfully
+  last_error TEXT                                    -- why the last read failed, in plain English; null when it worked
+);
+
+-- What a person has done with the events of their day: marked one to be recorded ("+ Add"), chosen the candidate it
+-- is with, recorded a call for it. One row per event a person has been shown, so that an event can be found again
+-- from its key alone. Nothing from the calendar itself is kept here: no titles, guests or times, only the key (a
+-- keyed hash that is different for every person) and a fingerprint of the title and start time.
+CREATE TABLE IF NOT EXISTS calendar_events (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event_key TEXT NOT NULL,
+  source TEXT NOT NULL,                              -- calendar | interview
+  day TEXT NOT NULL, tz TEXT NOT NULL,               -- the day (YYYY-MM-DD, in that time zone) it was last seen on
+  fingerprint TEXT,                                  -- finds a marked event again when the calendar gives it a new identity
+  added INTEGER NOT NULL DEFAULT 0,                  -- 1 = marked to be recorded
+  application_id INTEGER REFERENCES applications(id) ON DELETE SET NULL, -- the candidate the person chose themselves
+  call_id INTEGER REFERENCES calls(id) ON DELETE SET NULL,               -- the call recorded for this event
+  seen_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, event_key)
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_print ON calendar_events(user_id, fingerprint);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_seen ON calendar_events(seen_at);
+
+-- The first and last word of each candidate's name with accents and capitals removed ("kevin" and "tremblay" for
+-- "Kévin Tremblay"), so the candidates an event's title might be naming are found through an index however many
+-- candidates are on file. SQLite cannot remove accents by itself, so the words are worked out by the server
+-- (calendar.js): the two triggers note which candidates are new or renamed, and the server catches up on those
+-- before it matches anything.
+CREATE TABLE IF NOT EXISTS candidate_name_keys (
+  candidate_id INTEGER PRIMARY KEY REFERENCES candidates(id) ON DELETE CASCADE,
+  first TEXT NOT NULL,
+  last TEXT NOT NULL                                 -- empty for a name of one word
+);
+CREATE INDEX IF NOT EXISTS idx_candidate_name_keys_words ON candidate_name_keys(first, last);
+CREATE TABLE IF NOT EXISTS candidate_name_dirty (candidate_id INTEGER PRIMARY KEY);
+CREATE TRIGGER IF NOT EXISTS candidate_name_added AFTER INSERT ON candidates
+  BEGIN INSERT OR IGNORE INTO candidate_name_dirty (candidate_id) VALUES (NEW.id); END;
+CREATE TRIGGER IF NOT EXISTS candidate_name_changed AFTER UPDATE OF name ON candidates
+  BEGIN INSERT OR IGNORE INTO candidate_name_dirty (candidate_id) VALUES (NEW.id); END;
+INSERT OR IGNORE INTO candidate_name_dirty (candidate_id)
+  SELECT id FROM candidates WHERE id NOT IN (SELECT candidate_id FROM candidate_name_keys);
+
+-- Guests' e-mail addresses and phone numbers in events are looked up through these.
+CREATE INDEX IF NOT EXISTS idx_candidates_email_lower ON candidates(lower(email));
+CREATE INDEX IF NOT EXISTS idx_candidates_phone_tail ON candidates(${PHONE_TAIL}) WHERE phone IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_interviews_starts ON interviews(starts_at);`);
+// ---------- end of the calendar's part ----------
+
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
   get: (sql, ...p) => db.prepare(sql).get(...p),

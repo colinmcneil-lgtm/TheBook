@@ -30,6 +30,7 @@ import { z } from 'zod';
 import { q, now, tx, getSetting, DATA_DIR, UPLOAD_DIR } from './db.js';
 import { aiConfigured } from './autofill.js';
 import { measureWebm, webmWithDuration } from './webm.js';
+import { tieCallToEvent } from './calendar.js';
 
 // ---------- limits ----------
 const MB = 1024 * 1024;
@@ -992,6 +993,9 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
        VALUES (?, ?, 'recording', 'recorded', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       recordingId, clean(b.title, 160) || (app ? `Call with ${app.candidate_name}` : UNTITLED), clean(b.mimeType, 100),
       app?.id ?? null, app?.candidate_id ?? null, req.user.id, t, wording, req.user.id, t, t);
+    // Started from an event in the recruiter's day: the event then shows that its call was recorded. A key that is
+    // not one of this person's events is ignored; it never stops a recording.
+    if (b.event_key != null) tieCallToEvent(req.user.id, b.event_key, callId);
     res.status(201).json({ id: recordingId, call_id: callId });
   });
 
