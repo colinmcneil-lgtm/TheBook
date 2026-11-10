@@ -162,6 +162,16 @@ candidate in the app, and put on a job later when the right role comes up.
   Hired they are a placement. When they go back to The Book (removed from the job, or the job deleted), what was
   counted for them in that job goes, as it does when anyone else is removed from a job; on their next job they
   are counted afresh, for that job.
+- **To do.** Somebody on no job has no interview to be prepared for or debriefed after, so they are never offered
+  beside the two people lists (not by the search either), and putting them on one is refused ("Add them to a job
+  first"). Put on a job, they are on those lists like anyone in that job: an interview scheduled for them puts them
+  on the To prep list of the recruiter who owns their entry, or failing one of whoever put them on the job. When
+  they go back to The Book (removed from the job, or the job deleted), they come off everybody's To prep and To
+  debrief lists for that job, ticked items included, and the count in the menu follows; what was typed at a debrief
+  stays on their profile as the agency-only note it was saved as. An invitation sent to them, or sent again when
+  an interview is edited, is an e-mail like any other sent after they joined the job: the job's hiring team can
+  read it and the line in the history that says what was changed, and both become the agency's own, with the rest,
+  if they later go on another job.
 
 The first start after this was added changes the database in place: three columns stop being required, one empty
 column is added to applications, three empty tables are added (earlier résumés, and the history lines and e-mails
@@ -169,14 +179,19 @@ only the agency reads), and nothing else about existing people or applications c
 lines and e-mails that are there already are not touched. The two tables that are rebuilt for this keep
 every index and trigger they had, including ones an earlier version made and this one no longer makes.
 `test/pool-upgrade.test.mjs` builds a database with the code from before, fills it, upgrades it and compares every
-row, id, counter, index, trigger and foreign key. "Before" is three releases, each kept word for word under
+row, id, counter, index, trigger and foreign key. "Before" is four releases, each kept word for word under
 `test/fixtures/`: the one this was first built on (`before-pool/`, commit 5f16829), the one after it
-(`before-pool-3f7b1a4/`), and the newest one without this change (`before-pool-6f279a9/`: Metaview and the reports
-in, phone calls and the calendar out), whose database is one the release before it made and that it then opened
-and used, with Metaview conversations and recorded report moments hanging off the two rebuilt tables. What a
+(`before-pool-3f7b1a4/`), the one with Metaview and the reports in and phone calls and the calendar out
+(`before-pool-6f279a9/`), whose database is one the release before it made and that it then opened and used, with
+Metaview conversations and recorded report moments hanging off the two rebuilt tables, and the newest one without
+this change (`before-pool-d1b664a/`: the To do page and interview editing), whose database is that one again with
+people's to-do lists hanging off the rebuilt applications table. What a
 database must end up as is not written out by hand: a copy is opened by the newest release without this change,
-and this change's own differences are applied to what that leaves, so a database last opened by any of the three
-gets the releases it missed and this change in one start, and ends up the same whichever way it came. Every test
+and this change's own differences are applied to what that leaves, so a database last opened by any of the four
+gets the releases it missed and this change in one start, and ends up the same whichever way it came. What that
+start adds is also listed by name and checked against the list: from the newest release, this change's own three
+tables, five indexes and one column and nothing else; from an older one, those and what the releases in between
+added (the To do table and its six indexes; before that the reports' and Metaview's). Every test
 is also run on a database whose tables began at the first release, and a database made by the first release's own
 code (`first-release/`) that nothing since has opened is upgraded too. The start is also cut off before each of
 its steps in turn: every time nothing is lost or renumbered, no index or trigger is missing, and the next start
@@ -220,10 +235,9 @@ through it again.) All of this was run on made-up databases, not on a copy of a 
   - If you must go back for longer than it takes to fix a start, the safe order is: on this version, remove the
     people who came from The Book from their jobs (they return to The Book, which the old version shows to
     nobody), then roll back.
-`test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview, on four ports counted from
-`POOL_TEST_PORT` (it, the next, and the fifth and sixth; the fifteenth, sixteenth, nineteenth and twentieth from
-`ORACLE_TEST_PORT` unless set; `test/oracle-helpers.mjs` lists
-which test file uses which port). `npm test` uses thirty ports in a row from `ORACLE_TEST_PORT` (3610 unless
+`test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview, on four ports: the fifteenth,
+sixteenth, eleventh and twelfth from `ORACLE_TEST_PORT`, or four in a row from `POOL_TEST_PORT` when that is set
+(`test/oracle-helpers.mjs` lists which test file uses which port, and a unit test checks that no two share one). `npm test` uses thirty ports in a row from `ORACLE_TEST_PORT` (3610 unless
 set): `ORACLE_TEST_PORT=5080 npm test`. Node refuses to fetch from a few ports whatever is listening on them
 (5060 and 5061 among them), so a base that puts one of the thirty on such a port, any base from 5031 to 5061 for
 one, is refused before a test runs, with a sentence that says which base to choose instead.
@@ -934,7 +948,10 @@ they made at that client, their résumé files, and their recorded calls with th
   on the job form were driven in Chrome at 1280 and 390 wide on the demo data, and printed to PDF.
   To do is tested through a story acted out against the real server with the to-do clock set by the test (adding,
   ordering, ticking, the pickers, an interview scheduled, moved, cancelled and passed, the debrief note, one person
-  against another's list, a client user, deletion and merging, and starting on a database from before it); the page
+  against another's list, a client user, deletion and merging, and starting on a database from before it); where
+  it meets people saved without a job (never on a list while on no job, on their owner's list once on a job with an
+  interview, off every list when they go back to The Book, entries joined or folded, deleting) is in
+  `test/pool.test.mjs` against the real server, with an edited interview's invitation and history line; the page
   was driven in Chrome on the demo data at 1280 wide with a mouse and at 390 wide with touch input, and with the
   keyboard alone at both widths. It has not been tried on a real phone, or in Safari or Firefox.
   The other screens were verified by hand.

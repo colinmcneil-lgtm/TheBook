@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { measureWebm, webmWithDuration } from '../server/webm.js';
-import { RECORDING, CANNED, tempDir, pieces, portsProblem } from './oracle-helpers.mjs';
+import { RECORDING, CANNED, tempDir, pieces, portsProblem, PORTS, PORT_PLAN, PORT_COUNT } from './oracle-helpers.mjs';
 
 // The module opens the database when it loads, so it is pointed at a folder of its own first.
 process.env.DATA_DIR = tempDir('oracle-units');
@@ -206,4 +206,27 @@ test('a base for the tests\' ports that puts one of the thirty on a port Node wi
   assert.match(portsProblem(3640), /port 3659/);
   assert.match(portsProblem(5999), /port 6000/);
   for (const base of [80, 65530, 3610.5, NaN]) assert.match(portsProblem(base), /must be a whole number from 1024 to 65506/, String(base));
+});
+
+test('no two groups of tests are given the same port, so the files can run at the same time', () => {
+  // The test files run side by side. The to-do tests and the tests of people saved without a job were once both
+  // given the nineteenth and twentieth port, and whichever started second could not listen.
+  const taken = new Map();
+  for (const [group, [from, count]] of Object.entries(PORT_PLAN)) {
+    assert.ok(Number.isInteger(from) && Number.isInteger(count) && from >= 0 && count > 0 && from + count <= PORT_COUNT, `${group} is inside the thirty`);
+    for (let offset = from; offset < from + count; offset++) {
+      assert.equal(taken.get(offset), undefined, `port +${offset} is given to ${taken.get(offset)} and to ${group}`);
+      taken.set(offset, group);
+    }
+  }
+  // And the ports the files are handed are the plan's: each name starts its own group, or sits inside one.
+  const base = PORTS.main;
+  assert.deepEqual([PORTS.pool - base, PORTS.poolMail - base, PORTS.todos - base, PORTS.reporting - base, PORTS.workspace - base, PORTS.metaview - base],
+    ['pool', 'poolMail', 'todos', 'reporting', 'workspace', 'metaview'].map((group) => PORT_PLAN[group][0]));
+  for (const [name, port] of Object.entries(PORTS)) assert.ok(taken.has(port - base), `${name} is a port of the plan`);
+  // The four the tests of people saved without a job use, and the two the to-do tests use, share none.
+  const pool = [PORTS.pool, PORTS.pool + 1, PORTS.poolMail, PORTS.poolMail + 1], todos = [PORTS.todos, PORTS.todos + 1];
+  assert.equal(new Set([...pool, ...todos]).size, 6);
+  for (const port of pool) assert.match(taken.get(port - base), /^pool/);
+  for (const port of todos) assert.equal(taken.get(port - base), 'todos');
 });

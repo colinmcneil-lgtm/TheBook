@@ -350,8 +350,11 @@ export function registerTodos(api, { agencyOnly, bad, clean, text, int }) {
         if (onList(req.user.id, 'job', 'job_id', job.id)) bad(`${job.title} is already on your list.`, 409);
         about = { jobId: job.id };
       } else {
-        const app = q.get('SELECT a.id, c.name FROM applications a JOIN candidates c ON c.id = a.candidate_id WHERE a.id = ?', int(b.application_id));
+        const app = q.get('SELECT a.id, a.job_id, c.name FROM applications a JOIN candidates c ON c.id = a.candidate_id WHERE a.id = ?', int(b.application_id));
         if (!app) bad('That candidate is no longer in The Book.', 404);
+        // Somebody in The Book without a job has no interview to be prepared for or debriefed after, and a list could
+        // not show them: every row says which job it is about. Counted in the menu and shown nowhere is what they would be.
+        if (app.job_id == null) bad('Add them to a job first.');
         if (onList(req.user.id, b.kind, 'application_id', app.id)) bad(`${app.name} is already on this list.`, 409);
         // Tied to the interview it is about when there is one, so that it follows that interview like the rest.
         const all = interviewsOf(app.id, clock().getTime());

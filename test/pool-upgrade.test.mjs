@@ -9,20 +9,32 @@
 // it, and compare everything: every row of every table, every id, the counters that stop a deleted row's id being
 // used again, every index, trigger and foreign key.
 //
-// "Before" is three releases, each kept word for word, and every test is run on a database last opened by each:
+// "Before" is four releases, each kept word for word, and every test is run on a database last opened by each:
 //   test/fixtures/before-pool/          the release this change was first built on (5f16829);
 //   test/fixtures/before-pool-3f7b1a4/  the release after it (3f7b1a4). It gives older history lines newer types
 //                                       once, and adds an index to the activity feed;
-//   test/fixtures/before-pool-6f279a9/  the newest release without this change (6f279a9): Metaview and the reports
-//                                       are in, phone calls and the calendar are out. Its database is one the
-//                                       release before it made and filled, which it then opened and used, because
-//                                       that is how a database that has been in use reaches it.
+//   test/fixtures/before-pool-6f279a9/  the release after that (6f279a9): Metaview and the reports are in, phone
+//                                       calls and the calendar are out. Its database is one the release before it
+//                                       made and filled, which it then opened and used, because that is how a
+//                                       database that has been in use reaches it;
+//   test/fixtures/before-pool-d1b664a/  the newest release without this change (d1b664a), the one that is live:
+//                                       the To do page is in (a table of its own and six indexes; interviews can
+//                                       be edited and a job has a search location, neither of which changes the
+//                                       database). Its database is the one above, which it then opened and used.
 // The first release's database code is kept as well (test/fixtures/first-release/), for the tests at the end.
 // Today's code is all of those releases and this change, so a database last opened by an older release gets the
 // newer releases' changes and this change's in one start. What it must end up as is worked out from the code
 // itself, not written out by hand: a copy of the database is opened by the newest release without this change,
 // and this change's own differences (listed in expectedAfter) are applied to what that leaves. Every index and
 // trigger an earlier release made is in that comparison too, including the ones today's code no longer makes.
+// What the first start adds is also written out by name, release by release (ADDED_SINCE below), and checked
+// against that: for a database from the live release it is this change's own tables, indexes and column and
+// nothing else; for an older one it is those and what the releases in between added.
+//
+// These tests start the database code alone (test/pool-open.mjs). The rest of the server writes two settings
+// when it first runs on a workspace: when the reports first ran, and when To do did. They are in the data here as
+// rows the release that wrote them left behind, which the upgrade must leave as they are; and one test further
+// down starts the whole server on each release's database, to hold its first start to exactly those two rows.
 //
 // What they cannot show: the owner's own database. Its tables may carry the marks of every release since the first;
 // one test builds a database that began at the first release for that reason, but it is still a made-up database.
@@ -39,14 +51,16 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const NOW = path.join(ROOT, 'server', 'db.js');
 // The releases a database may have been made or last opened by, each with the commit its two files were copied from.
-// `reviewed` says whether that release already gave history lines their newer types and added the feed's index.
-// `live` marks the newest release without this change: what a database is compared against.
+// `reviewed` says whether that release already gave history lines their newer types and added the feed's index;
+// `reports` whether it has Metaview and the reports (and no longer phone calls and the calendar); `todos` whether it
+// has the To do page. `live` marks the newest release without this change: what a database is compared against.
 const BEFORES = [
-  { name: 'the release before the review fixes (5f16829)', folder: 'before-pool', commit: '5f168294b6e98be5423fd4fa15c720ac577423a9', reviewed: false },
-  { name: 'the release with the review fixes (3f7b1a4)', folder: 'before-pool-3f7b1a4', commit: '3f7b1a45f5015b9b0fa3d5bf7cfd84d3d215c392', reviewed: true },
-  { name: 'the release with Metaview and the reports (6f279a9)', folder: 'before-pool-6f279a9', commit: '6f279a95dbabb74de036601e48de524c8a6efcda', reviewed: true, live: true },
+  { name: 'the release before the review fixes (5f16829)', folder: 'before-pool', commit: '5f168294b6e98be5423fd4fa15c720ac577423a9', reviewed: false, reports: false, todos: false },
+  { name: 'the release with the review fixes (3f7b1a4)', folder: 'before-pool-3f7b1a4', commit: '3f7b1a45f5015b9b0fa3d5bf7cfd84d3d215c392', reviewed: true, reports: false, todos: false },
+  { name: 'the release with Metaview and the reports (6f279a9)', folder: 'before-pool-6f279a9', commit: '6f279a95dbabb74de036601e48de524c8a6efcda', reviewed: true, reports: true, todos: false },
+  { name: 'the live release, with To do and interview editing (d1b664a)', folder: 'before-pool-d1b664a', commit: 'd1b664a20c4d1c87e3f135c834027ab35f99633d', reviewed: true, reports: true, todos: true, live: true },
 ].map((b) => ({ ...b, code: path.join(HERE, 'fixtures', b.folder, 'db.js') }));
-const [OLDER, NEWER, LIVE] = BEFORES;
+const [OLDER, NEWER, REPORTS, LIVE] = BEFORES;
 
 const dirs = [];
 after(() => { for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true }); });
@@ -117,8 +131,12 @@ function definedToday(name) {
  * itself is not touched. For a database that release has already opened, that is the database as it stands.
  */
 function openedByLive(dataDir) {
-  const copy = copyOf(dataDir, 'pool-by-live');
-  start(LIVE.code, copy);
+  return openedBy(LIVE, dataDir);
+}
+/** What one of the releases from before leaves when it opens this database, tried on a copy. */
+function openedBy(release, dataDir) {
+  const copy = copyOf(dataDir, 'pool-opened-by');
+  start(release.code, copy);
   return snapshot(copy);
 }
 
@@ -130,7 +148,7 @@ function openedByLive(dataDir) {
  */
 function expectedAfter(before) {
   const want = plain(before);
-  assert.ok(want.master.some((m) => m.name === 'report_events'), 'expectedAfter is given a database as the newest release without this change leaves it');
+  assert.ok(want.master.some((m) => m.name === 'report_events') && want.master.some((m) => m.name === 'todos'), 'expectedAfter is given a database as the newest release without this change leaves it');
   // Three new tables, each made as it is in a database made new today, and empty: résumés that a newer one took the
   // place of, and the history lines and e-mails that are the agency's alone. Each hangs from an application and goes
   // when the application does.
@@ -164,6 +182,48 @@ function expectedAfter(before) {
     { type: 'index', name: 'idx_candidates_general_email', tbl_name: 'candidates', sql: 'CREATE UNIQUE INDEX idx_candidates_general_email ON candidates(email) WHERE client_id IS NULL' });
   want.master.sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name));
   return want;
+}
+/**
+ * What the first start of each release adds to a database the release before it left, by name: tables, indexes and
+ * triggers, and the columns added to tables that were there already. `pool` is this change. None of them puts a row
+ * in a table it makes, and none removes or renames anything.
+ */
+const ADDED_SINCE = {
+  reviewed: { made: ['index idx_activities_recent'], columns: {} },
+  reports: {
+    made: ['index idx_candidate_phone_keys_candidate', 'index idx_candidate_phone_keys_tail', 'index idx_metaview_calls_call', 'index idx_metaview_calls_owed', 'index idx_metaview_calls_started',
+      'index idx_metaview_people_call', 'index idx_metaview_people_value', 'index idx_report_events_at', 'index idx_report_events_client', 'index idx_report_events_job', 'index idx_report_events_once',
+      'index idx_report_events_search', 'table candidate_phone_keys', 'table metaview_calls', 'table metaview_forgotten', 'table metaview_people', 'table report_events', 'trigger candidate_phone_changed'],
+    columns: { calls: ['external_url', 'took_place_at'], offers: ['accepted_at'], stages: ['with_client'] },
+  },
+  todos: {
+    made: ['index idx_todos_application', 'index idx_todos_interview', 'index idx_todos_job', 'index idx_todos_job_once', 'index idx_todos_list', 'index idx_todos_person_once', 'table todos'],
+    columns: {},
+  },
+  pool: {
+    made: ['index idx_agency_activities_app', 'index idx_agency_emails_app', 'index idx_apps_general', 'index idx_candidates_general_email', 'index idx_earlier_resumes_app',
+      'table agency_activities', 'table agency_emails', 'table earlier_resumes'],
+    columns: { applications: ['general_until'] },
+  },
+};
+/** The parts of ADDED_SINCE that a database last opened by this release has still to get: always this change, and what the releases after its own added. */
+const stillToGet = (release) => [...['reviewed', 'reports', 'todos'].filter((part) => !release[part]), 'pool'].map((part) => ADDED_SINCE[part]);
+/**
+ * The first start added exactly what the list above says for this release, and nothing else: no other table, index
+ * or trigger was made, none that was there is gone, no other column was added to a table from before or taken from
+ * one, and every table that was made is empty.
+ */
+function assertAddedOnly(before, upgraded, release, what) {
+  const names = (shot) => shot.master.map((m) => `${m.type} ${m.name}`);
+  const parts = stillToGet(release);
+  assert.deepEqual(names(upgraded).filter((name) => !names(before).includes(name)), parts.flatMap((part) => part.made).sort(), `${what}: the tables, indexes and triggers the first start made`);
+  assert.deepEqual(names(before).filter((name) => !names(upgraded).includes(name)), [], `${what}: nothing that was there is gone`);
+  for (const table of Object.keys(before.columns)) {
+    const had = before.columns[table].map((c) => c.name), has = upgraded.columns[table].map((c) => c.name);
+    assert.deepEqual(has.filter((name) => !had.includes(name)), parts.flatMap((part) => part.columns[table] ?? []), `${what}: the columns the first start added to ${table}`);
+    assert.deepEqual(had.filter((name) => !has.includes(name)), [], `${what}: no column of ${table} is gone`);
+  }
+  for (const table of Object.keys(upgraded.rows)) if (!before.rows[table]) assert.deepEqual(upgraded.rows[table], [], `${what}: the new table ${table} is empty`);
 }
 /** The rows of a table that were not there before, going by their ids. */
 const appeared = (rows, before) => rows.filter((row) => !before.some((old) => old['(rowid)'] === row['(rowid)']));
@@ -359,13 +419,13 @@ function fill(dataDir) {
 }
 
 /**
- * What using the newest release without this change adds to a database from before: the names and numbers worked
+ * What using the release with Metaview and the reports adds to a database from before: the names and numbers worked
  * out for looking people up, conversations remembered from Metaview (one brought in as a call, one only listed, one
  * forgotten with the person it was with), and the moments the reports count, with one removed again so that its
  * counter is ahead of its rows. Every one of these hangs off a candidate or an application, the two tables this
  * change rebuilds.
  */
-function fillLive(dataDir) {
+function fillReports(dataDir) {
   const db = open(dataDir);
   const run = (sql, ...p) => db.prepare(sql).run(...p);
   db.exec('BEGIN');
@@ -404,21 +464,62 @@ function fillLive(dataDir) {
 }
 
 /**
+ * What using the live release adds to that: the two settings To do keeps (when it first ran on the workspace, and
+ * when the lists were last brought up to date), and people's to-do lists. A job on two people's lists, one of them
+ * ticked; somebody to prep whom The Book added for an interview that is coming up, with a note; the debrief of an
+ * interview that was held, ticked; somebody added by hand with no interview; an item The Book set aside when its
+ * interview was cancelled, on the list of somebody who has since left; one its owner took off; a prep The Book
+ * ticked itself; a job that has closed; and rows removed again from the middle and the end, so that the counter is
+ * ahead of the rows. Every person's item hangs off an application, one of the two tables this change rebuilds, and
+ * goes when the application does; the upgrade must not take that for the application going.
+ */
+function fillTodos(dataDir) {
+  const db = open(dataDir);
+  const run = (sql, ...p) => db.prepare(sql).run(...p);
+  db.exec('BEGIN');
+  run(`INSERT INTO settings (key, value) VALUES ('todos_since', ?), ('todos_seen', ?)`, at('11-03', '09:12:44'), at('11-09', '16:05:10'));
+  const todo = (userId, kind, about, extra = {}) => run(
+    `INSERT INTO todos (user_id, kind, job_id, application_id, interview_id, note, position, auto, created_at, done_at, auto_done, removed_at, set_aside) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    userId, kind, kind === 'job' ? about : null, kind === 'job' ? null : about, extra.interview ?? null, extra.note ?? null, extra.position ?? 0, extra.auto ?? 0, at('11-04'),
+    extra.done ?? null, extra.autoDone ?? 0, extra.removed ?? null, extra.aside ?? 0);
+  todo(2, 'job', 1, { note: 'find 5 more by Friday' });                                             // 1
+  todo(2, 'job', 3, { position: 1 });                                                               // 2
+  todo(2, 'job', 2, { position: 2, note: 'To be removed (middle of the table)' });                  // 3: removed below
+  todo(1, 'job', 1, { done: at('11-06') });                                                         // 4: the same job, on another person's list, ticked
+  todo(2, 'prep', 1, { interview: 2, auto: 1, note: 'Send him the brief' });                        // 5: added by The Book for the interview still to come
+  todo(2, 'debrief', 1, { interview: 1, auto: 1, done: at('11-05') });                              // 6
+  todo(2, 'prep', 4, { position: 1, note: "Ask about the e-mail address; it's still missing" });    // 7: added by hand, with no interview
+  todo(3, 'debrief', 3, { interview: 3, auto: 1, removed: at('11-05'), aside: 1 });                 // 8: set aside by The Book, on the list of somebody who has left
+  todo(1, 'prep', 7, { removed: at('11-07') });                                                     // 9: taken off by its owner
+  todo(1, 'prep', 8, { auto: 1, done: at('11-08'), autoDone: 1 });                                  // 10: ticked by The Book; its interview is gone
+  todo(2, 'job', 4, { position: 2 });                                                               // 11: a job that has closed
+  todo(1, 'debrief', 6, { note: 'To be removed (end of the table)' });                              // 12: removed below
+  run('DELETE FROM todos WHERE id IN (3, 12)');
+  db.exec('COMMIT');
+  db.close();
+}
+
+/**
  * A database last opened by one of the releases from before, with the awkward data in it. `first` is run on the
- * empty folder before any release's code starts. The newest release without this change has no way to hold some of
- * that data any more (phone calls, the calendar), so its database is made and filled by the release before it, then
- * opened and used by it.
+ * empty folder before any release's code starts. The releases with the reports have no way to hold some of that
+ * data any more (phone calls, the calendar), so their database is made and filled by the release before them, then
+ * opened and used by the first of them; and the live release's is that database again, opened and used by it.
  */
 function databaseFromBefore(release, name, first = () => {}) {
   const dataDir = newDir(name);
   first(dataDir);
-  const maker = release.live ? NEWER : release;
+  const maker = release.reports ? NEWER : release;
   start(maker.code, dataDir);
   fill(dataDir);
   start(maker.code, dataDir); // an ordinary restart on the old code, so the snapshot is of a database at rest
-  if (release.live) {
+  if (release.reports) {
+    start(REPORTS.code, dataDir);
+    fillReports(dataDir);
+    start(REPORTS.code, dataDir);
+  }
+  if (release.todos) {
     start(release.code, dataDir);
-    fillLive(dataDir);
+    fillTodos(dataDir);
     start(release.code, dataDir);
   }
   return dataDir;
@@ -430,7 +531,8 @@ function copyOf(dataDir, name) {
   return copy;
 }
 /** The highest id each table has given out in the awkward data, for a database last opened by this release. */
-const COUNTERS = (release) => ({ applications: 10, calls: release.live ? 7 : 6, candidates: 9, interviews: 5, invites: 2, notes: 6, phone_calls: 4, ...(release.live ? { report_events: 6 } : {}), users: 6 });
+const COUNTERS = (release) => ({ applications: 10, calls: release.reports ? 7 : 6, candidates: 9, interviews: 5, invites: 2, notes: 6, phone_calls: 4, ...(release.reports ? { report_events: 6 } : {}),
+  ...(release.todos ? { todos: 12 } : {}), users: 6 });
 /** Run a test once for each release a database may have been made by. */
 const forEachBefore = (name, fn) => { for (const release of BEFORES) test(`${name} [a database last opened by ${release.name}]`, (t) => fn(release, t)); };
 
@@ -458,23 +560,38 @@ forEachBefore('upgrading changes nothing but the three columns, the new column, 
   assert.deepEqual(before.rows.notes.map((n) => n.id), [1, 2, 3, 5]);
   assert.deepEqual(Object.fromEntries(before.counters.map((c) => [c.name, c.seq])), COUNTERS(release));
   assert.deepEqual(before.rows.phone_recordings_owed.map((r) => r.recording_sid), ['RE04']);
-  assert.deepEqual(before.rows.calls.map((c) => [c.id, c.application_id, c.candidate_id]), [[1, 1, 1], [2, null, 2], [3, null, null], [4, 7, 5], [5, null, null], ...(release.live ? [[7, 6, 4]] : [])]);
+  assert.deepEqual(before.rows.calls.map((c) => [c.id, c.application_id, c.candidate_id]), [[1, 1, 1], [2, null, 2], [3, null, null], [4, 7, 5], [5, null, null], ...(release.reports ? [[7, 6, 4]] : [])]);
   // An index the calendar looked numbers up through, which today's code no longer makes: it has to survive the rebuild of its table.
   assert.ok(before.master.some((m) => m.name === 'idx_candidates_phone_tail'));
-  if (release.live) {
+  if (release.reports) {
     assert.deepEqual(before.rows.report_events.map((e) => [e.id, e.kind, e.application_id]), [[1, 'search_opened', null], [2, 'submission', 4], [3, 'first_interview', 4], [4, 'placement', 3], [5, 'placement', 8]]);
     assert.deepEqual([before.rows.metaview_calls.length, before.rows.metaview_people.length, before.rows.metaview_forgotten.length, before.rows.candidate_phone_keys.length], [2, 5, 1, 4]);
     assert.ok(before.master.some((m) => m.type === 'trigger' && m.name === 'candidate_phone_changed'));
+  }
+  // People's to-do lists, and the two settings To do keeps, are there only where the release that left the database had them.
+  assert.equal(before.master.some((m) => m.name === 'todos'), release.todos);
+  assert.deepEqual(before.rows.settings.filter((row) => row.key.startsWith('todos_')).map((row) => [row.key, row.value]),
+    release.todos ? [['todos_since', '2026-11-03T09:12:44.000Z'], ['todos_seen', '2026-11-09T16:05:10.000Z']] : []);
+  if (release.todos) {
+    assert.deepEqual(before.rows.todos.map((t) => [t.id, t.user_id, t.kind, t.job_id ?? t.application_id, t.interview_id]),
+      [[1, 2, 'job', 1, null], [2, 2, 'job', 3, null], [4, 1, 'job', 1, null], [5, 2, 'prep', 1, 2], [6, 2, 'debrief', 1, 1], [7, 2, 'prep', 4, null], [8, 3, 'debrief', 3, 3], [9, 1, 'prep', 7, null], [10, 1, 'prep', 8, null], [11, 2, 'job', 4, null]]);
   }
   for (const [table, column] of [['candidates', 'client_id'], ['applications', 'job_id'], ['applications', 'stage_id']]) {
     assert.equal(before.columns[table].find((c) => c.name === column).notnull, 1, `${table}.${column} is required before the upgrade`);
   }
 
   const byLive = openedByLive(dataDir);
-  if (release.live) assertSame(byLive, before, 'opened once more by the release it was last opened by');
+  assertSame(release.live ? byLive : openedBy(release, dataDir), before, 'opened once more by the release it was last opened by');
   start(NOW, dataDir);
   const upgraded = snapshot(dataDir);
   assertSame(upgraded, expectedAfter(byLive), 'after the upgrade');
+  // By name: what this start made and added is this change's own, and for a database from before the live release
+  // what the releases in between added (the reports and Metaview, the To do table and its indexes). Nothing else.
+  assertAddedOnly(before, upgraded, release, 'after the upgrade');
+  if (release.live) {
+    assert.deepEqual(upgraded.master.filter((m) => !before.master.some((x) => x.name === m.name)).map((m) => `${m.type} ${m.name}`), ADDED_SINCE.pool.made, 'from the live release, the first start makes this change\'s own tables and indexes and nothing else');
+    assert.deepEqual(upgraded.rows.todos, before.rows.todos, 'every item on a to-do list is as it was');
+  }
   // Everything an earlier release made is still there, written as it was, but for the two tables that were rebuilt
   // and the two that gained a marker: every other table, and every index and trigger, those of the rebuilt tables included.
   for (const m of byLive.master) {
@@ -494,14 +611,16 @@ forEachBefore('upgrading changes nothing but the three columns, the new column, 
   }
   assert.deepEqual(oldLines(upgraded), OLD_LINES.map((line, i) => [14 + i, release.reviewed ? line[2] : line[5]]), 'the old history lines have the types they should have now');
   assert.deepEqual(upgraded.counters, before.counters);
-  // The only rows that have appeared anywhere are the ones the releases in between add on their first start: two
-  // "this was done" settings, and a note for each candidate whose name or number is still to be worked out.
+  // The only rows that have appeared anywhere are the ones the releases in between add on their first start: a
+  // "this was done" setting, and a note for each candidate whose name or number is still to be worked out. On a
+  // database from the live release, no row has appeared in any table that was there.
   for (const [table, rows] of Object.entries(before.rows)) {
     const extra = appeared(upgraded.rows[table], rows);
     if (table === 'settings') assert.deepEqual(extra.map((row) => row.key), release.reviewed ? [] : ['activity_types_v2']);
-    else if (table === 'candidate_name_dirty') assert.deepEqual(extra.map((row) => row.candidate_id), release.live ? [] : [1, 2, 7], 'the candidates with a phone number, whose numbers are still to be filed');
+    else if (table === 'candidate_name_dirty') assert.deepEqual(extra.map((row) => row.candidate_id), release.reports ? [] : [1, 2, 7], 'the candidates with a phone number, whose numbers are still to be filed');
     else assert.deepEqual(extra, [], `no rows have appeared in ${table}`);
   }
+  if (release.live) for (const [table, rows] of Object.entries(before.rows)) assert.deepEqual(appeared(upgraded.rows[table], rows), [], `from the live release, no rows have appeared in ${table}`);
 
   start(NOW, dataDir);
   assertSame(snapshot(dataDir), upgraded, 'after a second start');
@@ -509,19 +628,61 @@ forEachBefore('upgrading changes nothing but the three columns, the new column, 
   assertSame(snapshot(dataDir), upgraded, 'after a third start');
 });
 
+// The database code is not all that runs when the server starts: the reports and To do each write down, once, when
+// they first ran on the workspace (server/reporting.js and server/todos.js, both loaded with the routes). So the
+// first start of the whole server on a database from before To do adds one more row than the tests above show, and
+// on a database from before the reports two. On the live release's database it adds none: both are written there
+// already, and they must be left as they are, since nobody is put on a debrief list for an interview that ended
+// before the moment To do first ran.
+forEachBefore('the first start of the whole server also writes down when the reports and To do first ran, where that was not written yet, and adds nothing else; a second start adds nothing', (release) => {
+  const dataDir = databaseFromBefore(release, 'pool-whole-server');
+  const before = snapshot(dataDir);
+  start(NOW, dataDir);
+  const upgraded = snapshot(dataDir);
+  // The routes and everything they load, on the database, without listening for requests.
+  const wholeServer = () => {
+    const script = `const { db } = await import(${JSON.stringify(pathToFileURL(NOW).href)}); await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'server', 'api.js')).href)}); db.close();`;
+    const run = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--input-type=module', '-e', script], { cwd: ROOT, env: { PATH: process.env.PATH, HOME: process.env.HOME, DATA_DIR: dataDir }, encoding: 'utf8' });
+    assert.equal(run.status, 0, `The server's code did not load:\n${run.stdout}\n${run.stderr}`);
+  };
+  const began = Date.now();
+  wholeServer();
+  const first = snapshot(dataDir);
+  const noted = appeared(first.rows.settings, upgraded.rows.settings);
+  assert.deepEqual(noted.map((row) => row.key), [...(release.reports ? [] : ['reports_first_run']), ...(release.todos ? [] : ['todos_since'])]);
+  for (const row of noted) assert.ok(Date.parse(row.value) >= began && Date.parse(row.value) <= Date.now(), `${row.key} is the moment of this start (${row.value})`);
+  // Nothing else is different from what the database code alone left: no other row anywhere, no table, no index.
+  // But for one thing every start of the server does, on the live release as on this one, which is no part of the
+  // upgrade: a request for an account that nobody answered in time is removed (Ask Er's, from January).
+  const withoutRequest = plain(upgraded);
+  assert.deepEqual(withoutRequest.rows.users.filter((u) => u.pending).map((u) => [u.id, u.email]), [[5, 'asker@example.com']]);
+  withoutRequest.rows.users = withoutRequest.rows.users.filter((u) => !u.pending);
+  assertSame({ ...first, rows: { ...first.rows, settings: first.rows.settings.filter((row) => !noted.includes(row)) } }, withoutRequest, 'after the whole server\'s first start, but for those settings');
+  // Where the release that left the database had written them, they are still what it wrote.
+  const settings = (shot) => Object.fromEntries(shot.rows.settings.map((row) => [row.key, row.value]));
+  if (release.reports) assert.equal(settings(first).reports_first_run, settings(before).reports_first_run);
+  if (release.todos) assert.deepEqual([settings(first).todos_since, settings(first).todos_seen], ['2026-11-03T09:12:44.000Z', '2026-11-09T16:05:10.000Z']);
+  wholeServer();
+  assertSame(snapshot(dataDir), first, 'after the whole server\'s second start');
+});
+
 test('a database the oldest release made ends up the same whichever of the newer releases opened it on the way', () => {
   const dataDir = databaseFromBefore(OLDER, 'pool-two-ways');
-  const viaNewer = copyOf(dataDir, 'pool-two-ways-via-newer'), viaBoth = copyOf(dataDir, 'pool-two-ways-via-both'), viaLive = copyOf(dataDir, 'pool-two-ways-via-live');
+  const copies = ['newer', 'reports', 'both', 'all', 'live'].map((way) => copyOf(dataDir, `pool-two-ways-via-${way}`));
+  const [viaNewer, viaReports, viaBoth, viaAll, viaLive] = copies;
   start(NEWER.code, viaNewer);
-  start(NEWER.code, viaBoth);
-  start(LIVE.code, viaBoth);
-  const onTheWay = snapshot(viaBoth);
+  start(REPORTS.code, viaReports);
+  for (const dir of [viaBoth, viaAll]) { start(NEWER.code, dir); start(REPORTS.code, dir); }
+  start(LIVE.code, viaAll);
+  const onTheWay = snapshot(viaAll);
   start(LIVE.code, viaLive);
-  assertSame(snapshot(viaLive), onTheWay, 'the newest release without this change, straight from the oldest and by way of the one between');
-  for (const dir of [dataDir, viaNewer, viaBoth, viaLive]) start(NOW, dir);
+  assertSame(snapshot(viaLive), onTheWay, 'the newest release without this change, straight from the oldest and by way of the two between');
+  for (const dir of [dataDir, ...copies]) start(NOW, dir);
   const straight = snapshot(dataDir);
   assertSame(straight, snapshot(viaNewer), 'straight to today\'s code, against by way of the release with the review fixes');
-  assertSame(straight, snapshot(viaBoth), 'straight to today\'s code, against by way of both newer releases');
+  assertSame(straight, snapshot(viaReports), 'straight to today\'s code, against by way of the release with Metaview and the reports');
+  assertSame(straight, snapshot(viaBoth), 'straight to today\'s code, against by way of both of those');
+  assertSame(straight, snapshot(viaAll), 'straight to today\'s code, against by way of every release since');
   assertSame(straight, snapshot(viaLive), 'straight to today\'s code, against by way of the newest release without this change');
   assertSame(straight, expectedAfter(onTheWay), 'against what the newest release without this change left, upgraded');
 });
@@ -567,8 +728,22 @@ forEachBefore('after the upgrade the rules still hold: foreign keys, one record 
   assert.throws(() => run(`INSERT INTO report_events (kind, application_id, candidate_name, job_id, client_id, at) VALUES ('submission', 11, 'Renamed Person', 1, 1, 'x')`), /UNIQUE/, 'a candidate is submitted in a job once');
   assert.throws(() => run(`INSERT INTO report_events (kind, application_id, candidate_name, job_id, client_id, at) VALUES ('placement', 999, 'Nobody', 1, 1, 'x')`), /FOREIGN KEY/);
   assert.throws(() => run(`INSERT INTO candidate_phone_keys (candidate_id, tail, lead) VALUES (999, '4165550188', '1')`), /FOREIGN KEY/);
+  // To-do lists hang off the rebuilt applications table as well, whether the release that left the database had them
+  // or this start made the table: an item needs an application that exists, a person is on one list once at a time
+  // (and may be on both), ids carry on from the highest ever given out, and an item goes with its application.
+  const newTodo = (kind, applicationId) => run(`INSERT INTO todos (user_id, kind, application_id, created_at) VALUES (2, ?, ?, 'x')`, kind, applicationId);
+  assert.throws(() => newTodo('prep', 999), /FOREIGN KEY/);
+  assert.equal(Number(newTodo('prep', 11).lastInsertRowid), release.todos ? 13 : 1);
+  assert.throws(() => newTodo('prep', 11), /UNIQUE/, 'a person is on somebody\'s To prep list once');
+  newTodo('debrief', 11);
+  if (release.todos) {
+    assert.throws(() => newTodo('prep', 1), /UNIQUE/, 'also somebody who was on it before the upgrade');
+    assert.throws(() => run(`INSERT INTO todos (user_id, kind, job_id, created_at) VALUES (2, 'job', 1, 'x')`), /UNIQUE/, 'and a job that was');
+    assert.equal(count('todos', 'application_id = 1'), 2);
+  }
   run('DELETE FROM applications WHERE id = 11');
   assert.equal(count('report_events', 'application_id = 11'), 0);
+  assert.equal(count('todos', 'application_id = 11'), 0);
   assert.equal(Number(newApplication(10, 1, 1).lastInsertRowid), 12);
   const reportsBefore = count('report_events'), keysBefore = count('candidate_phone_keys');
 
@@ -601,12 +776,15 @@ forEachBefore('after the upgrade the rules still hold: foreign keys, one record 
   assert.equal(count('applications', 'job_id = 3'), 0);
   assert.equal(count('applications', 'id = 13'), 1, 'and leaves the entry of someone on no job alone');
   // The reports' moments went with the candidate (Kevin at Maple had none), the job (Kévin's placement at Northline) and nothing else.
-  assert.equal(count('report_events'), reportsBefore - (release.live ? 1 : 0));
-  assert.equal(count('candidate_phone_keys'), keysBefore - (release.live ? 1 : 0), 'the numbers filed for a removed candidate go with them');
-  if (release.live) {
+  assert.equal(count('report_events'), reportsBefore - (release.reports ? 1 : 0));
+  assert.equal(count('candidate_phone_keys'), keysBefore - (release.reports ? 1 : 0), 'the numbers filed for a removed candidate go with them');
+  if (release.reports) {
     assert.deepEqual(db.prepare('SELECT id, kind FROM report_events WHERE id <= 5 ORDER BY id').all().map((e) => [e.id, e.kind]), [[1, 'search_opened'], [2, 'submission'], [3, 'first_interview'], [5, 'placement']]);
     assert.deepEqual({ ...get('SELECT call_id FROM metaview_calls WHERE id = 880000137') }, { call_id: 7 }, 'a conversation brought in from Metaview is still the call it became');
   }
+  // The to-do items went with what they were about and nothing else: Zoë's application (9), Kevin at Maple and his two
+  // applications (5 and 6), the job at Northline (2) and Kévin's application in it (8). The rest are as they were.
+  if (release.todos) assert.deepEqual(db.prepare('SELECT id FROM todos WHERE id <= 12 ORDER BY id').all().map((t) => t.id), [1, 4, 7, 10, 11]);
   assert.throws(() => run('DELETE FROM stages WHERE id = 4'), /FOREIGN KEY/, 'a stage with somebody in it cannot be removed');
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   db.close();
@@ -1082,10 +1260,11 @@ test('a database straight from the first release keeps every row under its id, a
   assert.deepEqual(before.counters, [], 'the first release kept no id counters');
   assert.deepEqual([before.rows.candidates.map((c) => c.id), before.rows.applications.map((a) => a.id), before.rows.notes.map((n) => n.id), before.rows.users.map((u) => u.id)], [[1, 2, 4], [1, 2, 4], [1, 3], [1, 2, 3]]);
 
-  // By way of the three releases kept here, as the live database went; and straight to today's code.
+  // By way of the four releases kept here, as the live database went; and straight to today's code.
   const byWay = copyOf(dataDir, 'pool-from-first-by-way');
   start(OLDER.code, byWay);
   start(NEWER.code, byWay);
+  start(REPORTS.code, byWay);
   start(LIVE.code, byWay);
   start(NOW, byWay);
   start(NOW, dataDir);

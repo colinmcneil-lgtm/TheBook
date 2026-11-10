@@ -14,8 +14,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { session, sleep, tempDir, PORTS } from './oracle-helpers.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-// Two ports the other test files leave free (see oracle-helpers.mjs for who uses which).
-const PORT = PORTS.main + 18, UPGRADE_PORT = PORTS.main + 19;
+// The two ports kept for this file (see PORT_PLAN in oracle-helpers.mjs for who uses which).
+const PORT = PORTS.todos, UPGRADE_PORT = PORTS.todos + 1;
 const DAY = 86400000, HOUR = 3600000, MINUTE = 60000;
 
 async function startApi({ port, dataDir }) {

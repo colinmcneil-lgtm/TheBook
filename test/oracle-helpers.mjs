@@ -18,11 +18,12 @@ export const FIXTURES = path.join(HERE, 'fixtures');
 export const RECORDING = fs.readFileSync(path.join(FIXTURES, 'call.webm'));
 export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-canned.json'), 'utf8'));
 
-// Ports: every test file's ports are counted from ORACLE_TEST_PORT (3610 unless set), thirty in a row in all.
+// Ports: every test file's ports are counted from ORACLE_TEST_PORT (3610 unless set), thirty in a row in all
+// (PORT_PLAN below is the same list, for the code).
 //   +0 to +4    Otterview tests: three for servers, then one for each stand-in
+//   +10, +11    people saved without a job (pool.test.mjs): a server with e-mail delivery connected, and a stand-in for its mail provider
 //   +12, +13    the workspace tests: a server and a stand-in
-//   +14, +15    people saved without a job (pool.test.mjs): a server and a stand-in for Metaview
-//   +10, +11    the same file: a server with e-mail delivery connected, and a stand-in for its mail provider
+//   +14, +15    people saved without a job again: a server and a stand-in for Metaview
 //   +16, +17    the reporting tests: two servers
 //   +18, +19    the to-do tests: two servers
 //   +20 to +29  the Metaview tests (see metaview-helpers.mjs)
@@ -46,7 +47,17 @@ export function portsProblem(base) {
 const BASE_PORT = Number(process.env.ORACLE_TEST_PORT) || 3610;
 const problem = portsProblem(BASE_PORT);
 if (problem) throw new Error(problem);
-export const PORTS = { main: BASE_PORT, bare: BASE_PORT + 1, restart: BASE_PORT + 2, deepgram: BASE_PORT + 3, anthropic: BASE_PORT + 4, workspace: BASE_PORT + 12, workspaceAi: BASE_PORT + 13, pool: BASE_PORT + 14, metaview: BASE_PORT + 20 };
+/**
+ * Which of the thirty each group of tests takes: where its ports start, counted from the base, and how many in a row.
+ * The test files run at the same time, so no two groups may overlap; the unit tests check this list for that, and
+ * every file takes its ports from it, through PORTS below (pool.test.mjs can be given four of its own instead).
+ */
+export const PORT_PLAN = { oracle: [0, 5], poolMail: [10, 2], workspace: [12, 2], pool: [14, 2], reporting: [16, 2], todos: [18, 2], metaview: [20, 10] };
+const first = (group) => BASE_PORT + PORT_PLAN[group][0];
+export const PORTS = {
+  main: first('oracle'), bare: first('oracle') + 1, restart: first('oracle') + 2, deepgram: first('oracle') + 3, anthropic: first('oracle') + 4,
+  poolMail: first('poolMail'), workspace: first('workspace'), workspaceAi: first('workspace') + 1, pool: first('pool'), reporting: first('reporting'), todos: first('todos'), metaview: first('metaview'),
+};
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const tempDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `the-book-${name}-`));

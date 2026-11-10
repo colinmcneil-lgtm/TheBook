@@ -17,7 +17,7 @@ import { session, sleep, tempDir, PORTS } from './oracle-helpers.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Two ports the other test files leave free: the ones after the workspace tests' (see workspace.test.mjs).
-const PORT = PORTS.main + 16, UPGRADE_PORT = PORTS.main + 17; // clear of the ports the other test files take from the same base
+const PORT = PORTS.reporting, UPGRADE_PORT = PORTS.reporting + 1; // the two kept for this file (see PORT_PLAN in oracle-helpers.mjs)
 
 /** PUT with a JSON body, as the signed-in person `who` (a session from oracle-helpers). */
 async function putJson(who, base, pathname, json) {

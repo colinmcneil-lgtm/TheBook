@@ -18,10 +18,13 @@ import { session, tempDir, until, RECORDING, PORTS as SHARED } from './oracle-he
 import { startBook, connect } from './metaview-helpers.mjs';
 import { metaviewStandIn } from './metaview-standin.mjs';
 
-// Four ports: POOL_TEST_PORT, the one after it, and the fifth and sixth from it (a second server with e-mail
-// delivery connected, and the stand-in for its mail provider), or the four kept for this file (see oracle-helpers.mjs).
-const BASE_PORT = Number(process.env.POOL_TEST_PORT) || SHARED.pool;
-const PORTS = { api: BASE_PORT, metaview: BASE_PORT + 1, mailApi: BASE_PORT - 4, mail: BASE_PORT - 3 }; // +10 and +11 from the shared base: +18 and +19 are the to-do tests'
+// Four ports, the ones kept for this file (see PORT_PLAN in oracle-helpers.mjs): the server and the stand-in for
+// Metaview, and a second server with e-mail delivery connected and the stand-in for its mail provider. With
+// POOL_TEST_PORT set, four in a row from it instead.
+const OWN_PORT = Number(process.env.POOL_TEST_PORT) || 0;
+const PORTS = OWN_PORT
+  ? { api: OWN_PORT, metaview: OWN_PORT + 1, mailApi: OWN_PORT + 2, mail: OWN_PORT + 3 }
+  : { api: SHARED.pool, metaview: SHARED.pool + 1, mailApi: SHARED.poolMail, mail: SHARED.poolMail + 1 };
 const NEEDS_JOB = { error: 'Add them to a job first.' };
 // A real picture, one pixel square: the workspace reads a photo's own size and refuses a file that only starts like one.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
@@ -1835,6 +1838,32 @@ test('an e-mail still on its way when the person is put on a job, joined to an a
     assert.deepEqual(recorded('KESTREL-MAIL'), [`agency_emails ${dana_}`, `agency_activities ${dana_}`]);
     assert.deepEqual(read('SELECT COUNT(*) AS n FROM emails WHERE application_id = ?', dana_), [{ n: 0 }]);
 
+    // An interview edited with "send the invitation again" sends an e-mail like any other. With nothing happening
+    // meanwhile it is recorded on the application; and when, before the provider answers, they are back in The Book
+    // and on another client's job, it is the agency's own, with the one sent before it.
+    const invitation = 'Interview for Nurse Lead at Lumen Health';
+    const invitations = (table) => read(`SELECT application_id AS id, delivery, body FROM ${table} WHERE subject = ? ORDER BY id`, invitation);
+    const visit = (await owner.post('/interviews', { application_id: dana_, title: 'Ward visit', starts_at: '2099-07-01T15:00:00.000Z', panel: [] })).body.id;
+    const editWhile = async (changes, meanwhile) => {
+      const before = asked;
+      const sending = owner.patch(`/interviews/${visit}`, { ...changes, notify: true });
+      await until(async () => asked, (n) => n > before);
+      await meanwhile();
+      held.splice(0).forEach((answer) => answer());
+      return sending;
+    };
+    assert.deepEqual((await editWhile({ starts_at: '2099-07-02T15:00:00.000Z', time_label: 'Thursday 2 July, 11:00' }, async () => {})).body, { ok: true });
+    assert.deepEqual([invitations('emails').map((e) => [e.id, e.delivery, /When: Thursday 2 July, 11:00\n/.test(e.body)]), invitations('agency_emails')], [[[dana_, 'sent', true]], []]);
+    const late = await editWhile({ starts_at: '2099-07-03T15:00:00.000Z', time_label: 'Friday 3 July, 11:00' }, async () => {
+      assert.equal((await owner.del(`/applications/${dana_}`)).body.returned, true);
+      assert.equal((await addToJob(owner, dana_, { job_id: sales })).status, 200);
+    });
+    assert.deepEqual(late.body, { ok: true });
+    assert.deepEqual([invitations('emails'), invitations('agency_emails').map((e) => [e.id, e.delivery, e.body.match(/When: (.*)/)[1]])],
+      [[], [[dana_, 'sent', 'Thursday 2 July, 11:00'], [dana_, 'sent', 'Friday 3 July, 11:00']]]);
+    assert.deepEqual(await seenByKim(dana_), [[], ['Added to Head of Sales at Applied']]);
+    assert.equal(/Nurse Lead|Lumen|Ward visit/.test(JSON.stringify((await kim.get(`/applications/${dana_}`)).body)), false);
+
     // Sent from The Book, and the entry is joined to the application the client's record already has: recorded there, for the agency.
     const there = (await owner.upload('/applications', { job_id: sales, name: 'Enzo Ferri', email: 'enzo@example.com' })).body.id;
     const record = (await owner.get(`/applications/${there}`)).body.candidate.id;
@@ -1860,7 +1889,7 @@ test('an e-mail still on its way when the person is put on a job, joined to an a
 
     // The hiring team's feed has the one line that was theirs to see, and no trace of the rest.
     assert.equal(/BOOK-MAIL|KESTREL-MAIL|ENTRY-MAIL|TWO-ENTRIES/.test(JSON.stringify([await feed(), await seenByKim(there), (await kim.get('/applications?status=all')).body])), false);
-    assert.equal(asked, 6);
+    assert.equal(asked, 8);
     assert.equal(server.output().includes('constraint failed'), false, server.output());
   } finally {
     held.splice(0).forEach((answer) => answer());
@@ -1869,6 +1898,285 @@ test('an e-mail still on its way when the person is put on a job, joined to an a
     await new Promise((resolve) => provider.close(resolve));
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---------- where this meets the To do page ----------
+// To do came with the release before this one, for people in jobs: The Book puts a candidate on their recruiter's To
+// prep list a week before an interview and on To debrief when it has been held. These tests hold it to the same for
+// people who are saved without a job and put on one later, and to nothing at all while they are on no job.
+const NO_ROW = [{ n: 0 }];
+const newOpenJob = async (clientId, title) => {
+  const id = (await alex.post('/jobs', { client_id: clientId, title, status: 'open' })).body.id;
+  return { id, stages: (await alex.get(`/jobs/${id}`)).body.stages };
+};
+const inDays = (days) => new Date(Date.now() + days * 86400000).toISOString();
+const book_ = async (who, appId, title, startsAt, extra = {}) => {
+  const made = await who.post('/interviews', { application_id: appId, title, starts_at: startsAt, duration_min: 60, panel: [], ...extra });
+  assert.equal(made.status, 200, JSON.stringify(made.body));
+  return made.body.id;
+};
+/**
+ * Where an application is on somebody's To do page, as [list, job, client, added by The Book, the interview it is
+ * about]. On the way it checks the page as a whole: the count in the menu is the number of rows the page shows, and
+ * every row of the two people lists says who it is, for which job at which client, and at what stage.
+ */
+async function onToDo(who, appId) {
+  const page = (await who.get('/todos')).body;
+  const shown = page.job.open.length + page.prep.open.length + page.debrief.open.length;
+  assert.deepEqual([page.counts.total, (await who.get('/nav')).body.todo], [shown, shown], 'the count in the menu is what the page shows');
+  const people = ['prep', 'debrief'].flatMap((kind) => [...page[kind].open.map((x) => [kind, x]), ...page[kind].done.map((x) => [`${kind}, done`, x])]);
+  for (const [, x] of people) assert.ok(x.name && x.job_id && x.job_title && x.client_name && x.stage_name, `no row is blank: ${JSON.stringify(x)}`);
+  return people.filter(([, x]) => x.application_id === appId).map(([where, x]) => [where, x.job_title, x.client_name, x.auto, x.interview?.title ?? null]);
+}
+/** Whether the picker beside the two people lists offers this application, however it is asked. */
+async function offered(who, appId, name) {
+  const found = [];
+  for (const query of ['', '?whose=all', `?q=${encodeURIComponent(name)}`, `?q=${encodeURIComponent(name.split(' ')[0].slice(0, 3))}`]) {
+    const answer = await who.get(`/todos/people${query}`);
+    assert.equal(answer.status, 200, `${query}: ${JSON.stringify(answer.body)}`);
+    for (const p of answer.body) assert.ok(p.job_id && p.job_title && p.client_name && p.stage_name, `the picker offers nobody without a job: ${JSON.stringify(p)}`);
+    if (answer.body.some((p) => p.application_id === appId)) found.push(query);
+  }
+  return found;
+}
+
+test('on no job, nobody can be put on To prep or To debrief; on a job they are on them like anyone else, and they come off both when they go back to The Book', async () => {
+  const fleet = await newOpenJob(client.maple, 'Fleet Planner');
+  const tova = await saved(dana, { name: 'Tova Lindqvist', email: 'tova@example.com', note: 'Met at the logistics fair.' });
+  const menu = async (who) => (await who.get('/nav')).body.todo;
+  const [danaBefore, samBefore] = [await menu(dana), await menu(sam)];
+
+  // In The Book she is offered by neither picker nor search, and asking for her by number is refused. Nothing is
+  // written, so nothing is counted in the menu that no list could show.
+  assert.deepEqual(await offered(dana, tova, 'Tova Lindqvist'), []);
+  for (const kind of ['prep', 'debrief']) {
+    const asked = await dana.post('/todos', { kind, application_id: tova, note: 'Should not be saved' });
+    assert.deepEqual([asked.status, asked.body], [400, NEEDS_JOB], kind);
+  }
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM todos WHERE application_id = ?', tova), NO_ROW);
+  assert.deepEqual([await menu(dana), await onToDo(dana, tova)], [danaBefore, []]);
+
+  // Sam puts her on a job, at an interview stage, and Alex books the interview. She is Dana's: Dana saved her. So
+  // she goes on Dana's To prep list, not on that of whoever put her on the job or booked the interview.
+  assert.equal((await addToJob(sam, tova, { job_id: fleet.id, stage_id: fleet.stages[1].id })).status, 200);
+  assert.deepEqual(await onToDo(dana, tova), [], 'being on a job puts nobody on a list by itself');
+  const first = await book_(alex, tova, 'Hiring manager interview', inDays(2));
+  assert.deepEqual(await onToDo(dana, tova), [['prep', 'Fleet Planner', 'Maple Freight', true, 'Hiring manager interview']]);
+  assert.deepEqual([await onToDo(sam, tova), await onToDo(alex, tova)], [[], []]);
+  assert.equal(await menu(dana), danaBefore + 1);
+  // Now the picker has her, for Dana among her own and for Sam among everyone's and by name.
+  assert.deepEqual(await offered(dana, tova, 'Tova Lindqvist'), ['', '?whose=all', '?q=Tova%20Lindqvist', '?q=Tov']);
+  assert.deepEqual(await offered(sam, tova, 'Tova Lindqvist'), ['?whose=all', '?q=Tova%20Lindqvist', '?q=Tov']);
+  assert.equal((await sam.post('/todos', { kind: 'prep', application_id: tova, note: 'Sit in on this one' })).status, 200);
+  assert.equal((await dana.post('/todos', { kind: 'job', job_id: fleet.id })).status, 200);
+
+  // The interview is held: she is to debrief, for Dana, and both preps come off as done. What she said is saved on
+  // her profile for the agency alone.
+  assert.equal((await alex.patch(`/interviews/${first}`, { status: 'completed' })).status, 200);
+  assert.deepEqual(await onToDo(dana, tova), [['prep, done', 'Fleet Planner', 'Maple Freight', true, 'Hiring manager interview'], ['debrief', 'Fleet Planner', 'Maple Freight', true, 'Hiring manager interview']]);
+  assert.deepEqual(await onToDo(sam, tova), [['prep, done', 'Fleet Planner', 'Maple Freight', false, 'Hiring manager interview']]);
+  const debrief = (await dana.get('/todos')).body.debrief.open.find((x) => x.application_id === tova);
+  const ticked = await dana.patch(`/todos/${debrief.id}`, { done: true, debrief: 'Liked the team; worried about the commute.' });
+  assert.equal(ticked.status, 200);
+  const said = 'Debrief after Hiring manager interview:\nLiked the team; worried about the commute.';
+  assert.deepEqual((await detail(dana, tova)).notes.filter((n) => n.id === ticked.body.note_id).map((n) => [n.body, n.private]), [[said, 1]]);
+  assert.equal(JSON.stringify((await maya.get(`/applications/${tova}`)).body).includes('commute'), false);
+  // A second interview, and she is to prep again.
+  await book_(dana, tova, 'Final interview', inDays(3));
+  assert.deepEqual((await onToDo(dana, tova)).map((row) => `${row[0]}: ${row[4]}`), ['prep: Final interview', 'prep, done: Hiring manager interview', 'debrief, done: Hiring manager interview']);
+  assert.equal(await menu(dana), danaBefore + 2);   // the job, and her prep
+
+  // Removed from the job, she is back in The Book: off both lists of everyone who had her, done items too, and the
+  // menu counts what is left. The job Dana picked stays on her list. What was said at the debrief stays on her profile.
+  assert.deepEqual((await dana.del(`/applications/${tova}`)).body, { ok: true, returned: true, id: tova });
+  assert.deepEqual([await onToDo(dana, tova), await onToDo(sam, tova)], [[], []]);
+  assert.deepEqual([await menu(dana), await menu(sam)], [danaBefore + 1, samBefore]);
+  assert.deepEqual((await dana.get('/todos')).body.job.open.filter((x) => x.job_id === fleet.id).map((x) => x.title), ['Fleet Planner']);
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM todos WHERE application_id = ?', tova), NO_ROW);
+  const back = await detail(dana, tova);
+  assert.deepEqual([back.application.general, back.interviews, back.notes.map((n) => [n.body, n.private]).sort()], [true, [], [[said, 1], ['Met at the logistics fair.', 1]]]);
+  // In The Book again she is as she was before: not offered, and refused. An item from an open tab is gone, not stuck.
+  assert.deepEqual(await offered(dana, tova, 'Tova Lindqvist'), []);
+  assert.deepEqual([(await dana.post('/todos', { kind: 'debrief', application_id: tova })).body, (await dana.patch(`/todos/${debrief.id}`, { done: false })).status], [NEEDS_JOB, 404]);
+
+  // On another client's job, nothing of the first one follows her onto a list. An interview there puts her on Dana's
+  // list for that job, and Northline's hiring team is shown none of what was said about Maple's.
+  const office = await newOpenJob(client.northline, 'Office Manager');
+  assert.equal((await addToJob(dana, tova, { job_id: office.id })).status, 200);
+  assert.deepEqual([await onToDo(dana, tova), await onToDo(sam, tova)], [[], []]);
+  await book_(sam, tova, 'Meet the practice', inDays(1));
+  assert.deepEqual([await onToDo(dana, tova), await onToDo(sam, tova)], [[['prep', 'Office Manager', 'Northline Dental', true, 'Meet the practice']], []]);
+  assert.equal(/commute|Liked the team|Debrief|Fleet|Maple|logistics fair/.test(JSON.stringify((await noor.get(`/applications/${tova}`)).body)), false);
+});
+
+test('deleting a job takes it off every To do page, with the people in it: those who go back to The Book and those who go with the job', async () => {
+  const dock = await newOpenJob(client.maple, 'Dock Supervisor');
+  const ivo = await saved(dana, { name: 'Ivo Brandt', email: 'ivo@example.com' });
+  assert.equal((await addToJob(dana, ivo, { job_id: dock.id, stage_id: dock.stages[1].id })).status, 200);
+  const una = (await dana.upload('/applications', { job_id: dock.id, name: 'Una Straight', email: 'una@example.com' })).body.id;
+  await book_(dana, ivo, 'Recruiter screen', inDays(1));
+  await book_(dana, una, 'Recruiter screen', inDays(2));
+  assert.equal((await dana.post('/todos', { kind: 'job', job_id: dock.id })).status, 200);
+  assert.equal((await sam.post('/todos', { kind: 'debrief', application_id: ivo })).status, 200);
+  assert.equal((await sam.post('/todos', { kind: 'job', job_id: dock.id })).status, 200);
+  assert.deepEqual([await onToDo(dana, ivo), await onToDo(dana, una), await onToDo(sam, ivo)],
+    [[['prep', 'Dock Supervisor', 'Maple Freight', true, 'Recruiter screen']], [['prep', 'Dock Supervisor', 'Maple Freight', true, 'Recruiter screen']], [['debrief', 'Dock Supervisor', 'Maple Freight', false, null]]]);
+  const [danaBefore, samBefore] = [(await dana.get('/nav')).body.todo, (await sam.get('/nav')).body.todo];
+
+  assert.equal((await alex.del(`/jobs/${dock.id}`)).status, 200);
+  assert.deepEqual([await onToDo(dana, ivo), await onToDo(dana, una), await onToDo(sam, ivo)], [[], [], []]);
+  assert.deepEqual([(await dana.get('/nav')).body.todo, (await sam.get('/nav')).body.todo], [danaBefore - 3, samBefore - 2]);
+  for (const who of [dana, sam]) assert.equal((await who.get('/todos')).body.job.open.some((x) => x.job_id === dock.id), false);
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM todos WHERE application_id IN (?, ?) OR job_id = ?', ivo, una, dock.id), NO_ROW);
+  // Ivo is back in The Book and Una went with the job, as before.
+  assert.deepEqual([(await detail(dana, ivo)).application.general, (await dana.get(`/applications/${una}`)).status], [true, 404]);
+});
+
+test('an entry joined to a client\'s record, or folded into another application, leaves every to-do item on the application that is kept and none on one that is gone', async () => {
+  const route = await newOpenJob(client.maple, 'Route Analyst');
+  const depot = await newOpenJob(client.maple, 'Depot Lead');
+  const rowsFor = (...ids) => db(`SELECT application_id AS app, user_id, kind, note FROM todos WHERE application_id IN (${ids.map(() => '?').join(', ')}) AND done_at IS NULL AND removed_at IS NULL ORDER BY id`, ...ids);
+  const idOf = async (who) => (await who.get('/me')).body.user.id;
+  const [danaId, samId] = [await idOf(dana), await idOf(sam)];
+
+  // Mira is on Maple's record, in Route Analyst, with an interview: she is on Sam's To prep list, with his note.
+  const there = (await sam.upload('/applications', { job_id: route.id, name: 'Mira Oyelaran', email: 'mira@example.com' })).body.id;
+  const record = (await detail(sam, there)).candidate.id;
+  await book_(sam, there, 'First interview', inDays(2));
+  const samsItem = (await sam.get('/todos')).body.prep.open.find((x) => x.application_id === there);
+  assert.equal((await sam.patch(`/todos/${samsItem.id}`, { note: 'Bring the route maps' })).status, 200);
+  // Dana had saved her to The Book as well. Put on the same job, her entry is joined to the application that is
+  // there: Sam's item stays where it is, once, with its note, and nothing is left about the entry that went.
+  const entry = await saved(dana, { name: 'Mira Oyelaran', email: 'mira@example.com', note: 'Kept in The Book.' });
+  assert.deepEqual((await addToJob(dana, entry, { job_id: route.id, into: record })).body, { id: there, merged: true });
+  assert.deepEqual(rowsFor(there, entry), [{ app: there, user_id: samId, kind: 'prep', note: 'Bring the route maps' }]);
+  assert.deepEqual([await onToDo(sam, there), await onToDo(dana, there)], [[['prep', 'Route Analyst', 'Maple Freight', true, 'First interview']], []]);
+
+  // Joined to the client's record for another of its jobs, the entry becomes that job's application on the record.
+  // What is on a list for the record's other job is untouched, and an interview in the new job goes to the entry's owner.
+  const second = await saved(dana, { name: 'Mira Oyelaran', email: 'mira@example.com' });
+  const joined = await addToJob(dana, second, { job_id: depot.id, into: record });
+  assert.deepEqual(joined.body, { id: second, merged: true });
+  await book_(sam, second, 'Depot walk-round', inDays(1));
+  assert.deepEqual(rowsFor(there, second), [{ app: there, user_id: samId, kind: 'prep', note: 'Bring the route maps' }, { app: second, user_id: danaId, kind: 'prep', note: null }]);
+  assert.deepEqual([await onToDo(sam, there), await onToDo(dana, second), await onToDo(sam, second)],
+    [[['prep', 'Route Analyst', 'Maple Freight', true, 'First interview']], [['prep', 'Depot Lead', 'Maple Freight', true, 'Depot walk-round']], []]);
+
+  // Removed from the first job, the application that the entry was joined to goes back to The Book: off Sam's list.
+  // The record is still needed for Depot Lead, whose item stays.
+  assert.equal((await dana.del(`/applications/${there}`)).body.returned, true);
+  assert.deepEqual(rowsFor(there, second), [{ app: second, user_id: danaId, kind: 'prep', note: null }]);
+  assert.deepEqual([await onToDo(sam, there), await onToDo(dana, second)], [[], [['prep', 'Depot Lead', 'Maple Freight', true, 'Depot walk-round']]]);
+
+  // Saved to The Book again while on a job, and then removed from the job: the application is folded into the
+  // entry The Book already has, and is gone, with its items. The entry that is kept has none.
+  const pia = await saved(dana, { name: 'Pia Novak', email: 'pia.novak@example.com' });
+  assert.equal((await addToJob(dana, pia, { job_id: route.id })).status, 200);
+  await book_(dana, pia, 'First interview', inDays(1));
+  assert.equal((await sam.post('/todos', { kind: 'debrief', application_id: pia })).status, 200);
+  const again = await saved(sam, { name: 'Pia Novak', email: 'pia.novak@example.com' });
+  assert.notEqual(again, pia);
+  assert.deepEqual([await onToDo(dana, pia), await onToDo(sam, pia)], [[['prep', 'Route Analyst', 'Maple Freight', true, 'First interview']], [['debrief', 'Route Analyst', 'Maple Freight', false, null]]]);
+  assert.deepEqual((await dana.del(`/applications/${pia}`)).body, { ok: true, returned: true, id: again });
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM todos WHERE application_id IN (?, ?)', pia, again), NO_ROW);
+  assert.deepEqual([await onToDo(dana, pia), await onToDo(sam, pia), await onToDo(dana, again), await onToDo(sam, again)], [[], [], [], []]);
+  assert.deepEqual(await offered(dana, again, 'Pia Novak'), []);
+
+  // Two entries of one person in The Book merged into one: neither can have an item, and the merge leaves none.
+  const twin = await saved(dana, { name: 'Pia Novak', linkedin: 'https://www.linkedin.com/in/pia-novak' });
+  const person = async (id) => (await detail(dana, id)).candidate.id;
+  assert.equal((await dana.post(`/candidates/${await person(twin)}/merge`, { into: await person(again) })).status, 200);
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM todos WHERE application_id IN (?, ?)', twin, again), NO_ROW);
+  assert.deepEqual((await dana.post('/todos', { kind: 'prep', application_id: again })).body, NEEDS_JOB);
+
+  // Deleting all data on somebody who came from The Book takes their items with them.
+  const before = (await dana.get('/nav')).body.todo;
+  assert.equal((await dana.del(`/candidates/${record}`)).status, 200);
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM todos WHERE application_id = ?', second), NO_ROW);
+  assert.deepEqual([await onToDo(dana, second), (await dana.get('/nav')).body.todo], [[], before - 1]);
+});
+
+// ---------- where this meets editing an interview ----------
+// An interview can be edited since the release before this one, and the candidate sent the invitation again. For
+// somebody who came from The Book that e-mail, and the line in the history that says what was changed, are like any
+// other written after they joined the job: kept where the job's hiring team is shown from, and taken from there
+// with everything else if they go on to another job.
+test('an interview edited for somebody who came from The Book: the invitation sent again and the line in the history belong to the job, for its hiring team to read and no other client\'s', async () => {
+  const yard = await newOpenJob(client.maple, 'Yard Scheduler');
+  const wren = await saved(dana, { name: 'Wren Abara', email: 'wren@example.com' });
+  assert.equal((await dana.post(`/applications/${wren}/emails`, { subject: 'Keeping in touch', body: 'Hi Wren, between us.' })).status, 200);
+  assert.equal((await addToJob(dana, wren, { job_id: yard.id })).status, 200);
+  const joined = (await detail(dana, wren)).application.general_until;
+  const invitation = 'Interview for Yard Scheduler at Maple Freight';
+  const visit = await book_(dana, wren, 'Site visit', '2099-06-01T15:00:00.000Z', { kind: 'onsite', location: 'Dock 4', notify: true, time_label: 'Monday 1 June, 11:00' });
+  const edit = async (changes) => {
+    const answer = await dana.patch(`/interviews/${visit}`, { title: 'Site visit', kind: 'onsite', duration_min: 60, ...changes });
+    assert.deepEqual([answer.status, answer.body], [200, { ok: true }]);
+  };
+  // Moved to another day, and the invitation sent again. Then a new place at the same time, sent again. Then a
+  // longer interview with nothing sent, and its status changed with "send" asked for but no details given.
+  await edit({ starts_at: '2099-06-02T16:30:00.000Z', location: 'Dock 4', notify: true, time_label: 'Tuesday 2 June, 12:30' });
+  await edit({ starts_at: '2099-06-02T16:30:00.000Z', location: 'Head office, room 2', notify: true, time_label: 'Tuesday 2 June, 12:30' });
+  await edit({ starts_at: '2099-06-02T16:30:00.000Z', location: 'Head office, room 2', duration_min: 90 });
+  assert.equal((await dana.patch(`/interviews/${visit}`, { status: 'completed', notify: true })).status, 200);
+  assert.equal((await dana.patch(`/interviews/${visit}`, { status: 'scheduled', notify: true })).status, 200);
+
+  // Where they are stored: the three invitations and the lines about the interview are in the tables the hiring team
+  // is shown from, each written after she joined the job. The agency's own tables hold what was written in The Book.
+  const whenAndWhere = (body) => [body.match(/When: (.*)/)[1], body.match(/Where: (.*)/)[1]];
+  const sent = [['Monday 1 June, 11:00', 'Dock 4'], ['Tuesday 2 June, 12:30', 'Dock 4'], ['Tuesday 2 June, 12:30', 'Head office, room 2']];
+  const lines = ['Added to Yard Scheduler at Applied', 'Scheduled Site visit', 'Rescheduled Site visit', 'Updated Site visit', 'Updated Site visit', 'Site visit marked completed', 'Site visit marked scheduled'];
+  const stored = (table, column) => db(`SELECT ${column} AS x, created_at FROM ${table} WHERE application_id = ? ORDER BY id`, wren);
+  assert.deepEqual(db('SELECT subject, body, to_email, sent_by FROM emails WHERE application_id = ? ORDER BY id', wren).map((e) => [e.subject, e.to_email, ...whenAndWhere(e.body)]),
+    sent.map((s) => [invitation, 'wren@example.com', ...s]));
+  assert.deepEqual(stored('activities', 'detail').map((a) => a.x), lines);
+  for (const row of [...stored('emails', 'subject'), ...stored('activities', 'detail')]) assert.ok(row.created_at >= joined, `${row.x} was written after she joined the job`);
+  assert.deepEqual(stored('agency_emails', 'subject').map((e) => e.x), ['Keeping in touch']);
+  assert.deepEqual(stored('agency_activities', 'detail').map((a) => a.x), ['Added to The Book (agency sourced)', 'Emailed candidate: Keeping in touch']);
+  for (const row of [...stored('agency_emails', 'subject'), ...stored('agency_activities', 'detail')]) assert.ok(row.created_at < joined);
+
+  // Who is shown them. Maple's hiring team: the invitations and the lines, newest first, and nothing from The Book.
+  // The agency: everything. Northline's hiring team cannot open her at all.
+  const seen = (await maya.get(`/applications/${wren}`)).body;
+  assert.deepEqual(seen.emails.map((e) => [e.subject, ...whenAndWhere(e.body)]), sent.map((s) => [invitation, ...s]).reverse());
+  assert.deepEqual(seen.activities.map((a) => a.detail), [...lines].reverse());
+  assert.equal(/Keeping in touch|between us|The Book/.test(JSON.stringify(seen)), false);
+  assert.equal(/Keeping in touch|The Book/.test(JSON.stringify((await maya.get('/dashboard')).body)), false);
+  const whole = await detail(dana, wren);
+  assert.deepEqual(whole.emails.map((e) => e.subject), [invitation, invitation, invitation, 'Keeping in touch']);
+  assert.deepEqual(whole.activities.map((a) => a.detail), [...lines].reverse().concat(['Emailed candidate: Keeping in touch', 'Added to The Book (agency sourced)']));
+  assert.equal((await noor.get(`/applications/${wren}`)).status, 404);
+  // The hiring team can edit the interview too, and what they send is on the job like the rest.
+  await (async () => {
+    const answer = await maya.patch(`/interviews/${visit}`, { title: 'Site visit', kind: 'onsite', duration_min: 90, starts_at: '2099-06-03T16:30:00.000Z', location: 'Head office, room 2', notify: true, time_label: 'Wednesday 3 June, 12:30' });
+    assert.equal(answer.status, 200);
+  })();
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM emails WHERE application_id = ?', wren), [{ n: 4 }]);
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM agency_emails WHERE application_id = ?', wren), [{ n: 1 }]);
+
+  // Back in The Book the interview is gone and every e-mail is still on her entry, for the agency. Put on a job at
+  // another client, all of it is the agency's own: nothing about Maple's interview is where Northline's hiring team
+  // is shown from, and they are shown none of it.
+  assert.equal((await dana.del(`/applications/${wren}`)).body.returned, true);
+  const inBook = await detail(dana, wren);
+  assert.deepEqual([inBook.interviews, inBook.emails.map((e) => e.subject)], [[], [invitation, invitation, invitation, invitation, 'Keeping in touch']]);
+  const clinic = await newOpenJob(client.northline, 'Clinic Coordinator');
+  assert.equal((await addToJob(dana, wren, { job_id: clinic.id })).status, 200);
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM emails WHERE application_id = ?', wren), NO_ROW);
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM agency_emails WHERE application_id = ?', wren), [{ n: 5 }]);
+  assert.deepEqual(stored('activities', 'detail').map((a) => a.x), ['Added to Clinic Coordinator at Applied']);
+  const atNorthline = (await noor.get(`/applications/${wren}`)).body;
+  assert.deepEqual([atNorthline.emails, atNorthline.activities.map((a) => a.detail), atNorthline.interviews], [[], ['Added to Clinic Coordinator at Applied'], []]);
+  assert.equal(/Maple|Yard|Site visit|Dock 4|Head office|Keeping in touch/.test(JSON.stringify([atNorthline, (await noor.get('/dashboard')).body, (await noor.get('/interviews')).body])), false);
+  const after_ = await detail(dana, wren);
+  assert.deepEqual(after_.emails.map((e) => e.subject), [invitation, invitation, invitation, invitation, 'Keeping in touch']);
+  assert.ok(after_.activities.some((a) => a.detail === 'Rescheduled Site visit') && after_.activities.some((a) => a.detail === 'Updated Site visit'));
+  // An interview at Northline, edited and sent again, is Northline's to read.
+  const meet = await book_(dana, wren, 'Meet the practice', '2099-08-01T15:00:00.000Z');
+  assert.equal((await dana.patch(`/interviews/${meet}`, { title: 'Meet the practice', starts_at: '2099-08-02T15:00:00.000Z', notify: true, time_label: 'Sunday 2 August, 11:00' })).status, 200);
+  const later = (await noor.get(`/applications/${wren}`)).body;
+  assert.deepEqual(later.emails.map((e) => [e.subject, ...whenAndWhere(e.body)]), [['Interview for Clinic Coordinator at Northline Dental', 'Sunday 2 August, 11:00', 'Details to follow']]);
+  assert.deepEqual(later.activities.map((a) => a.detail), ['Rescheduled Meet the practice', 'Scheduled Meet the practice', 'Added to Clinic Coordinator at Applied']);
 });
 
 test('the demo data has people in The Book without a job', () => {
