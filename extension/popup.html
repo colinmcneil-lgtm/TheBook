@@ -12,6 +12,7 @@
       <button type="button" id="open-settings" class="link" hidden>Change workspace</button>
     </header>
     <p class="connected" id="connected" hidden></p>
+    <p class="outdated" id="outdated" hidden>A newer version of this extension is ready. <a href="#" id="get-update">Download it from your workspace</a>, unzip it over the old folder, then press the reload arrow for “The Book” on chrome://extensions.</p>
 
     <main id="view-loading" class="view"><p class="muted">Loading…</p></main>
 
@@ -55,9 +56,10 @@
         <label>Profile link<input id="f-link" maxlength="2000" /><span class="hint" id="link-hint" hidden></span></label>
         <label>Job
           <select id="f-job" required></select>
+          <span class="hint" id="job-hint" hidden></span>
         </label>
-        <div class="row">
-          <label>Stage<select id="f-stage"></select></label>
+        <div class="row" id="stage-row">
+          <label id="stage-field">Stage<select id="f-stage"></select></label>
           <label>Source
             <select id="f-source">
               <option value="linkedin">LinkedIn</option>

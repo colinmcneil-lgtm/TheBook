@@ -4,7 +4,7 @@ import {
   ArrowLeft, ArrowLeftRight, AudioLines, Check, CircleAlert, ClipboardPaste, Copy, Ellipsis, LoaderCircle, NotebookPen, Pencil, RefreshCw, Send, Sparkles, StickyNote, Trash2, UserPlus, UserRound, X,
 } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
-import { api, ago, firstName, fmtDateTime, photoUrl } from '../lib.js';
+import { api, ago, firstName, fmtDateTime, jobLine, photoUrl } from '../lib.js';
 import { Avatar, Badge, Button, Card, CardHeader, Input, Menu, Select, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import { ReviewBadge } from '../components/bits.jsx';
 import { SubmitModal } from '../components/CandidateModals.jsx';
@@ -117,7 +117,7 @@ function CandidateCard({ data, onPatch, onAttach }) {
               This call is about
               <Select value="" disabled={moving} onChange={(e) => e.target.value && setJob(Number(e.target.value))} aria-label="Which job this call is about" className="!h-8 !w-auto max-w-72 !text-[13px] font-medium">
                 <option value="">Choose a job…</option>
-                {applications.map((a) => <option key={a.id} value={a.id}>{a.job_title} · {a.client_name}</option>)}
+                {applications.map((a) => <option key={a.id} value={a.id}>{jobLine(a)}</option>)}
               </Select>
             </label>
           )}
@@ -143,11 +143,13 @@ function CandidateCard({ data, onPatch, onAttach }) {
           <label className="mt-1.5 flex flex-wrap items-center gap-2 text-[13px] text-stone-500">
             This call is about
             <Select value={application.id} disabled={moving} onChange={(e) => setJob(Number(e.target.value))} aria-label="Which job this call is about" className="!h-8 !w-auto max-w-72 !text-[13px] font-medium">
-              {applications.map((a) => <option key={a.id} value={a.id}>{a.job_title} · {a.client_name}</option>)}
+              {applications.map((a) => <option key={a.id} value={a.id}>{jobLine(a)}</option>)}
             </Select>
           </label>
-        ) : (
+        ) : application.job_id ? (
           <p className="truncate text-[13px] text-stone-500">For <Link to={`/jobs/${application.job_id}`} className="font-medium text-brand-700 hover:underline">{application.job_title}</Link> · {application.client_name}</p>
+        ) : (
+          <p className="truncate text-[13px] text-stone-500">In The Book, not on a job yet</p>
         )}
       </div>
       <div className="flex items-center gap-2">
@@ -344,7 +346,8 @@ function NotesCard({ data, status, onPatch, reload, awaited, className }) {
           </>
         ) : call.notes ? (
           <>
-            {call.notes_before_candidate && status?.ai && hasTranscript && (
+            {/* With no job yet there is nothing more for the notes to take into account. */}
+            {call.notes_before_candidate && application?.job_id && status?.ai && hasTranscript && (
               <Notice>These notes were written before the call was added to {firstName(candidate?.name) || 'a candidate'}, so they do not take the job into account. Press “Write again” to have them written for {application?.job_title || 'the job'}.</Notice>
             )}
             <NotesText text={call.notes} />
@@ -380,6 +383,8 @@ function NotesCard({ data, status, onPatch, reload, awaited, className }) {
 
 function SubmissionCard({ data, status, onPatch, reload, className }) {
   const { call, candidate, application } = data;
+  // A write-up goes to one job's hiring team. Someone saved to The Book without a job has nobody to send it to yet.
+  const onJob = Boolean(application?.job_id);
   const [text, setText] = useState(call.submission || '');
   const [open, setOpen] = useState(false); // writing one by hand, before any draft exists
   const [submitting, setSubmitting] = useState(null); // the application, loaded for the submit dialog
@@ -408,6 +413,7 @@ function SubmissionCard({ data, status, onPatch, reload, className }) {
   const hasMaterial = Boolean(call.transcript?.length || call.notes);
   const blocked = !candidate ? 'Add this call to a candidate first. The draft is written for the hiring team of the job they are being considered for.'
     : !application ? `Choose which of ${firstName(candidate.name)}’s jobs this call is about first (above). The draft is written for that job’s hiring team.`
+    : !onJob ? `${firstName(candidate.name)} is not on a job yet. Add them to a job from their profile first: the draft is written for that job’s hiring team.`
     : !hasMaterial ? 'There is nothing to draft from until this call has a transcript or notes.'
     : status && !status.ai ? 'Drafting is not connected yet, so The Oracle cannot write this for you. You can write it yourself.'
     : null;
@@ -429,7 +435,7 @@ function SubmissionCard({ data, status, onPatch, reload, className }) {
               {dirty && <Button size="sm" busy={saving} icon={Check} onClick={save}>Save changes</Button>}
               {!blocked && <Button size="sm" icon={RefreshCw} onClick={draft}>Write again</Button>}
               <CopyButton text={text} disabled={!text.trim()} />
-              {application && !wasSent && <Button size="sm" variant="primary" icon={Send} busy={loading} disabled={!text.trim()} onClick={submit} className="ml-auto">Submit to the hiring team</Button>}
+              {onJob && !wasSent && <Button size="sm" variant="primary" icon={Send} busy={loading} disabled={!text.trim()} onClick={submit} className="ml-auto">Submit to the hiring team</Button>}
             </div>
             {wasSent ? (
               <p className="flex items-start gap-1.5 text-xs font-medium text-brand-800">
@@ -438,8 +444,9 @@ function SubmissionCard({ data, status, onPatch, reload, className }) {
               </p>
             ) : (
               <p className="text-xs text-stone-500">
-                {application
+                {onJob
                   ? `${sent ? 'This text has not been sent.' : 'Nothing has been sent.'} “Submit to the hiring team” opens this text for a last read, and only then is it sent to ${application.client_name}.${sent ? ' They already have an earlier write-up, which this one would replace.' : ''}`
+                  : application ? `Nothing is sent to anyone from here. Add ${firstName(candidate.name)} to a job from their profile to submit them to its hiring team.`
                   : candidate ? 'Nothing is sent to anyone from here. Choose which job this call is about to submit them to its hiring team.'
                   : 'Nothing is sent to anyone from here. Add the call to a candidate to submit them to the hiring team.'}
               </p>
@@ -450,7 +457,7 @@ function SubmissionCard({ data, status, onPatch, reload, className }) {
             <p className="text-sm text-stone-600">{blocked || `The Oracle can draft the write-up that goes to ${application.client_name} when you submit ${firstName(candidate.name)}: why they are worth meeting, in your words, from what was said on the call.`}</p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="primary" icon={Sparkles} disabled={Boolean(blocked)} title={blocked || undefined} onClick={draft}>Draft the submission</Button>
-              {application && <Button size="sm" icon={NotebookPen} onClick={() => setOpen(true)}>Write it yourself</Button>}
+              {onJob && <Button size="sm" icon={NotebookPen} onClick={() => setOpen(true)}>Write it yourself</Button>}
             </div>
             {!blocked && <p className="text-xs text-stone-500">Nothing is sent until you have read it and pressed Submit yourself.</p>}
           </>

@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { FileUp, LoaderCircle } from 'lucide-react';
-import { api, url, firstName, watchForUpdate, renderTemplate, toLocalInput, fmtDateTime, INTERVIEW_KINDS, RECOMMENDATIONS, REJECT_REASONS, SOURCES , photoUrl, squarePhoto } from '../lib.js';
-import { useApp, useApi } from '../state.jsx';
+import { api, url, firstName, sameName, watchForUpdate, renderTemplate, toLocalInput, fmtDateTime, jobLine, profilePath, INTERVIEW_KINDS, JOB_STATUS, RECOMMENDATIONS, REJECT_REASONS, SOURCES , photoUrl, squarePhoto } from '../lib.js';
+import { useApp, useApi, useOpenCandidate } from '../state.jsx';
 import { Button, Checkbox, Field, Input, Modal, Select, Textarea, Avatar, UpdateNotice, useAction, useToast, cx } from '../ui.jsx';
 
 const useForm = (initial) => {
@@ -159,7 +160,9 @@ export function EmailModal({ data, onClose }) {
   const { data: templates } = useApi('/templates');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
-  const vars = { candidate_first_name: firstName(data.candidate.name), candidate_name: data.candidate.name, job_title: data.job.title, company: data.client.name, sender_name: user.name };
+  // Someone who is not on a job has no job title or company to fill in: those merge fields are left as they are in a
+  // template, and the message cannot be sent until the recruiter has replaced them (see `unfilled`).
+  const vars = { candidate_first_name: firstName(data.candidate.name), candidate_name: data.candidate.name, job_title: data.job?.title, company: data.client?.name, sender_name: user.name };
   const apply = (id) => {
     const t = templates?.find((x) => String(x.id) === id);
     if (!t) return;
@@ -330,22 +333,162 @@ function resumeNote({ labels, status, nameFromFile }) {
   return `Filled in ${labels.join(', ')} from the résumé.${fromName} Please check them.`;
 }
 
-/** Add a sourced or referred candidate straight into a job's pipeline. Dropping a résumé in fills the form from it. */
+/**
+ * Put someone on a job from their profile. For a person saved to The Book without a job, their entry becomes that
+ * job's application, so their notes, résumé, calls and history stay in one place; any open job of any client can be
+ * chosen. For a person who is already on a job, this adds them to another job of the same client.
+ */
+export function AddToJobModal({ data, onClose }) {
+  const { bump } = useApp();
+  const toast = useToast();
+  const open = useOpenCandidate();
+  const navigate = useNavigate();
+  const { application: app, candidate, job: current, client } = data;
+  const another = Boolean(current);
+  const { data: jobs, error } = useApi(url('/jobs', { client_id: client?.id }));
+  // Jobs they are already in are not offered: this one, and any other they are being considered for.
+  const inAlready = new Set([current?.id, ...data.others.map((o) => o.job_id)]);
+  const choices = (jobs || []).filter((j) => j.status !== 'closed' && !inAlready.has(j.id));
+  const byClient = [];
+  for (const j of choices) {
+    let group = byClient.find((g) => g.client === j.client_name);
+    if (!group) byClient.push(group = { client: j.client_name, jobs: [] });
+    group.jobs.push(j);
+  }
+  const [jobId, setJobId] = useState('');
+  const [stageId, setStageId] = useState(''); // empty means the job's first stage, which is the one the list opens on
+  const { data: jobData } = useApi(jobId ? `/jobs/${jobId}` : null);
+  // Why the workspace would not do it, when that is something the recruiter can act on here:
+  // { code: 'already_in_job', message, id, join } or { code: 'duplicate_in_client', message, people }.
+  const [refusal, setRefusal] = useState(null);
+  const refusalBox = useRef(null);
+  useEffect(() => { refusalBox.current?.scrollIntoView({ block: 'nearest' }); }, [refusal]);
+  const chooseJob = (value) => { setJobId(value); setStageId(''); setRefusal(null); };
+  const chosen = choices.find((j) => j.id === Number(jobId));
+  const first = firstName(candidate.name);
+
+  // `into` is the record to add them to, once the recruiter has been shown that this client already has one for them.
+  const [save, busy] = useAction(async (into) => {
+    // Joining an entry to the record that is already in this job, as opposed to adding anyone to the job.
+    const joining = Boolean(into) && refusal?.code === 'already_in_job';
+    setRefusal(null);
+    let result;
+    try {
+      result = await api.post(`/applications/${app.id}/add-to-job`, { job_id: Number(jobId), stage_id: stageId ? Number(stageId) : undefined, into });
+    } catch (err) {
+      const code = err.status === 409 ? err.data?.code : null;
+      // `join` names the client's record that is in the job, when this is an entry in The Book that can be joined to it.
+      if (code === 'already_in_job') return setRefusal({ code, message: err.message, id: err.data.id, join: another ? null : err.data.join });
+      if (code === 'duplicate_in_client') {
+        // One line for each person, however many of that client's jobs they are in.
+        const people = (err.data.matches || []).filter((m, i, all) => all.findIndex((x) => x.candidate_id === m.candidate_id) === i);
+        return setRefusal({ code, message: err.message, people });
+      }
+      throw err;
+    }
+    toast(joining ? `Joined to ${first}’s application for ${chosen?.title || 'that job'}`
+      : result.merged ? `Added to ${chosen?.title || 'the job'} on their existing record` : `${first} added to ${chosen?.title || 'the job'}`);
+    bump();
+    onClose();
+    // Someone who had no job keeps the same profile, wherever it was opened from. A new application in another job
+    // is opened in that job, not over the page of the job they were being looked at in.
+    if (another) navigate(profilePath(Number(jobId), result.id));
+    else open(result.id);
+  });
+
+  const option = (j) => <option key={j.id} value={j.id}>{j.title}{j.status === 'open' ? '' : ` (${JOB_STATUS[j.status]?.label.toLowerCase() || j.status})`}</option>;
+  return (
+    <Modal title={another ? 'Add to another job' : 'Add to a job'} subtitle={another ? `${candidate.name} · ${client.name}` : candidate.name} size="sm" onClose={onClose} onSubmit={() => save()}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={!jobId || Boolean(refusal)}>Add to job</Button></>}>
+      {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">The jobs could not be loaded. {error}</p>
+        : jobs && !choices.length ? (
+          <p className="rounded-lg border border-line bg-stone-50 px-3 py-2.5 text-sm text-stone-600">
+            {another ? `${client.name} has no other open job to add ${first} to.` : <>There are no open jobs yet. <Link to="/jobs" onClick={onClose} className="font-medium text-brand-700 hover:underline">Add a job</Link> first, then come back to add {first} to it.</>}
+          </p>
+        ) : (
+          <>
+            {/* Once a job is chosen the list no longer shows which client it is under, so the hint does. */}
+            <Field label="Job" hint={chosen && !another ? `At ${chosen.client_name}.` : undefined}>
+              <Select value={jobId} onChange={(e) => chooseJob(e.target.value)} required autoFocus disabled={!jobs}>
+                <option value="">Choose a job…</option>
+                {another ? choices.map(option) : byClient.map((g) => <optgroup key={g.client} label={g.client}>{g.jobs.map(option)}</optgroup>)}
+              </Select>
+            </Field>
+            <Field label="Stage">
+              <Select value={stageId} onChange={(e) => { setStageId(e.target.value); setRefusal(null); }} disabled={!jobData}>
+                {(jobData?.stages || []).filter((s) => s.kind !== 'hired').map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </Select>
+            </Field>
+            {!another && !refusal && (
+              <p className="text-xs text-stone-500">Everything on {first}’s profile comes with them: notes, résumé, calls and history. The client’s hiring team sees their details and résumé, and none of the notes, emails or history from before now.</p>
+            )}
+          </>
+        )}
+      {refusal?.code === 'already_in_job' && (
+        <div role="alert" ref={refusalBox} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="min-w-0 flex-1 basis-48 font-medium">{refusal.message}</span>
+            <span className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => { onClose(); open(refusal.id); }}>Open them in that job</Button>
+              {refusal.join && <Button size="sm" variant="primary" busy={busy} onClick={() => save(refusal.join.candidate_id)}>Join this entry to that record</Button>}
+            </span>
+          </div>
+          {refusal.join && (
+            <p className="mt-2 text-xs text-amber-900">That is {chosen ? `${chosen.client_name}’s` : 'the client’s'} own record of them. Joining moves everything saved here (notes, résumé, calls and history) onto their application for that job, so there is one record of this person. What comes from The Book stays hidden from the hiring team.</p>
+          )}
+        </div>
+      )}
+      {refusal?.code === 'duplicate_in_client' && (
+        <div role="alert" ref={refusalBox} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
+          <p className="font-medium">{refusal.message}</p>
+          <ul className="mt-2 space-y-2">
+            {refusal.people.map((m) => (
+              <li key={m.candidate_id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+                <span className="min-w-0 flex-1 basis-40 text-[13px]">
+                  {/* In a new tab, so the two records can be compared before anything is joined. A record that is in no job has nothing to open. */}
+                  {m.application_id
+                    ? <a href={`/candidates?c=${m.application_id}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">{m.name}</a>
+                    : <span className="font-medium">{m.name}</span>}
+                  {m.job_title ? `, in ${m.job_title}${m.stage_name ? ` (${m.stage_name})` : ''}` : m.application_id ? '' : ', not in any job at the moment'}
+                </span>
+                <Button size="sm" variant="primary" busy={busy} onClick={() => save(m.candidate_id)}>Add to their existing record</Button>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-amber-900">Adding to the existing record moves everything saved here onto it (notes, résumé, photo, calls and history), so there is one record for this person at that client.</p>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+const NO_JOB_YET = 'none'; // the Job choice that saves someone to The Book without a job
+
+/**
+ * Add a sourced or referred candidate: straight into a job's pipeline, or to The Book with no job yet when the
+ * dialog is not opened from a job. Dropping a résumé in fills the form from it.
+ */
 export function AddCandidateModal({ jobId, onClose, onAdded }) {
   const { bump, scope } = useApp();
   const toast = useToast();
   const { data: jobs } = useApi(jobId ? null : url('/jobs', { client_id: scope }));
   const [form, setForm, bind] = useForm({ job_id: jobId || '', source: 'agency_sourced', stage_id: '' });
+  const toBook = form.job_id === NO_JOB_YET;
+  const openJobs = (jobs || []).filter((j) => j.status !== 'closed');
+  // With no job to choose, The Book is the only place to put someone, so it is chosen for them.
+  useEffect(() => { if (jobs && !openJobs.length) setForm((f) => (f.job_id ? f : { ...f, job_id: NO_JOB_YET })); }, [jobs]);
   const [file, setFile] = useState(null);
   const [reading, setReading] = useState(false);
   const [filled, setFilled] = useState(null); // what was taken from the résumé: { labels, status, nameFromFile }
   const [over, setOver] = useState(false);
-  const [conflict, setConflict] = useState(null); // the LinkedIn link belongs to someone else's record: { message, matches }
-  const { data: jobData } = useApi(form.job_id ? `/jobs/${form.job_id}` : null);
+  const [conflict, setConflict] = useState(null); // the LinkedIn link or email belongs to someone else's record: { message, matches }
+  const [onJob, setOnJob] = useState(null);       // "No job yet" was chosen for someone who is already on a client's job: the places they are in
+  const { data: jobData } = useApi(form.job_id && !toBook ? `/jobs/${form.job_id}` : null);
   useEffect(() => setForm((f) => ({ ...f, stage_id: '' })), [form.job_id]);
-  useEffect(() => setConflict(null), [form.linkedin]);
+  useEffect(() => setConflict(null), [form.linkedin, form.email]);
+  useEffect(() => setOnJob(null), [form.linkedin, form.email, form.name, form.job_id]);
   const conflictBox = useRef(null);
-  useEffect(() => { conflictBox.current?.scrollIntoView({ block: 'nearest' }); }, [conflict]);
+  useEffect(() => { conflictBox.current?.scrollIntoView({ block: 'nearest' }); }, [conflict, onJob]);
 
   const latest = useRef(form);
   latest.current = form;
@@ -417,8 +560,17 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
 
   const [save, busy] = useAction(async () => {
     setConflict(null);
+    setOnJob(null);
+    if (toBook) {
+      // "Just add to The Book" has nothing to add for somebody who is already on a client's job: a second record of
+      // them would only have to be joined up later. The recruiter is shown where they are instead, as the extension does.
+      const found = await api.get(url('/candidates/lookup', { linkedin: form.linkedin, email: form.email })).catch(() => []);
+      const places = found.filter((r) => r.job_id && sameName(r.name, form.name));
+      if (places.length && !found.some((r) => r.general)) return setOnJob(places);
+    }
     const fd = new FormData();
-    for (const [k, v] of Object.entries(form)) if (v) fd.append(k, v);
+    // With no job sent, the person is saved to The Book without one (and so without a stage).
+    for (const [k, v] of Object.entries(form)) if (v && !(toBook && (k === 'job_id' || k === 'stage_id'))) fd.append(k, v);
     if (file) fd.append('resume', file);
     let added;
     try {
@@ -427,14 +579,21 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
       if (err.status !== 409 || err.data?.code !== 'link_conflict') throw err;
       return setConflict({ message: err.message, matches: err.data.matches || [] });
     }
-    toast(added.known ? `Added to ${added.name || form.name}'s existing record` : `${firstName(form.name)} added to the pipeline`);
+    const who = added.name || form.name;
+    // Someone already in The Book without a job is not saved twice. A résumé sent goes onto the entry they have, and
+    // one they already had is kept as an earlier résumé. Added to a job, their entry is what goes on the job.
+    const resumeNews = { added: ', so the résumé was added to their entry', replaced: '. This résumé is now on their profile, and the one they had is kept under Earlier résumés', unchanged: ', with this same résumé' }[added.resume] ?? '';
+    toast(toBook
+      ? added.known ? `${who} was already in The Book${resumeNews}` : `${firstName(form.name)} added to The Book`
+      : added.moved ? (added.joined ? `Added to ${who}'s existing record, with everything saved on them in The Book` : `${who} was already in The Book, so their entry went on the job with its notes, résumé and calls`)
+      : added.known ? `Added to ${who}'s existing record` : `${firstName(form.name)} added to the pipeline`);
     bump();
     onClose();
     onAdded?.(added.id);
   });
   return (
     <Modal title="Add candidate" subtitle="For people you have sourced, referrals, or applicants who came in another way." onClose={onClose} onSubmit={save}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Add candidate</Button></>}>
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>{toBook ? 'Add to The Book' : 'Add candidate'}</Button></>}>
       <label
         onDragOver={(e) => { e.preventDefault(); setOver(true); }}
         onDragLeave={() => setOver(false)}
@@ -454,10 +613,11 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
       {filled?.status === 'updated' && <UpdateNotice>Refreshing clears this form. To carry on without refreshing, fill in the details by hand; the file stays attached.</UpdateNotice>}
       <div className="grid gap-4 sm:grid-cols-2">
         {!jobId && (
-          <Field label="Job" className="sm:col-span-2">
+          <Field label="Job" className="sm:col-span-2" hint={toBook ? 'They are saved without a job or a stage, and only your agency sees them. You can add them to a job from their profile.' : undefined}>
             <Select {...bind('job_id')} required>
               <option value="">Choose a job…</option>
-              {(jobs || []).filter((j) => j.status !== 'closed').map((j) => <option key={j.id} value={j.id}>{j.title} · {j.client_name}</option>)}
+              <option value={NO_JOB_YET}>No job yet: just add to The Book</option>
+              {openJobs.map((j) => <option key={j.id} value={j.id}>{j.title} · {j.client_name}</option>)}
             </Select>
           </Field>
         )}
@@ -465,21 +625,37 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
         <Field label="Source">
           <Select {...bind('source')}>{Object.entries(SOURCES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select>
         </Field>
-        <Field label="Starting stage">
-          <Select {...bind('stage_id')} disabled={!jobData}>
-            {(jobData?.stages || []).filter((s) => s.kind !== 'hired').map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </Select>
-        </Field>
+        {!toBook && (
+          <Field label="Starting stage">
+            <Select {...bind('stage_id')} disabled={!jobData}>
+              {(jobData?.stages || []).filter((s) => s.kind !== 'hired').map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </Select>
+          </Field>
+        )}
       </div>
-      {conflict ? (
+      {onJob ? (
+        <div role="alert" ref={conflictBox} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
+          <p className="font-medium">{onJob[0].name} is already in your workspace, so they were not added to The Book as well.</p>
+          <ul className="mt-1.5 space-y-1 text-[13px]">
+            {onJob.map((m) => (
+              <li key={m.application_id}>
+                {/* In a new tab, so what has been typed here is not lost. */}
+                <a href={profilePath(m.job_id, m.application_id)} target="_blank" rel="noopener noreferrer" className="font-medium underline">Open {m.name}</a>
+                <span className="text-amber-900"> · {jobLine(m)}{m.status && m.status !== 'active' ? ` (${m.status})` : m.stage_name ? ` (${m.stage_name})` : ''}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 text-xs text-amber-900">To put them forward for another job, choose that job above.</p>
+        </div>
+      ) : conflict ? (
         <div role="alert" ref={conflictBox} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-900">
           <p className="font-medium">{conflict.message}</p>
           <ul className="mt-1.5 space-y-1 text-[13px]">
             {conflict.matches.map((m) => (
               <li key={m.application_id}>
                 {/* In a new tab, so what has been typed here is not lost. */}
-                <a href={`/jobs/${m.job_id}?c=${m.application_id}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">Open {m.name}</a>
-                <span className="text-red-800"> · {[m.job_title, m.client_name].filter(Boolean).join(' · ')}</span>
+                <a href={profilePath(m.job_id, m.application_id)} target="_blank" rel="noopener noreferrer" className="font-medium underline">Open {m.name}</a>
+                <span className="text-red-800"> · {jobLine(m)}</span>
               </li>
             ))}
           </ul>

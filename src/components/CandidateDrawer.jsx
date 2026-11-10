@@ -1,16 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines,
+  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines,
 } from 'lucide-react';
-import { api, url, ago, since, extUrl, photoUrl, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
+import { api, url, ago, since, extUrl, photoUrl, fmtDate, fmtDateTime, money, firstName, NO_JOB, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import ResumeViewer from './ResumeViewer.jsx';
 import { CallStatus, PhoneMark, callName, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
 import { personOf, usePhone } from '../oracle/phone.jsx';
 import { telHref } from '../oracle/calls.js';
-import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal } from './CandidateModals.jsx';
+import { NoJobBadge } from './bits.jsx';
+import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, EditCandidateModal, AddToJobModal } from './CandidateModals.jsx';
 
 const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
 const DELIVERY = { sent: { label: 'Sent', tone: 'green' }, failed: { label: 'Delivery failed', tone: 'red' }, not_configured: { label: 'Saved, not sent', tone: 'amber' } };
@@ -34,11 +35,14 @@ function CandidateView({ data, onClose }) {
   // and the call is written up). Otherwise the number is an ordinary link that dials from their own device.
   const callThroughTheBook = isAgency && phone.status?.configured ? () => phone.openDialer({ person: personOf(data), application_id: data.application.id }) : null;
   const [tab, setTab] = useState('overview');
-  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'edit' | { review } | { scorecard }
+  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'edit' | 'addToJob' | { review } | { scorecard }
   const { application: app, candidate, job, client, stages } = data;
+  // Someone saved to The Book without a job: there is no job, client or stage, so everything that works on one
+  // (moving, rejecting, scheduling, submitting, offers) is left off their profile, and "Add to a job" leads instead.
+  const general = Boolean(app.general) || !job;
   const stage = stages.find((s) => s.id === app.stage_id);
-  const next = stages.find((s) => s.position === stage.position + 1);
-  const active = app.status === 'active';
+  const next = stage && stages.find((s) => s.position === stage.position + 1);
+  const active = app.status === 'active' && !general;
 
   const [move, moving] = useAction(async (stageId) => {
     const { stage: to } = await api.post(`/applications/${app.id}/move`, { stage_id: stageId });
@@ -56,7 +60,7 @@ function CandidateView({ data, onClose }) {
   const [withdraw] = useAction(async () => { await api.post(`/applications/${app.id}/withdraw`); toast('Marked as withdrawn'); bump(); });
   const [erase] = useAction(async () => {
     const others = data.others.length ? ` This also removes their ${data.others.length === 1 ? 'application' : 'applications'} for ${data.others.map((o) => o.job_title).join(', ')}.` : '';
-    if (!window.confirm(`Permanently delete everything held on ${candidate.name} at ${client.name}: contact details, notes, scorecards, interviews, emails, résumé and recorded calls?${others} This cannot be undone.`)) return;
+    if (!window.confirm(`Permanently delete everything held on ${candidate.name}${client ? ` at ${client.name}` : ''}: contact details, notes, scorecards, interviews, emails, résumé and recorded calls?${others} This cannot be undone.`)) return;
     await api.del(`/candidates/${candidate.id}`);
     toast(`All data on ${candidate.name} deleted`);
     onClose();
@@ -64,14 +68,19 @@ function CandidateView({ data, onClose }) {
   });
 
   const [removeFromJob] = useAction(async () => {
-    if (!window.confirm(`Remove ${candidate.name} from ${job.title}? Their notes, scorecards and interviews for this job are deleted.${data.others.length ? ' Their other applications are kept.' : ` This is their only application, so their record is removed too${calls?.length ? ', along with the calls recorded with them' : ''}.`}`)) return;
-    await api.del(`/applications/${app.id}`);
-    toast(`Removed from ${job.title}`);
+    // Someone who was in The Book before this job goes back to it, with what the agency kept on them. Anyone else
+    // is removed with what was written for the job.
+    const question = app.from_book
+      ? `Remove ${candidate.name} from ${job.title}? They go back to The Book without a job and keep their notes, résumé, calls and history. Their interviews, scorecards, rating and any offer for this job are deleted.`
+      : `Remove ${candidate.name} from ${job.title}? Their notes, scorecards and interviews for this job are deleted.${data.others.length ? ' Their other applications are kept.' : ` This is their only application, so their record is removed too${calls?.length ? ', along with the calls recorded with them' : ''}.`}`;
+    if (!window.confirm(question)) return;
+    const result = await api.del(`/applications/${app.id}`);
+    toast(result.returned ? `${firstName(candidate.name)} is back in The Book without a job` : `Removed from ${job.title}`);
     onClose();
     bump();
   });
 
-  // Other people at this client with the same LinkedIn link, one entry each however many jobs they are in.
+  // Other records with the same LinkedIn link (at this client, or in The Book without a job), one entry each however many jobs they are in.
   const duplicates = (data.duplicates || []).filter((d, i, all) => all.findIndex((x) => x.candidate_id === d.candidate_id) === i);
   const [merge, merging] = useAction(async (other) => {
     if (!window.confirm(`Merge the other record for ${other.name} into this one? Its applications, with their notes and interviews, move to ${candidate.name}; contact details missing here are filled in from it; and the other record is then removed. This cannot be undone.`)) return;
@@ -97,9 +106,13 @@ function CandidateView({ data, onClose }) {
             {(candidate.current_title || candidate.current_company) && (
               <p className="text-sm text-stone-600">{[candidate.current_title, candidate.current_company].filter(Boolean).join(' at ')}</p>
             )}
-            <p className="mt-0.5 text-sm text-stone-500">
-              For <Link to={`/jobs/${job.id}`} className="font-medium text-brand-700 hover:underline">{job.title}</Link> · {client.name}
-            </p>
+            {general ? (
+              <p className="mt-0.5 text-sm text-stone-500">In The Book, not on a job yet</p>
+            ) : (
+              <p className="mt-0.5 text-sm text-stone-500">
+                For <Link to={`/jobs/${job.id}`} className="font-medium text-brand-700 hover:underline">{job.title}</Link> · {client.name}
+              </p>
+            )}
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-stone-600">
               {candidate.email
                 ? <a href={`mailto:${candidate.email}`} className="inline-flex items-center gap-1.5 hover:text-brand-700"><Mail className="size-3.5" />{candidate.email}</a>
@@ -120,7 +133,9 @@ function CandidateView({ data, onClose }) {
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          {active || app.status === 'hired' ? (
+          {general ? (
+            isAgency && <Button variant="primary" icon={BriefcaseBusiness} onClick={() => setModal('addToJob')}>Add to a job</Button>
+          ) : active || app.status === 'hired' ? (
             <>
               <Select aria-label="Stage" value={app.stage_id} onChange={(e) => move(Number(e.target.value))} disabled={moving} className="!w-auto max-w-52 font-medium">
                 {stages.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -144,12 +159,13 @@ function CandidateView({ data, onClose }) {
               active && { label: 'Schedule interview', icon: CalendarPlus, onClick: () => setModal('schedule') },
               { label: 'Email candidate', icon: Mail, onClick: () => setModal('email') },
               isAgency && active && { label: app.review_status ? 'Resubmit to hiring team' : 'Submit to hiring team', icon: Send, onClick: () => setModal('submit') },
-              isAgency && { label: data.offer ? 'Update offer' : 'Record an offer', icon: Banknote, onClick: () => setModal('offer') },
+              isAgency && !general && { label: data.offer ? 'Update offer' : 'Record an offer', icon: Banknote, onClick: () => setModal('offer') },
               isAgency && { label: 'Edit details', icon: Pencil, onClick: () => setModal('edit') },
+              isAgency && !general && { label: 'Add to another job', icon: BriefcaseBusiness, onClick: () => setModal('addToJob') },
               active && null,
               active && { label: 'Candidate withdrew', icon: LogOut, onClick: withdraw },
               isAgency && null,
-              isAgency && { label: 'Remove from this job', icon: X, danger: true, onClick: removeFromJob },
+              isAgency && !general && { label: 'Remove from this job', icon: X, danger: true, onClick: removeFromJob },
               isAgency && { label: 'Delete all data on this person', icon: Trash2, danger: true, onClick: erase },
             ]}
           />
@@ -162,7 +178,7 @@ function CandidateView({ data, onClose }) {
           tabs={[
             { id: 'overview', label: 'Overview' },
             app.resume_file && { id: 'resume', label: 'Résumé' },
-            { id: 'interviews', label: 'Interviews', count: data.interviews.length || undefined },
+            !general && { id: 'interviews', label: 'Interviews', count: data.interviews.length || undefined },
             isAgency && { id: 'calls', label: 'Calls', count: calls?.length || undefined },
             { id: 'activity', label: 'Activity' },
             { id: 'emails', label: 'Emails', count: data.emails.length || undefined },
@@ -198,7 +214,7 @@ function CandidateView({ data, onClose }) {
 
         {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onResume={() => setTab('resume')} />}
         {tab === 'resume' && app.resume_file && <ResumeViewer app={app} />}
-        {tab === 'interviews' && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onScorecard={(i) => setModal({ scorecard: i })} />}
+        {tab === 'interviews' && !general && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onScorecard={(i) => setModal({ scorecard: i })} />}
         {tab === 'calls' && isAgency && <CallsTab data={data} calls={calls} error={callsError} onCall={candidate.phone ? callThroughTheBook : null} />}
         {tab === 'activity' && <ActivityTab data={data} />}
         {tab === 'emails' && <EmailsTab data={data} onCompose={() => setModal('email')} />}
@@ -210,8 +226,9 @@ function CandidateView({ data, onClose }) {
       {modal === 'submit' && <SubmitModal data={data} onClose={() => setModal(null)} />}
       {modal === 'offer' && <OfferModal data={data} onClose={() => setModal(null)} />}
       {modal === 'edit' && <EditCandidateModal data={data} onClose={() => setModal(null)} />}
+      {modal === 'addToJob' && <AddToJobModal data={data} onClose={() => setModal(null)} />}
       {modal?.review && <ReviewModal data={data} decision={modal.review} onClose={() => setModal(null)} />}
-      {modal?.scorecard && <ScorecardModal interview={modal.scorecard} criteria={job.criteria} candidateName={candidate.name} onClose={() => setModal(null)} />}
+      {modal?.scorecard && job && <ScorecardModal interview={modal.scorecard} criteria={job.criteria} candidateName={candidate.name} onClose={() => setModal(null)} />}
     </>
   );
 }
@@ -257,8 +274,11 @@ function ReviewBanner({ data, onDecide }) {
 function Overview({ data, onOffer, onResume }) {
   const { isAgency, bump, user } = useApp();
   const { application: app, client } = data;
+  const general = Boolean(app.general) || !data.job;
   const [note, setNote] = useState('');
-  const [isPrivate, setPrivate] = useState(false);
+  // A note on someone who is not on a job yet is always agency only (the workspace stores it that way whatever is
+  // sent), so there is nothing to tick: no client is in view, and it must not turn up in front of one later.
+  const [isPrivate, setPrivate] = useState(general);
   const [addNote, saving] = useAction(async () => {
     await api.post(`/applications/${app.id}/notes`, { body: note, private: isPrivate });
     setNote('');
@@ -266,7 +286,7 @@ function Overview({ data, onOffer, onResume }) {
   });
   const [rate] = useAction(async (rating) => { await api.patch(`/applications/${app.id}`, { rating }); bump(); });
   const [removeNote] = useAction(async (id) => { await api.del(`/notes/${id}`); bump(); });
-  const { data: owners } = useApi(isAgency ? url('/owners', { client_id: client.id }) : null);
+  const { data: owners } = useApi(isAgency ? url('/owners', { client_id: client?.id }) : null);
   const [assign] = useAction(async (ownerId) => { await api.patch(`/applications/${app.id}`, { owner_id: ownerId || null }); bump(); });
   const stage = data.stages.find((s) => s.id === app.stage_id);
   const row = (label, value) => (
@@ -283,7 +303,9 @@ function Overview({ data, onOffer, onResume }) {
           <form onSubmit={(e) => { e.preventDefault(); addNote(); }}>
             <Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note for the team…" aria-label="New note" />
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-              {isAgency ? <Checkbox checked={isPrivate} onChange={(e) => setPrivate(e.target.checked)} label="Agency only (hidden from the client)" /> : <span />}
+              {!isAgency ? <span />
+                : general ? <span className="inline-flex min-w-0 flex-1 basis-56 items-center gap-1.5 text-[13px] text-stone-500"><Lock className="size-3.5 shrink-0" />Only your agency sees notes on someone who is not on a job, now and after they are added to one.</span>
+                : <Checkbox checked={isPrivate} onChange={(e) => setPrivate(e.target.checked)} label="Agency only (hidden from the client)" />}
               <Button type="submit" variant="primary" size="sm" busy={saving} disabled={!note.trim()}>Add note</Button>
             </div>
           </form>
@@ -331,11 +353,12 @@ function Overview({ data, onOffer, onResume }) {
       <div className="space-y-4">
         <Card className="px-4 py-2.5">
           <dl className="divide-y divide-line">
-            {row('Stage', stage.name)}
-            {row('In stage', since(app.stage_entered_at))}
-            {row('Applied', fmtDate(app.applied_at, true))}
+            {/* Someone who is not on a job has no stage, and nothing to be rated against yet. */}
+            {general ? row('Job', <NoJobBadge />) : row('Stage', stage?.name)}
+            {!general && row('In stage', since(app.stage_entered_at))}
+            {row(general ? 'Added' : 'Applied', fmtDate(app.applied_at, true))}
             {row('Source', SOURCES[app.source] || app.source)}
-            {row('Rating', <Stars value={app.rating} onChange={rate} />)}
+            {!general && row('Rating', <Stars value={app.rating} onChange={rate} />)}
             {row('Owner', isAgency ? (
               <select aria-label="Owner" value={app.owner_id ?? ''} onChange={(e) => assign(e.target.value)} className="max-w-36 cursor-pointer rounded-md border border-line bg-white py-0.5 pr-6 pl-1.5 text-right text-sm font-medium">
                 <option value="">Unassigned</option>
@@ -360,7 +383,23 @@ function Overview({ data, onOffer, onResume }) {
         ) : (
           <div className="rounded-xl border border-dashed border-stone-300 px-4 py-3 text-sm text-stone-500">No résumé on file.</div>
         )}
-        {(data.offer || (isAgency && stage.kind === 'offer')) && (
+        {/* Résumés a newer one took the place of. They are kept, never deleted, and are the agency's alone. */}
+        {isAgency && data.earlier_resumes?.length > 0 && (
+          <Card className="p-4">
+            <h3 className="text-sm font-semibold text-stone-900">Earlier résumés</h3>
+            <p className="mt-0.5 text-xs text-stone-500">Kept when a newer résumé was added. Only your agency sees them.</p>
+            <ul className="mt-2 space-y-2 text-sm">
+              {data.earlier_resumes.map((r) => (
+                <li key={r.id}>
+                  {/* The whole file name is shown, on as many lines as it needs: it is how one résumé is told from another. */}
+                  <a href={`/api/applications/${app.id}/resumes/${r.id}`} download className="block font-medium break-words text-brand-700 hover:underline">{r.name || 'Résumé'}</a>
+                  <span className="block text-xs text-stone-500">Replaced on {fmtDate(r.kept_at, true)}</span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
+        {!general && (data.offer || (isAgency && stage?.kind === 'offer')) && (
           <Card className="p-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold text-stone-900">Offer</h3>
@@ -382,7 +421,7 @@ function Overview({ data, onOffer, onResume }) {
             <h3 className="text-sm font-semibold text-stone-900">Also considered for</h3>
             <ul className="mt-2 space-y-1.5 text-sm">
               {data.others.map((o) => (
-                <li key={o.id}><Link to={`?c=${o.id}`} className="font-medium text-brand-700 hover:underline">{o.job_title}</Link> <span className="text-stone-500">· {o.status === 'active' ? o.stage_name : o.status}</span></li>
+                <li key={o.id}><Link to={`?c=${o.id}`} className="font-medium text-brand-700 hover:underline">{o.job_title || NO_JOB}</Link>{o.job_title && <span className="text-stone-500"> · {o.status === 'active' ? o.stage_name : o.status}</span>}</li>
               ))}
             </ul>
           </Card>

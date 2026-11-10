@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AudioLines, FileAudio, Mic, MonitorSpeaker, Pause, Phone, Play, Square, Upload, UserPlus } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
-import { api, url, fmtDateTime, photoUrl } from '../lib.js';
+import { api, url, fmtDateTime, jobLine, photoUrl, NO_JOB } from '../lib.js';
 import { Avatar, Badge, Button, Card, CardHeader, Empty, Field, Input, Modal, Page, useAction, useToast, cx } from '../ui.jsx';
 import { CONSENT_WORDING, UPLOAD_CONSENT_WORDING, Elapsed, LevelMeter, MicBadge, limitWords, sessionLabel, useRecorder } from '../oracle/RecorderProvider.jsx';
 import { CallRecorder } from '../oracle/recorder.js';
@@ -172,7 +172,7 @@ function RecordCard({ picked, setPicked }) {
             {state === 'stopping' ? 'Saving the call' : paused ? 'Paused' : 'Recording'}
           </span>
           <span className="mt-1 block truncate text-sm font-medium text-white">{sessionLabel(session)}</span>
-          {session?.subject?.job_title && <span className="block truncate text-[13px] text-white/85">{session.subject.job_title}</span>}
+          {session?.subject && <span className="block truncate text-[13px] text-white/85">{session.subject.job_title || NO_JOB}</span>}
         </div>
         <Elapsed className="text-4xl leading-none font-semibold tracking-tight sm:text-5xl" />
       </div>
@@ -289,7 +289,8 @@ function CallRow({ call, onAttach }) {
   const phone = usePhone();
   const onThePhone = phone.live && phone.call.call_id === call.id; // this is the phone call under way right now
   // A call named after the candidate does not repeat their name on the second line. A phone call adds the other number.
-  const who = [!callName(call).includes(call.candidate_name) && call.candidate_name, call.job_title, call.client_name, call.phone_display].filter(Boolean).join(' · ');
+  // A call with someone saved to The Book without a job says so where the job and client would be.
+  const who = [!callName(call).includes(call.candidate_name) && call.candidate_name, call.candidate_id && jobLine(call), call.phone_display].filter(Boolean).join(' · ');
   const phoned = call.source === 'phone';
   return (
     <li className="relative flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 hover:bg-stone-50">
@@ -342,7 +343,7 @@ export default function Oracle() {
     if (!preselect || asked.current === preselect) return;
     asked.current = preselect;
     api.get(`/applications/${preselect}`)
-      .then((d) => setPicked(pickOf({ application_id: d.application.id, candidate_id: d.candidate.id, name: d.candidate.name, photo: d.candidate.photo, job_title: d.job.title, client_name: d.client.name })))
+      .then((d) => setPicked(pickOf({ application_id: d.application.id, candidate_id: d.candidate.id, name: d.candidate.name, photo: d.candidate.photo, job_title: d.job?.title ?? null, client_name: d.client?.name ?? null })))
       .catch(() => {})
       .finally(() => { const next = new URLSearchParams(params); next.delete('application'); setParams(next, { replace: true }); });
   }, [preselect]);

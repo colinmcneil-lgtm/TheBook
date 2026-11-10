@@ -61,6 +61,62 @@ GitHub page, a personal site, a company's team page, a LinkedIn Recruiter or Sal
   "Possible duplicate", and an agency user can merge them. Merging moves every application, note, interview and
   email onto the record you keep.
 
+## People in The Book without a job
+
+A person can be saved to The Book with no job chosen, from the Chrome extension on their profile or from Add
+candidate in the app, and put on a job later when the right role comes up.
+
+- **What they have.** Everything on a profile that does not need a job: an owner, a résumé, a photo, notes, e-mails
+  to them, calls in The Oracle and phone calls, Edit details and Delete candidate data. Stages, rejecting and
+  withdrawing, the hiring team, interviews, offers and ratings belong to a job, so each of those answers "Add them
+  to a job first."
+- **Where they are.** On the Candidates page, under their own tab, "Not on a job yet", which shows how many there
+  are; "Everyone" lists them with everybody else. The other tabs (In process, Hired, Rejected, Withdrawn) are about
+  a pipeline and leave them out, so "In process" shows the same people the dashboard's "Active candidates" counts.
+  They are in no job, client, pipeline board, inbox, dashboard figure or report, and a list for one client or one
+  job never contains them. They belong to the agency: client users never see them, and their notes are always
+  agency-only.
+- **Who counts as the same person.** Among people saved without a job, the same rules as within a client: one
+  record per e-mail address, or failing that per LinkedIn link. Saving somebody again adds what was sent to the
+  entry they have and makes nothing new. An address or a link that is on an entry under a plainly different name
+  is put to you instead, so one person's résumé, photo and note never land on another's entry.
+- **Résumés are never written over.** When somebody who already has a résumé is saved again with another, the new
+  one goes on their profile and the one they had is kept under "Earlier résumés" there, for the agency to download.
+  The same file sent twice is kept once. Earlier résumés are deleted only with the person.
+- **Putting them on a job.** Their entry becomes that job's application at the stage chosen (the first stage if
+  none is), and keeps its notes, résumé, calls and history. The date they entered the job is the day they were put
+  on it, so time to hire is not counted from the day they were first saved. The client's hiring team sees the
+  application from that moment on: nothing written or sent while the person was on no job is shown to them, nor
+  the date they were first saved.
+- **However you add them, it is the same entry.** "Add to a job" on their profile, choosing a job in the
+  extension, and Add candidate in the app with a job chosen all do this: there is no way to end up with a second
+  record of somebody who was in The Book. Add candidate and the extension recognise them by e-mail address or
+  LinkedIn link when the name agrees. The other way round, "No job yet" for somebody who is already on a client's
+  job shows you where they are instead of saving them a second time.
+- **When the client already has a record of them.** From their profile you are asked whether to join the two; from
+  Add candidate and the extension, which add to the client's existing record anyway, the entry is joined to it.
+  The entry then moves onto the client's record. Where the two disagreed (another e-mail address, phone number,
+  location), the client's record keeps its own, and the history says what the entry had, for the agency only. If
+  the client's record is already in the job you chose, "Join this entry to that record" folds the entry into the
+  application they have there: its notes stay agency-only and its history and e-mails are hidden from the hiring
+  team.
+- **If the job is deleted, or they are removed from it,** somebody who was in The Book before goes back to The Book
+  without a job, with their notes, résumé, e-mails, calls and history, including what was added while they were on
+  the job. Only what belonged to the job goes: interviews and scorecards, the offer, the rating and the write-up for
+  the hiring team. Everyone else in a deleted job is deleted with it, as before. "Delete all data on this person"
+  still erases them completely.
+- **Somebody already on a job** can be added to another job of the same client the same way, as a new application
+  with a copy of their résumé. Each client keeps its own record of a person, so for a job at another client they
+  are added as a new candidate.
+
+The first start after this was added changes the database in place: three columns stop being required, history
+lines and e-mails gain a marker that is off on every existing row, one empty table is added for earlier résumés,
+and nothing else about existing people or applications changes. `test/pool-upgrade.test.mjs` builds a database with
+the code from before, fills it, upgrades it and compares every row, id, counter, index and foreign key, including
+a start that is cut off half-way. It was run on made-up databases, not on a copy of a live one, so take a back-up
+of `DATA_DIR` before the first deploy. `test/pool.test.mjs` runs the rest against the real API on two ports from
+`POOL_TEST_PORT` (the two after the calendar tests' five unless set).
+
 ## The Oracle
 
 The Oracle is where recruiters record their calls with candidates.
@@ -558,13 +614,28 @@ from the folder named in `CALENDAR_TEST_FILES`; that setting is refused when `NO
 
 `extension/` is a Chrome extension for sourcing. On a LinkedIn profile (or a GitHub profile, or a company's team
 page), click its icon: the person's name, title, company, location and profile link are filled in, you choose the
-job and stage, and they are added to that pipeline with you as the owner. It warns you when the person is already
-in the workspace. It only reads the page when you click it, and only talks to your workspace, using the sign-in
-you already have there.
+job and stage, and they are added to that pipeline with you as the owner. Or choose "No job yet: just add to The
+Book" (the first choice under Job, and the one a new install starts on): the person is saved without a job, and
+you add them to one later from their profile (see
+[People in The Book without a job](#people-in-the-book-without-a-job)). The choice is remembered, as the last job
+is, and the popup works in a workspace that has no jobs yet. It warns you when the person is already in the
+workspace, and does not save someone to The Book twice. When the person is already in The Book without a job and
+you choose a job, the entry they have is put on that job and what you typed is added to it, in one step: their
+notes, résumé, calls and history come with them and no second record is made. If the workspace refuses (a
+colleague added them a moment ago, say), nothing is saved and the popup shows how things stand now. It only reads
+the page when you click it, and only talks to your workspace, using the sign-in you already have there.
 
 Everyone on the team can download it from Settings, Browser extension, which also has the four install steps
 (Chrome, Load unpacked). `npm run build` packs the folder into that download. To offer it through the Chrome Web
 Store instead, zip the folder and submit it from a Chrome developer account.
+
+**It does not update itself.** Loaded from a folder, an installed copy stays as it is until it is replaced. After
+a release that changes the extension (0.4.0 added "No job yet"), each person downloads it again from Settings,
+Browser extension, unzips it over the old folder, and presses the reload arrow on "The Book" at
+`chrome://extensions`; the workspace address is kept. From 0.5.0 the popup compares itself with the copy the
+workspace has ready and says so across the top when it is behind. A copy from before that cannot say anything, so
+tell the team when you deploy. An older copy keeps working in the meantime: it has no "No job yet" choice, but
+choosing a job for somebody who is in The Book still moves their entry, because the workspace does that itself.
 
 It also copies the person's profile photo (untick "Save their profile photo" to leave it out). The picture is
 cropped to a small square and stored in your workspace, so nothing is loaded from LinkedIn afterwards. Chrome
@@ -731,8 +802,8 @@ they made at that client, their résumé files, and their recorded calls with th
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
 - Automated tests that drive the screens in a browser as part of `npm test`. `npm test` covers the résumé reader,
   job autofill (the plain reader, and the route against a stand-in for the AI service), the recruiter brief, the activity
-  feed's milestones, résumé and photo files, the Oracle's server side, the Oracle's uploader, phone calls against a stand-in for Twilio, and the
-  calendar against calendar files. The Oracle's screens were driven end to end in Chrome with a simulated microphone
+  feed's milestones, résumé and photo files, the Oracle's server side, the Oracle's uploader, phone calls against a stand-in for Twilio, the
+  calendar against calendar files, people saved without a job, and the database upgrade that made room for them. The Oracle's screens were driven end to end in Chrome with a simulated microphone
   while it was built (record, reload and server restart mid-call, a lost connection, two people on one computer,
   transcript, notes, add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude. The
   phone and calendar screens were driven the same way at 1280 and 390 wide (save a mobile and PIN, call and watch

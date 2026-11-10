@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CalendarDays, ChevronDown, Copy, ExternalLink, Pencil, Trash2, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { api, url, daysSince, fmtDate, photoUrl, salaryRange, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
@@ -162,13 +162,18 @@ export default function JobDetail() {
 
   const [setStatus] = useAction(async (status) => { await api.patch(`/jobs/${id}/status`, { status }); toast(`Job is now ${JOB_STATUS[status].label.toLowerCase()}`); bump(); });
   const [remove] = useAction(async () => {
-    if (!window.confirm('Delete this job and every candidate in it? This cannot be undone.')) return;
+    // People who were in The Book before they were put on this job are not deleted with it: the workspace sends them back.
+    if (!window.confirm('Delete this job and every candidate in it? Anyone who was in The Book before they were added to this job goes back to The Book without a job, with their notes, résumé and calls. Everyone else in the job is deleted. This cannot be undone.')) return;
     await api.del(`/jobs/${id}`);
     toast('Job deleted');
     navigate('/jobs');
     bump();
   });
 
+  // A link to somebody's profile inside a job that is not there (the job was deleted and they went back to The Book,
+  // or an older copy of the browser extension made the link for someone who is on no job) opens the profile on the
+  // Candidates page instead of over an error.
+  if (error === 'Not found' && params.get('c')) return <Navigate to={`/candidates?c=${encodeURIComponent(params.get('c'))}`} replace />;
   if (error) return <Page title="This job could not be opened"><Card><Pending error={error === 'Not found' ? 'It does not exist, or you do not have access to it.' : error} /></Card><Link to="/jobs" className="mt-4 inline-block text-sm font-medium text-brand-700 hover:underline">Back to jobs</Link></Page>;
   if (!data || !apps) return <Pending error={appsError} />;
   const { job, stages } = data;

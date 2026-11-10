@@ -1,6 +1,6 @@
 // Popup for The Book extension. It reads the profile in the current tab (only when the recruiter opens this popup),
-// lets them pick a job and stage, and adds the person to that pipeline in their workspace. It talks only to the
-// workspace address the recruiter entered, using the session they are already signed in with there.
+// and saves the person to their workspace: into a job's pipeline at a chosen stage, or just to The Book with no job
+// yet. It talks only to the workspace address the recruiter entered, using the session they are already signed in with there.
 // Anything that comes from the page or the workspace is put on screen as plain text (value / textContent), never as markup.
 
 const $ = (id) => document.getElementById(id);
@@ -13,6 +13,8 @@ let base = '';        // the workspace origin, e.g. https://hiring.youragency.co
 let jobs = [];
 let known = [];       // where this person already is in the workspace
 let lastStages = {};  // remembered stage per job
+const BOOK = 'book';  // the Job choice that means "no job yet: just add to The Book"
+const toBook = () => $('f-job').value === BOOK;
 let photo = null;     // the person's picture, ready to send: { blob, preview }
 let photoFrom = null; // where it can be fetched from: { url, tabId }
 
@@ -232,6 +234,11 @@ $('f-photo').addEventListener('change', () => chrome.storage.local.set({ savePho
 function fillJobs(preferred) {
   const select = $('f-job');
   select.replaceChildren();
+  // First, and so the choice a new install starts on: save the person without deciding which job they are for.
+  const book = document.createElement('option');
+  book.value = BOOK;
+  book.textContent = 'No job yet: just add to The Book';
+  select.append(book);
   const byClient = new Map();
   for (const job of jobs) {
     if (!byClient.has(job.client_name)) byClient.set(job.client_name, []);
@@ -249,12 +256,16 @@ function fillJobs(preferred) {
     select.append(group);
   }
   if (preferred && jobs.some((j) => j.id === preferred)) select.value = preferred;
+  else select.value = BOOK;
 }
 
 async function loadStages() {
   const jobId = Number($('f-job').value);
   const select = $('f-stage');
   select.replaceChildren();
+  // Someone saved without a job has no stage to be at, so the field goes away and Source takes the whole row.
+  $('stage-field').hidden = toBook();
+  $('stage-row').classList.toggle('single', toBook());
   markKnown();
   if (!jobId) return;
   try {
@@ -281,6 +292,9 @@ function sameName(a, b) {
   return one.includes(other) || other.includes(one) || (x[0] === y[0] && x.at(-1) === y.at(-1));
 }
 
+/** Where a person's profile opens in the workspace: inside their job, or on the Candidates page when they are not on one. */
+const profileUrl = (jobId, applicationId) => (jobId ? `${base}/jobs/${Number(jobId)}?c=${Number(applicationId)}` : `${base}/candidates?c=${Number(applicationId)}`);
+
 /** A notice: one sentence, then the records it is about as links that open in the workspace. */
 function fillNotice(box, lead, records) {
   const strong = document.createElement('strong');
@@ -291,9 +305,11 @@ function fillNotice(box, lead, records) {
     const item = document.createElement('li');
     const link = document.createElement('a');
     link.href = '#';
-    link.textContent = [named && r.name, r.job_title, r.client_name].filter(Boolean).join(' · ');
-    link.addEventListener('click', (e) => { e.preventDefault(); chrome.tabs.create({ url: `${base}/jobs/${Number(r.job_id)}?c=${Number(r.application_id)}` }); });
-    const stage = r.status && r.status !== 'active' ? r.status : r.stage_name;
+    // Someone in The Book without a job has no job or client to name, and their profile opens from the Candidates page.
+    const where = r.job_id ? [r.job_title, r.client_name] : [records.length === 1 && !named ? 'Open their profile' : 'In The Book, not on a job yet'];
+    link.textContent = [named && r.name, ...where].filter(Boolean).join(' · ');
+    link.addEventListener('click', (e) => { e.preventDefault(); chrome.tabs.create({ url: profileUrl(r.job_id, r.application_id) }); });
+    const stage = !r.job_id ? '' : r.status && r.status !== 'active' ? r.status : r.stage_name;
     item.append(link, stage ? ` (${stage})` : '');
     list.append(item);
   }
@@ -301,24 +317,37 @@ function fillNotice(box, lead, records) {
   box.hidden = false;
 }
 
-/** Show where this person already is, and stop a duplicate being added to the selected job. */
+/**
+ * Show where this person already is, and stop them being added twice: to the selected job, or to The Book when they
+ * are in it already. Someone who is in The Book without a job can still be added to a job from here.
+ */
 function markKnown() {
   const box = $('known');
   box.replaceChildren();
   box.hidden = true;
+  const book = toBook();
   const jobId = Number($('f-job').value);
-  const here = known.find((k) => k.job_id === jobId);
-  $('submit').disabled = Boolean(here);
-  $('submit').textContent = here ? 'Already in this job' : 'Add to pipeline';
-  if (!known.length) return;
   const names = [...new Set(known.map((k) => k.name).filter(Boolean))];
   const who = names.length === 1 ? names[0] : '';
+  // The email address or link belongs to somebody with another name: adding would go onto that person's record.
+  const someoneElse = Boolean(who) && !sameName(who, $('f-name').value);
+  const noJobYet = known.length > 0 && known.every((k) => !k.job_id); // in The Book, but not on any job
+  // "Just add to The Book" has nothing to add for a person who is in it already, with a job or without one. A
+  // record under another name is not this person: that is left to the workspace to answer, as it is for a job.
+  const here = book ? !someoneElse && (known.find((k) => !k.job_id) || known[0]) : known.find((k) => k.job_id === jobId);
+  $('submit').disabled = Boolean(here);
+  $('submit').textContent = book ? (here ? 'Already in The Book' : 'Add to The Book') : here ? 'Already in this job' : 'Add to pipeline';
+  if (!known.length) return;
   let lead = 'Already in your workspace';
-  if (who && !sameName(who, $('f-name').value)) {
-    // The email address or link belongs to somebody with another name: adding would go onto that person's record.
+  if (someoneElse) {
     lead = `This email address or profile link is on ${who}'s record. Check it before you add this person.`;
+  } else if (who && book) {
+    // With no job in the workspace there is nothing below to choose.
+    lead = `${who} is already in The Book${noJobYet ? ', not on a job yet' : ''}.${jobs.length ? ' To add them to a job, choose the job below.' : ''}`;
   } else if (who) {
-    lead = here ? `${who} is already in this job.` : `${who} is already in your workspace; this adds them to another job.`;
+    lead = here ? `${who} is already in this job.`
+      : noJobYet ? `${who} is already in The Book, not on a job yet. This adds them to the job you chose.`
+      : `${who} is already in your workspace; this adds them to another job.`;
   }
   fillNotice(box, lead, known);
 }
@@ -352,15 +381,21 @@ $('f-link').addEventListener('change', () => { clearConflict(); lookUp(); });
 $('f-email').addEventListener('change', () => { clearConflict(); lookUp(); });
 $('f-name').addEventListener('change', () => { clearConflict(); markKnown(); });
 
-$('add-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
+/**
+ * Send the form. One request does it all: for somebody who is in The Book without a job and is now given one, the
+ * workspace puts the entry they have on the job (with its notes, résumé, calls and history) and adds what was typed
+ * here to it, or refuses and changes nothing.
+ */
+async function send() {
   setError('form-error', '');
   clearConflict();
-  const jobId = Number($('f-job').value);
-  const stageId = Number($('f-stage').value) || '';
+  const book = toBook();
+  const jobId = book ? '' : Number($('f-job').value);
+  const stageId = book ? '' : Number($('f-stage').value) || '';
   let link;
   try { link = tidyLink($('f-link').value); } catch (err) { return setError('form-error', err.message); }
   const body = new FormData();
+  // With no job sent, the workspace saves the person to The Book without one.
   const fields = {
     job_id: jobId, stage_id: stageId, source: $('f-source').value, name: $('f-name').value, email: $('f-email').value,
     linkedin: link, location: $('f-location').value, current_title: $('f-title').value, current_company: $('f-company').value,
@@ -368,31 +403,72 @@ $('add-form').addEventListener('submit', async (e) => {
   };
   for (const [key, value] of Object.entries(fields)) if (String(value).trim()) body.append(key, String(value).trim());
   if (photo && $('f-photo').checked) body.append('photo', photo.blob, 'photo.jpg');
+  const typed = $('f-name').value.trim();
+  const job = jobs.find((j) => j.id === jobId);
   $('submit').disabled = true;
   try {
     const result = await api('/applications', { method: 'POST', body });
-    lastStages[jobId] = stageId || undefined;
-    await chrome.storage.local.set({ lastJob: jobId, lastStages });
-    const job = jobs.find((j) => j.id === jobId);
-    const typed = $('f-name').value.trim();
+    if (!book) lastStages[jobId] = stageId || undefined;
+    // The choice is remembered either way: a job, or "no job yet".
+    await chrome.storage.local.set({ lastJob: book ? BOOK : jobId, lastStages });
     // When the person was already in the workspace the job goes onto their record, under the name stored there.
-    const stored = (typeof result.name === 'string' && result.name) || known.find((k) => k.client_name === job.client_name)?.name || typed;
-    $('done-title').textContent = result.known ? `Added to ${stored}'s existing record` : `${typed} added`;
-    $('done-text').textContent = `${job.title} · ${job.client_name} · ${$('f-stage').selectedOptions[0]?.textContent || 'Applied'}${result.photo_rejected ? '. Their photo could not be kept, so none was saved' : ''}`;
-    $('open-candidate').onclick = () => chrome.tabs.create({ url: `${base}/jobs/${jobId}?c=${Number(result.id)}` });
+    const stored = (typeof result.name === 'string' && result.name) || (job && known.find((k) => k.client_name === job.client_name)?.name) || typed;
+    const where = job && `${job.title} · ${job.client_name} · ${$('f-stage').selectedOptions[0]?.textContent || 'Applied'}`;
+    if (book) {
+      // Someone the workspace already had in The Book is not saved twice: what was sent is added to the entry they have.
+      $('done-title').textContent = result.known ? `${stored} was already in The Book` : `${typed} added to The Book`;
+      $('done-text').textContent = result.known
+        ? 'Nothing new was made. What you sent was added to the entry they already have.'
+        : 'They are not on a job yet. You can add them to one from their profile.';
+    } else if (result.moved) {
+      // They were in The Book without a job: the entry they had is what went on the job, not a second record.
+      $('done-title').textContent = result.joined ? `Added to ${stored}'s existing record` : `${stored} added to the job`;
+      $('done-text').textContent = `${where}. ${result.joined
+        ? 'What was saved on them in The Book was moved onto that record.'
+        : 'Their notes, résumé and calls in The Book came with them.'}`;
+    } else {
+      $('done-title').textContent = result.known ? `Added to ${stored}'s existing record` : `${typed} added`;
+      $('done-text').textContent = where;
+    }
+    // A picture the workspace would not keep is said plainly, so nobody looks for it later.
+    if (result.photo_rejected) $('done-text').textContent += ' Their photo could not be kept, so none was saved.';
+    $('open-candidate').onclick = () => chrome.tabs.create({ url: profileUrl(jobId, result.id) });
     show('done');
   } catch (err) {
     if (err.status === 401) return start();
-    if (err.status === 409 && err.data && err.data.code === 'link_conflict') {
-      // The link is on somebody else's record. Nothing was added; show whose, so the recruiter can open it or fix the link.
-      const matches = Array.isArray(err.data.matches) ? err.data.matches.filter((m) => m && typeof m === 'object').slice(0, 10) : [];
-      fillNotice($('conflict'), err.message, matches);
+    const code = err.status === 409 && err.data ? err.data.code : null;
+    const rows = (list) => (Array.isArray(list) ? list.filter((m) => m && typeof m === 'object').slice(0, 10) : []);
+    if (code === 'link_conflict') {
+      // The link or address is on somebody else's record. Nothing was added; show whose, so the recruiter can open it or fix it.
+      fillNotice($('conflict'), err.message, rows(err.data.matches));
     } else {
       setError('form-error', err.message);
     }
     $('submit').disabled = false;
+    // A refusal usually means the workspace has changed since this was opened (a colleague added them meanwhile):
+    // look again, so the notice at the top and the button say how things stand now.
+    if (err.status === 409) await lookUp();
   }
-});
+}
+$('add-form').addEventListener('submit', (e) => { e.preventDefault(); send(); });
+
+// ---------- is this copy up to date? ----------
+// The extension is loaded from a folder, so Chrome never updates it. The workspace says which version it has ready
+// for download; when that is newer than this copy, a line across the top says so and how to replace it.
+const newer = (theirs, mine) => {
+  const [a, b] = [theirs, mine].map((v) => String(v).split('.').map(Number));
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  return false;
+};
+async function checkVersion() {
+  $('outdated').hidden = true;
+  try {
+    const res = await fetch(`${base}/the-book-extension.json`, { cache: 'no-store' });
+    const ready = res.ok ? (await res.json()).version : null;
+    if (typeof ready === 'string' && /^\d+(\.\d+)*$/.test(ready) && newer(ready, chrome.runtime.getManifest().version)) $('outdated').hidden = false;
+  } catch { /* a workspace that does not say, or cannot be reached: nothing to show */ }
+}
+$('get-update').addEventListener('click', (e) => { e.preventDefault(); chrome.tabs.create({ url: `${base}/settings?tab=extension` }); });
 
 // ---------- start ----------
 // What to say under the profile link when the page has no address that identifies the person.
@@ -436,17 +512,19 @@ async function start() {
     return show('signin');
   }
   $('workspace-name').textContent = me.agencyName || 'The Book';
+  checkVersion();
   if (me.user.role === 'client') {
     $('signin-text').textContent = 'You are signed in with a client account. Only the agency team can add candidates.';
     return show('signin');
   }
 
-  const [allJobs, page] = await Promise.all([api('/jobs').catch(() => []), readPage()]);
-  jobs = allJobs.filter((j) => j.status !== 'closed');
-  if (!jobs.length) {
-    $('signin-text').textContent = 'There are no jobs to add people to yet. Create a job in your workspace first.';
-    return show('signin');
-  }
+  const [allJobs, page] = await Promise.all([api('/jobs').catch(() => null), readPage()]);
+  jobs = (allJobs || []).filter((j) => j.status !== 'closed');
+  // With no job to choose, people can still be saved to The Book: say why that is the only choice.
+  const jobHint = !allJobs ? 'Your jobs could not be loaded, so only The Book is offered. Close this and open it again to try once more.'
+    : !jobs.length ? 'There are no open jobs in your workspace yet, so people are saved to The Book without one.' : '';
+  $('job-hint').textContent = jobHint;
+  $('job-hint').hidden = !jobHint;
   const onLinkedIn = page && /(^|\.)linkedin\.com$/i.test(page.site);
   $('f-name').value = (page && page.name) || '';
   $('f-title').value = (page && page.title) || '';

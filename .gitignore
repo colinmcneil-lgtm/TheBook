@@ -4,3 +4,4 @@ data
 .env
 *.zip
 public/pdfjs
+public/the-book-extension.json

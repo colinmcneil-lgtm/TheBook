@@ -122,12 +122,35 @@ export function removeCallFiles(rows) {
 /** An application is being removed: its calls stay with the candidate, without the draft written for that job. */
 export const detachCallsFrom = (applicationId) =>
   q.run('UPDATE calls SET application_id = NULL, submission = NULL, submission_at = NULL, note_id = NULL, updated_at = ? WHERE application_id = ?', now(), applicationId);
+/**
+ * Somebody is going back to The Book from a job that is being deleted, or that they were removed from: their calls
+ * stay on their entry, without the write-up that was drafted for that job's hiring team.
+ */
+export const forgetDraftsFor = (applicationId) =>
+  q.run('UPDATE calls SET submission = NULL, submission_at = NULL, updated_at = ? WHERE application_id = ? AND submission IS NOT NULL', now(), applicationId);
 /** A note on a profile is being deleted: a call whose summary was saved as that note no longer points at it. */
 export const forgetSavedNote = (noteId) => q.run('UPDATE calls SET note_id = NULL WHERE note_id = ?', noteId);
 /** Two records turned out to be one person: the calls move to the record that is kept. */
 export function moveCalls(fromCandidateId, toCandidateId) {
   q.run('UPDATE calls SET candidate_id = ?, updated_at = ? WHERE candidate_id = ?', toCandidateId, now(), fromCandidateId);
   q.run('UPDATE phone_calls SET candidate_id = ? WHERE candidate_id = ?', toCandidateId, fromCandidateId); // the list of phone calls made to them, too
+}
+/**
+ * Two entries of one person saved to The Book without a job became one: the calls on the entry that goes, and the
+ * calendar events it was chosen for, move to the entry that is kept (they would otherwise be left on nobody's profile).
+ */
+export function moveCallsToEntry(fromApplicationId, toApplicationId) {
+  q.run('UPDATE calls SET application_id = ?, updated_at = ? WHERE application_id = ?', toApplicationId, now(), fromApplicationId);
+  q.run('UPDATE phone_calls SET application_id = ? WHERE application_id = ?', toApplicationId, fromApplicationId);
+  q.run('UPDATE calendar_events SET application_id = ? WHERE application_id = ?', toApplicationId, fromApplicationId);
+}
+/**
+ * An entry has been given a record of its own (somebody going back to The Book while the client keeps its record of
+ * them for another job): the calls recorded on that entry belong with it, so they move to the entry's record.
+ */
+export function moveEntryCallsToRecord(applicationId, candidateId) {
+  q.run('UPDATE calls SET candidate_id = ?, updated_at = ? WHERE application_id = ?', candidateId, now(), applicationId);
+  q.run('UPDATE phone_calls SET candidate_id = ? WHERE application_id = ?', candidateId, applicationId);
 }
 
 // ---------- joining a recording ----------
@@ -776,7 +799,7 @@ export function transcriptText(turns, speakers = {}, max = MAX_TRANSCRIPT_CHARS)
 }
 const TOO_LONG = 'This call was too long to read in one go, so this covers the first part of it only.';
 
-/** What is known about the people and the role a call is attached to. */
+/** What is known about the people and the role a call is attached to. Someone in The Book without a job has no role yet. */
 function contextOf(call) {
   const candidate = call.candidate_id ? q.get('SELECT name, current_title, current_company, location FROM candidates WHERE id = ?', call.candidate_id) : null;
   const job = call.application_id ? q.get(
@@ -1057,8 +1080,9 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
     const call = loadCall(id);
     const candidate = call.candidate_id
       ? q.get('SELECT id, name, substr(photo_file, 1, 8) AS photo, current_title, current_company FROM candidates WHERE id = ?', call.candidate_id) ?? null : null;
+    // The entry of someone saved to The Book without a job is an application too, with no job or client to name.
     const appSelect = `SELECT a.id, a.job_id, j.title AS job_title, cl.name AS client_name, a.status, a.review_status
-      FROM applications a JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id`;
+      FROM applications a LEFT JOIN jobs j ON j.id = a.job_id LEFT JOIN clients cl ON cl.id = j.client_id`;
     const application = call.application_id ? q.get(`${appSelect} WHERE a.id = ?`, call.application_id) ?? null : null;
     if (application) {
       // The write-up the hiring team has now, and when it was sent, so the page can tell a draft that went from one that has not.
@@ -1103,9 +1127,10 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
     if (req.query.mine === '1') { where.push('k.created_by = ?'); p.push(req.user.id); }
     if (int(req.query.application_id)) { where.push('k.application_id = ?'); p.push(int(req.query.application_id)); }
     if (int(req.query.candidate_id)) { where.push('k.candidate_id = ?'); p.push(int(req.query.candidate_id)); }
-    // One client's calls, and with them the calls not on a candidate yet: those belong to no client, and a call
-    // recorded a moment ago must not vanish from the list because a client is chosen in the sidebar.
-    if (int(req.query.client_id)) { where.push('(k.candidate_id IS NULL OR COALESCE(j.client_id, c.client_id) = ?)'); p.push(int(req.query.client_id)); }
+    // One client's calls, and with them the calls not on a candidate yet or on someone saved to The Book without a
+    // job: those belong to no client, and a call recorded a moment ago must not vanish from the list because a
+    // client is chosen in the sidebar.
+    if (int(req.query.client_id)) { where.push('(COALESCE(j.client_id, c.client_id) IS NULL OR COALESCE(j.client_id, c.client_id) = ?)'); p.push(int(req.query.client_id)); }
     const rows = q.all(
       `SELECT k.id, k.title, k.status, k.source, k.duration_ms, k.created_at, k.created_by, u.name AS created_by_name,
          k.direction, k.phone_number, k.voicemail,
@@ -1374,6 +1399,8 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
   api.post('/oracle/calls/:id/submission', agencyOnly, async (req, res) => {
     const call = loadCall(req.params.id);
     if (!call.application_id) bad('Add this call to a candidate first: the write-up is drafted for the job they are being put forward for.');
+    // Someone in The Book without a job is not being put forward for anything yet, so there is no hiring team to write to.
+    if (q.get('SELECT 1 AS x FROM applications WHERE id = ? AND job_id IS NULL', call.application_id)) bad('Add them to a job first.');
     if (!json(call.transcript, []).length && !call.notes) bad('This call has no transcript or notes yet, so there is nothing to draft from.');
     needsAi('the write-up');
     oracleLimit('ai', req.user, 40);

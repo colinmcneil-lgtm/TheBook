@@ -439,10 +439,18 @@ function Extension() {
         <div className="space-y-4 p-4 text-sm leading-relaxed text-stone-600">
           <p>
             With the Chrome extension, open someone’s LinkedIn profile, click the extension’s icon, and their name, title, company, location, profile link and photo are filled in for you.
-            Choose the job and stage, and they are in that pipeline with you as the owner. It warns you if the person is already in your workspace.
+            Choose the job and stage and they are in that pipeline, or choose “No job yet” to save them to The Book and decide on a job later. Either way you are their owner. It warns you if the person is already in your workspace.
           </p>
           <a href="/the-book-extension.zip" download><Button variant="primary" icon={Download}>Download the extension</Button></a>
           <ol className="list-decimal space-y-2 pl-5">{steps.map((step, i) => <li key={i}>{step}</li>)}</ol>
+          {/* Loaded from a folder, the extension never updates itself: after a change such as "No job yet" it has to be replaced by hand. */}
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] text-amber-950">
+            <p className="font-medium">Already installed? It does not update by itself.</p>
+            <p className="mt-0.5">
+              If the Job list in your extension has no “No job yet: just add to The Book” choice, you have an older copy. Download it again, unzip it over the old folder (or delete the old folder first),
+              then open <code className="rounded bg-white/70 px-1 py-0.5 text-xs">chrome://extensions</code> and press the reload arrow on “The Book”. Your workspace address is kept. From now on the extension tells you itself when a newer copy is ready.
+            </p>
+          </div>
           <div className="flex items-center gap-2">
             <code className="min-w-0 flex-1 truncate rounded-lg bg-stone-100 px-3 py-2.5 text-xs text-stone-800">{address}</code>
             <Button icon={Copy} onClick={copy}>Copy address</Button>

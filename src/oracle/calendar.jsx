@@ -6,7 +6,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AudioLines, BellRing, CalendarClock, CalendarDays, Check, ChevronLeft, ChevronRight, ExternalLink, Mic, Phone, Plus, RefreshCw, Video, X } from 'lucide-react';
-import { api, url, extUrl, fmtTime, photoUrl, todayLocal } from '../lib.js';
+import { api, url, extUrl, fmtTime, jobLine, photoUrl, todayLocal } from '../lib.js';
 import { Avatar, Button, Card, Loading, Modal, useAction, useToast, cx } from '../ui.jsx';
 import { CONSENT_WORDING, useRecorder } from './RecorderProvider.jsx';
 import { CallRecorder } from './recorder.js';
@@ -248,7 +248,7 @@ function ChooseCandidateModal({ event, onClose, onSave }) {
                   <Avatar name={s.name} size={30} src={photoUrl(s.candidate_id, s.photo)} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-stone-900">{s.name}</span>
-                    <span className="block truncate text-[13px] text-stone-600">{[s.job_title, s.client_name].filter(Boolean).join(' · ')}</span>
+                    <span className="block truncate text-[13px] text-stone-600">{jobLine(s)}</span>
                   </span>
                 </button>
               </li>

@@ -8,7 +8,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { Link, useLocation } from 'react-router-dom';
 import { ArrowLeft, ChevronDown, CircleCheck, Hash, Phone, PhoneCall, PhoneForwarded, PhoneIncoming, PhoneOff, PhoneOutgoing, Search, Smartphone, X } from 'lucide-react';
 import { useApp, useApi } from '../state.jsx';
-import { api, url, ago, firstName, photoUrl } from '../lib.js';
+import { api, url, ago, firstName, jobLine, photoUrl } from '../lib.js';
 import { WAITING_WORDS, followed, headline, isOver, personFor, showNumber, telHref, typedNumber } from './calls.js';
 import { Avatar, Button, Card, Checkbox, Input, Loading, Modal, useAction, cx } from '../ui.jsx';
 import { useRecorder } from './RecorderProvider.jsx';
@@ -36,14 +36,17 @@ const code = (text) => <code key={text} className="rounded bg-stone-200/70 px-1 
 export const settingNames = (names) => names.map((name, i) => <React.Fragment key={name}>{i > 0 && (i === names.length - 1 ? ' and ' : ', ')}{code(name)}</React.Fragment>);
 
 // ---- who can be called ----------------------------------------------------------------------------------------------------
-/** A candidate's profile, as the call dialog wants it: who they are, their number, and the jobs they are being considered for. */
+/**
+ * A candidate's profile, as the call dialog wants it: who they are, their number, and the jobs they are being
+ * considered for. Someone saved to The Book without a job has one entry with no job or client in it.
+ */
 export function personOf(profile) {
   const { application: app, candidate, job, client, others = [] } = profile;
   const phone = String(candidate.phone || '').trim() || null;
   return {
     candidate_id: candidate.id, name: candidate.name, photo: candidate.photo ?? null, phone, phone_display: phone,
-    applications: [{ id: app.id, job_title: job.title, client_name: client.name, status: app.status },
-      ...others.map((o) => ({ id: o.id, job_title: o.job_title, client_name: client.name, status: o.status }))],
+    applications: [{ id: app.id, job_title: job?.title ?? null, client_name: client?.name ?? null, status: app.status },
+      ...others.map((o) => ({ id: o.id, job_title: o.job_title ?? null, client_name: client?.name ?? null, status: o.status }))],
   };
 }
 // A profile looked up for its phone number is kept for a minute, so a day of events does not ask for the same person over and over.
@@ -316,7 +319,7 @@ function FindSomeone({ note, onPerson, onNumber }) {
   const searching = query.length >= 2;
   const { data: found, loading, error } = useApi(searching ? url('/phone/lookup', { q: query }) : null);
   const number = typedNumber(text);
-  const jobs = (p) => (p.applications.length === 1 ? [p.applications[0].job_title, p.applications[0].client_name].filter(Boolean).join(' · ') : p.applications.length ? `Being considered for ${p.applications.length} jobs` : '');
+  const jobs = (p) => (p.applications.length === 1 ? jobLine(p.applications[0]) : p.applications.length ? `Being considered for ${p.applications.length} jobs` : '');
   return (
     <>
       {note && <Notice tone="warn">{note}</Notice>}
@@ -451,7 +454,7 @@ function CallDialog({ preset, onClose }) {
           <span className={cx('block text-sm text-stone-600', person && 'tabular truncate')}>
             {person ? person.phone_display : `${whose} If it is one candidate’s number, the call goes on their profile.`}
           </span>
-          {jobs.length === 1 && <span className="block truncate text-[13px] text-stone-500">About {jobs[0].job_title} · {jobs[0].client_name}</span>}
+          {jobs.length === 1 && <span className="block truncate text-[13px] text-stone-500">{jobs[0].job_title ? `About ${jobLine(jobs[0])}` : jobLine(jobs[0])}</span>}
         </span>
       </div>
 
@@ -462,7 +465,7 @@ function CallDialog({ preset, onClose }) {
             {jobs.map((a) => (
               <label key={a.id} className={cx('flex min-h-11 cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-sm', applicationId === a.id ? 'border-brand-300 bg-brand-50/60' : 'border-line hover:bg-stone-50')}>
                 <input type="radio" name="call-about" checked={applicationId === a.id} onChange={() => setApplicationId(a.id)} className="size-4 accent-brand-700" />
-                <span className="min-w-0 flex-1 truncate font-medium text-stone-800">{a.job_title} · {a.client_name}</span>
+                <span className="min-w-0 flex-1 truncate font-medium text-stone-800">{jobLine(a)}</span>
                 {STANDING[a.status] && <span className="shrink-0 text-xs text-stone-500">{STANDING[a.status]}</span>}
               </label>
             ))}

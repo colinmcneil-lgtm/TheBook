@@ -817,6 +817,7 @@ async function tellRecruiter(callId) {
     && q.get(`SELECT COUNT(*) AS n FROM calls WHERE source = 'phone' AND voicemail = 1 AND candidate_id IS NULL AND notified_at > ?`, ago(DAY)).n >= STRANGER_MAILS_PER_DAY) return leave();
   const who = candidateOf(call.candidate_id);
   const other = who?.name || displayNumber(call.phone_number) || 'a withheld number';
+  // Nothing to name for someone saved to The Book without a job: the join finds no row, and the sentence stops at their profile.
   const job = call.application_id ? q.get(
     `SELECT j.title, cl.name AS client FROM applications a JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id WHERE a.id = ?`, call.application_id) : null;
   const length = lengthWords(call.duration_ms).slice(2);
@@ -1268,8 +1269,10 @@ export function registerPhone(api, { agencyOnly, bad, clean, int, loadApp, ...sh
       if (!phone) continue;
       found.push({
         candidate_id: row.id, name: row.name, photo: row.photo, phone, phone_display: displayNumber(phone),
+        // Someone saved to The Book without a job has one entry, with no job or client to name; they can be rung all the same.
         applications: q.all(
-          `SELECT a.id, j.title AS job_title, cl.name AS client_name, a.status FROM applications a JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id
+          `SELECT a.id, j.title AS job_title, cl.name AS client_name, a.status
+           FROM applications a LEFT JOIN jobs j ON j.id = a.job_id LEFT JOIN clients cl ON cl.id = j.client_id
            WHERE a.candidate_id = ? ORDER BY a.status = 'active' DESC, a.applied_at DESC, a.id DESC`, row.id),
       });
       if (found.length === 20) break;

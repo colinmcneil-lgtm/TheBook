@@ -1,13 +1,17 @@
 import React from 'react';
-import { Check, Hourglass, FileText } from 'lucide-react';
+import { BookOpen, Check, Hourglass, FileText } from 'lucide-react';
 import { Avatar, Badge, ClientDot, cx } from '../ui.jsx';
-import { fmtTime, photoUrl, INTERVIEW_KINDS, JOB_STATUS } from '../lib.js';
+import { fmtTime, photoUrl, INTERVIEW_KINDS, JOB_STATUS, NO_JOB } from '../lib.js';
 import { useApp, useOpenCandidate } from '../state.jsx';
 
 const STAGE_TONES = { applied: 'gray', interview: 'blue', offer: 'amber', hired: 'green' };
 
+/** Marks someone who was saved to The Book without a job, wherever their job and stage would otherwise be shown. */
+export const NoJobBadge = ({ className }) => <Badge tone="violet" icon={BookOpen} className={className}>{NO_JOB}</Badge>;
+
 /** Where an application stands: its stage while active, otherwise its outcome. */
 export function StageBadge({ app }) {
+  if (app.general) return <NoJobBadge />;
   if (app.status === 'rejected') return <Badge tone="red">Rejected</Badge>;
   if (app.status === 'withdrawn') return <Badge tone="gray">Withdrawn</Badge>;
   if (app.status === 'hired') return <Badge tone="green" icon={Check}>Hired</Badge>;

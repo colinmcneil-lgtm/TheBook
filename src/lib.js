@@ -104,6 +104,19 @@ export const salaryRange = (min, max, currency) =>
   min && max ? `${money(min, currency)} – ${money(max, currency)}` : min ? `From ${money(min, currency)}` : max ? `Up to ${money(max, currency)}` : '';
 export const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 export const firstName = (name) => String(name || '').split(' ')[0];
+/**
+ * Could these two names belong to one person? Yes when the first and last names agree, or when one name is the other
+ * with something added ("Ana Ruiz" and "Ana Ruiz Ortega"). Capitals and accents are ignored. The workspace decides
+ * the same way when it recognises somebody.
+ */
+export function sameName(a, b) {
+  const words = (name) => String(name || '').normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const x = words(a), y = words(b);
+  if (!x.length || !y.length) return false;
+  if (x[0] === y[0] && x.at(-1) === y.at(-1)) return true;
+  const [few, many] = x.length <= y.length ? [x, y] : [y, x];
+  return few.every((word) => many.includes(word));
+}
 export const renderTemplate = (text, vars) => String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] ?? m);
 
 export const SOURCES = {
@@ -126,6 +139,13 @@ export const REJECT_REASONS = [
   'Location or right-to-work mismatch', 'Stronger candidates in process', 'Role closed or on hold', 'Other',
 ];
 export const ENGAGEMENTS = { retainer: 'Monthly retainer', per_hire: 'Fee per hire', hybrid: 'Retainer + fee per hire' };
+
+/** What stands where a job would be for someone saved to The Book without one. The same words everywhere. */
+export const NO_JOB = 'Not on a job yet';
+/** "Staff Engineer · Lumen Health" for a row that carries a job and its client; "Not on a job yet" for one that has neither. */
+export const jobLine = (row) => [row?.job_title, row?.client_name].filter(Boolean).join(' · ') || NO_JOB;
+/** The address of a candidate's profile: inside their job, or on the Candidates page when they are not on one. */
+export const profilePath = (jobId, applicationId) => (jobId ? `/jobs/${jobId}?c=${applicationId}` : `/candidates?c=${applicationId}`);
 
 /** Where a candidate's photo is served from, or null when they have none. `tag` changes whenever the photo does. */
 export const photoUrl = (candidateId, tag) => (tag ? `/api/candidates/${candidateId}/photo?v=${tag}` : null);

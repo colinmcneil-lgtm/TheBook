@@ -53,4 +53,8 @@ end.writeUInt32LE(offset, 16);
 
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, Buffer.concat([...chunks, directory, end]));
+// The version of the copy that is offered for download, where an installed extension can read it. An extension
+// loaded from a folder never updates itself, so it compares this with its own version and says when it is behind.
+const { version } = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+fs.writeFileSync(path.resolve('public/the-book-extension.json'), `${JSON.stringify({ version })}\n`);
 console.log(`Packed ${files.length} extension files into ${path.relative(process.cwd(), out)}`);

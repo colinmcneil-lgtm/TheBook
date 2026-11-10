@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS stages (
 
 CREATE TABLE IF NOT EXISTS candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused, so an old link cannot open a different person
-  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE, -- empty for someone saved to The Book without a job: they belong to the agency, not to a client
   name TEXT NOT NULL,
   email TEXT,                                        -- required for applicants; may be unknown for people the agency sourced
   phone TEXT, linkedin TEXT, location TEXT, current_title TEXT, current_company TEXT,
@@ -106,8 +106,10 @@ CREATE TABLE IF NOT EXISTS candidates (
 CREATE TABLE IF NOT EXISTS applications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
-  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-  stage_id INTEGER NOT NULL REFERENCES stages(id),
+  -- A row with no job and no stage is the entry of someone saved to The Book without a job. It holds their owner,
+  -- résumé, notes and history like any other row, and becomes a job's application (same id) when they are put on one.
+  job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+  stage_id INTEGER REFERENCES stages(id),
   status TEXT NOT NULL DEFAULT 'active',             -- active | rejected | withdrawn | hired
   source TEXT NOT NULL DEFAULT 'careers_page',
   rating INTEGER,
@@ -124,6 +126,7 @@ CREATE TABLE IF NOT EXISTS applications (
   hired_at TEXT,
   consent_at TEXT,                                   -- when the applicant ticked the data-processing consent box
   owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL, -- the recruiter responsible for this candidate in this job
+  general_until TEXT,                                -- when someone saved without a job was put on this one; what was written before then stays with the agency
   UNIQUE (candidate_id, job_id)
 );
 
@@ -312,6 +315,31 @@ if (!db.prepare('PRAGMA table_info(applications)').all().some((c) => c.name === 
 for (const table of ['users', 'candidates', 'applications', 'interviews', 'notes']) ensureAutoincrement(table);
 // People sourced from a profile often have no known email yet, so it is no longer required.
 rebuildTable('candidates', (sql) => sql.replace(/\bemail TEXT NOT NULL\b/, 'email TEXT'));
+// People in The Book without a job. Somebody can be saved with no job chosen: a candidate with no client, whose one
+// application has no job and no stage. So those three columns stop being required. Nothing else about the two tables
+// changes, and no row is touched: every existing person has a client, and every existing application a job and a stage.
+// Each table is rebuilt in a transaction of its own, so a start that is cut short leaves it either as it was or
+// finished, and the next start carries on from there.
+rebuildTable('candidates', (sql) => sql.replace(/\bclient_id\s+INTEGER\s+NOT\s+NULL\b/i, 'client_id INTEGER'));
+rebuildTable('applications', (sql) => sql
+  .replace(/\bjob_id\s+INTEGER\s+NOT\s+NULL\b/i, 'job_id INTEGER')
+  .replace(/\bstage_id\s+INTEGER\s+NOT\s+NULL\b/i, 'stage_id INTEGER'));
+// Said plainly in the log if a table was not written the way the lines above expect, and so was left alone: saving
+// somebody without a job would then be refused by the database, and everything else carries on as before.
+for (const [table, column] of [['candidates', 'client_id'], ['applications', 'job_id'], ['applications', 'stage_id']]) {
+  if (db.prepare(`PRAGMA table_info(${table})`).all().find((c) => c.name === column)?.notnull) {
+    console.error(`The database was not upgraded: ${table}.${column} is still required, so nobody can be saved to The Book without a job yet.`);
+  }
+}
+// When such a person is put on a job, their entry becomes that job's application. What was written on it before
+// then (notes, e-mails, history) was written for the agency's eyes, so the moment is kept and the client's hiring
+// team is only shown what came after it.
+addColumn('applications', 'general_until', 'TEXT');
+// The entry of someone in The Book can also be joined to an application the client already has for them. The history
+// and e-mails that come across with it were the agency's own, and sit among lines the hiring team may see, so each
+// such line is marked: the hiring team is never shown a marked line.
+addColumn('activities', 'agency_only', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('emails', 'agency_only', 'INTEGER NOT NULL DEFAULT 0');
 // Profile links used to be saved as typed. People are recognised by the stored form of a LinkedIn profile link, so
 // links saved by an earlier version are rewritten once into that form. Two records that end up with the same link
 // are both kept: the workspace points them out as possible duplicates and leaves the decision to a person.
@@ -367,7 +395,25 @@ CREATE INDEX IF NOT EXISTS idx_activities_app ON activities(application_id);
 CREATE INDEX IF NOT EXISTS idx_activities_recent ON activities(created_at, id);
 CREATE INDEX IF NOT EXISTS idx_calls_candidate ON calls(candidate_id);
 CREATE INDEX IF NOT EXISTS idx_calls_application ON calls(application_id);
-CREATE INDEX IF NOT EXISTS idx_calls_created_by ON calls(created_by);`);
+CREATE INDEX IF NOT EXISTS idx_calls_created_by ON calls(created_by);
+-- The table's own rules (one record per e-mail at a client, one application per person in a job) do not reach rows
+-- where the client or the job is empty, because SQLite counts every empty value as different from every other.
+-- These two say the same for people saved without a job: one entry each, and one record per e-mail among them.
+-- No existing row has an empty job or client, so neither can fail on a database made by an earlier version.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apps_general ON applications(candidate_id) WHERE job_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_general_email ON candidates(email) WHERE client_id IS NULL;
+
+-- A résumé that a newer one took the place of. Saving somebody who is already in The Book again with a résumé puts
+-- the new file on their entry, and the one they had is kept here, so a save made by mistake never costs a file.
+-- Agency only: the hiring team is shown the résumé on the application and nothing from this table.
+CREATE TABLE IF NOT EXISTS earlier_resumes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  resume_file TEXT NOT NULL, resume_name TEXT,       -- a file in the uploads folder, and the name it was uploaded under
+  kept_at TEXT NOT NULL,                             -- when the newer résumé took its place
+  kept_by INTEGER                                    -- who sent the newer one
+);
+CREATE INDEX IF NOT EXISTS idx_earlier_resumes_app ON earlier_resumes(application_id);`);
 
 // ---------- phone calls ----------
 // Calls placed and received through The Book's own phone number (see phone.js). Agency only, like the Oracle.

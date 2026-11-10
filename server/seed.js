@@ -529,6 +529,39 @@ tx(() => {
       notes: `${caller.name.split(' ')[0]} returned a call and left a message.\n\nNext steps\n- Call them back after four today, or tomorrow morning.`,
     });
   }
+
+  // People in The Book without a job: found while sourcing, or met along the way, and saved for when the right role
+  // comes up. Each has an entry with no job and no stage, an owner, and whatever was known when they were saved.
+  // The last one came from a profile alone: no résumé, no e-mail address or phone number yet, and a note on why they were kept.
+  const inTheBook = [
+    { name: 'Marisol Etxeberria', title: 'Engineering Manager', company: 'Tidewell', city: 'Bristol', days: 41, owner: priya, source: 'linkedin', resume: true },
+    { name: 'Teodor Blackwood', title: 'Senior Product Designer', company: 'Juniper Row', city: 'London', days: 23, owner: priya, source: 'referral', resume: true,
+      note: 'Referred by a former colleague at Juniper Row. Not looking right now; said to try again in the spring.' },
+    { name: 'Anneliese Okonkwo', title: 'Head of Customer Success', company: 'Sable Analytics', city: 'Manchester', days: 12, owner: alex, source: 'agency_sourced', resume: true },
+    { name: 'Cormac Villanueva', title: 'Operations Lead', company: 'Varsity Freight', city: 'Leeds', days: 6, owner: alex, source: 'linkedin', resume: true },
+    { name: 'Ingrid Sorensen-Hale', title: 'Staff Data Engineer', company: 'Halden Systems', city: 'Edinburgh', days: 2, owner: priya, source: 'linkedin', resume: false, contact: false,
+      note: 'Came up while sourcing for Lumen. Too senior for that role, but worth a call when a staff or principal data role opens.' },
+  ];
+  for (const p of inTheBook) {
+    const slug = p.name.toLowerCase().replace(/[^a-z]+/g, '-');
+    const at = ago(p.days);
+    const candId = q.insert(
+      'INSERT INTO candidates (client_id, name, email, phone, linkedin, location, current_title, current_company, created_at) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?)',
+      p.name, p.contact === false ? null : `${slug.replace(/-/g, '.')}@mail.example`, p.contact === false ? null : demoPhone(),
+      `https://www.linkedin.com/in/${slug}`, p.city, p.title, p.company, at);
+    let file = null;
+    if (p.resume) {
+      // A short text résumé, so the demo has one to open. It lives in the uploads folder like any other.
+      file = `${crypto.randomBytes(16).toString('hex')}.txt`;
+      fs.writeFileSync(path.join(UPLOAD_DIR, file), `${p.name}\n${p.title}, ${p.company}\n${p.city}\n\nA demo résumé for The Book.\n`);
+    }
+    const appId = q.insert(
+      `INSERT INTO applications (candidate_id, job_id, stage_id, status, source, resume_file, resume_name, applied_at, stage_entered_at, updated_at, owner_id)
+       VALUES (?, NULL, NULL, 'active', ?, ?, ?, ?, ?, ?, ?)`,
+      candId, p.source, file, file ? `${p.name} résumé.txt` : null, at, at, at, p.owner);
+    act(appId, p.owner, 'added', `Added to The Book (${p.source.replace('_', ' ')})`, at);
+    if (p.note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', appId, p.owner, p.note, at);
+  }
 });
 
 console.log(`Demo data loaded.

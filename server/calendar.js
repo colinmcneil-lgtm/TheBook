@@ -224,12 +224,13 @@ function matchEvents(events, interviews) {
     ev.byFirstName = namedIn(ev, firsts.filter((w) => inTitle.has(w)).slice(0, 5).flatMap(peopleCalled), own).first.slice(0, 60);
   }
 
-  // The applications of everyone named, in one query: a match has to say which job the person is in for.
+  // The applications of everyone named, in one query: a match has to say which job the person is in for. Someone
+  // saved to The Book without a job is matched through their one entry, with no job or client to name.
   const ids = [...new Set(events.flatMap((e) => [...e.byEmail, ...e.byPhone, ...e.byFullName, ...e.byFirstName].map((c) => c.id)))];
   const applications = new Map();
   for (const a of inChunks(ids, (some) => q.all(
     `SELECT a.id AS application_id, a.candidate_id, a.status, a.updated_at, j.title AS job_title, cl.name AS client_name
-     FROM applications a JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id WHERE a.candidate_id IN (${marks(some.length)})`, ...some))) {
+     FROM applications a LEFT JOIN jobs j ON j.id = a.job_id LEFT JOIN clients cl ON cl.id = j.client_id WHERE a.candidate_id IN (${marks(some.length)})`, ...some))) {
     if (!applications.has(a.candidate_id)) applications.set(a.candidate_id, []);
     applications.get(a.candidate_id).push(a);
   }
@@ -252,7 +253,11 @@ function matchEvents(events, interviews) {
     return one ? { match: shaped(one, how), suggestions: [] } : { match: null, suggestions: offer(usable, how) };
   };
   const onePerson = (records, field) => new Set(records.map((c) => c[field])).size === 1;
-  const withDetails = (c) => ({ ...c, job_titles: (applications.get(c.id) || []).map((a) => a.job_title), client_names: (applications.get(c.id) || []).map((a) => a.client_name) });
+  const withDetails = (c) => ({
+    ...c,
+    job_titles: (applications.get(c.id) || []).map((a) => a.job_title).filter(Boolean),
+    client_names: (applications.get(c.id) || []).map((a) => a.client_name).filter(Boolean),
+  });
 
   for (const ev of events) {
     let found;
@@ -396,7 +401,7 @@ function remember(user, events, ymd, tz) {
 function chosen(applicationId) {
   const a = q.get(
     `SELECT a.id AS application_id, c.id AS candidate_id, c.name, substr(c.photo_file, 1, 8) AS photo, j.title AS job_title, cl.name AS client_name
-     FROM applications a JOIN candidates c ON c.id = a.candidate_id JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id WHERE a.id = ?`, applicationId);
+     FROM applications a JOIN candidates c ON c.id = a.candidate_id LEFT JOIN jobs j ON j.id = a.job_id LEFT JOIN clients cl ON cl.id = j.client_id WHERE a.id = ?`, applicationId);
   return a ? { ...a, how: 'chosen' } : null;
 }
 
