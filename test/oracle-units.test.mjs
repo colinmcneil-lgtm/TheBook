@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { measureWebm, webmWithDuration } from '../server/webm.js';
-import { RECORDING, CANNED, tempDir, pieces } from './oracle-helpers.mjs';
+import { RECORDING, CANNED, tempDir, pieces, portsProblem } from './oracle-helpers.mjs';
 
 // The module opens the database when it loads, so it is pointed at a folder of its own first.
 process.env.DATA_DIR = tempDir('oracle-units');
@@ -195,4 +195,15 @@ test('a call\'s length on the candidate\'s history reads the way the app shows i
   assert.equal(lengthWords(65 * 60000), ', 1 h 05 min');
   assert.equal(lengthWords(0), '');
   assert.equal(lengthWords(null), '');
+});
+
+test('a base for the tests\' ports that puts one of the thirty on a port Node will not fetch from is refused, with a base to choose instead', () => {
+  // 5060 and 5061 are among the ports Node refuses. Every base from 5031 to 5061 puts one of the thirty on them.
+  for (const base of [5031, 5040, 5060, 5061]) assert.match(portsProblem(base), /^ORACLE_TEST_PORT=\d+ cannot be used: .* Node refuses to fetch from port 506[01]/, String(base));
+  assert.equal(portsProblem(5040), 'ORACLE_TEST_PORT=5040 cannot be used: the tests use the 30 ports 5040 to 5069, and Node refuses to fetch from port 5060 and 5061 whatever is listening there. '
+    + 'Choose a base above 5061 or below 5031 (and clear of 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080).');
+  for (const base of [3610, 5030, 5062, 5080, 4930]) assert.equal(portsProblem(base), null, String(base));
+  assert.match(portsProblem(3640), /port 3659/);
+  assert.match(portsProblem(5999), /port 6000/);
+  for (const base of [80, 65530, 3610.5, NaN]) assert.match(portsProblem(base), /must be a whole number from 1024 to 65506/, String(base));
 });

@@ -458,7 +458,7 @@ export function AddToJobModal({ data, onClose }) {
             </span>
           </div>
           {refusal.join && (
-            <p className="mt-2 text-xs text-amber-900">That is {chosen ? `${chosen.client_name}’s` : 'the client’s'} own record of them. Joining moves everything saved here (notes, résumé, calls and history) onto their application for that job, so there is one record of this person. What comes from The Book stays hidden from the hiring team.</p>
+            <p className="mt-2 text-xs text-amber-900">That is {chosen ? `${chosen.client_name}’s` : 'the client’s'} own record of them. Joining moves everything saved here (notes, résumé, calls and history) onto their application for that job, so there is one record of this person. The hiring team will see what their record was missing and this entry has: contact details, a photo, and the résumé if they had sent none. They do not see the notes, emails, calls or history from The Book.</p>
           )}
         </div>
       )}
@@ -479,7 +479,7 @@ export function AddToJobModal({ data, onClose }) {
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-xs text-amber-900">Adding to the existing record moves everything saved here onto it (notes, résumé, photo, calls and history), so there is one record for this person at that client.</p>
+          <p className="mt-2 text-xs text-amber-900">Adding to the existing record moves everything saved here onto it (notes, résumé, photo, calls and history), so there is one record for this person at that client. The hiring team sees their details and résumé, including contact details and a photo that record was missing, and none of the notes, emails or history from before now.</p>
         </div>
       )}
     </Modal>
@@ -685,6 +685,51 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
           </ul>
         </div>
       ) : <p className="text-xs text-stone-500">An email address or a LinkedIn link is needed, so the same person is recognised if they are added again.</p>}
+    </Modal>
+  );
+}
+
+/**
+ * "Delete all data on this person" for somebody who is on file in more than one place. Each client keeps its own
+ * record of a person and The Book keeps its own, so erasing one record leaves the others. Every record is named
+ * here with a tick box: the ones under the same email address are ticked to begin with, since they are certainly
+ * the same person; one that only shares a LinkedIn link is left for the recruiter to tick.
+ */
+export function EraseModal({ data, elsewhere, metaviewToo, onClose, onDone }) {
+  const { bump } = useApp();
+  const toast = useToast();
+  const { candidate, client } = data;
+  const [chosen, setChosen] = useState(() => new Set(elsewhere.filter((r) => r.same_email).map((r) => r.candidate_id)));
+  const toggle = (id) => setChosen((was) => { const next = new Set(was); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const left = elsewhere.filter((r) => !chosen.has(r.candidate_id));
+  const [erase, busy] = useAction(async () => {
+    const also = elsewhere.filter((r) => chosen.has(r.candidate_id)).map((r) => r.candidate_id);
+    const result = await api.del(url(`/candidates/${candidate.id}`, { also: also.length ? also.join(',') : undefined }));
+    toast(left.length ? `${result.erased === 1 ? 'One record' : `${result.erased} records`} of ${candidate.name} deleted; ${left.length === 1 ? 'one is' : `${left.length} are`} still on file`
+      : `All data on ${candidate.name} deleted`);
+    onClose();
+    onDone();
+    bump();
+  });
+  const place = (r) => (r.client_id ? `${r.client_name}’s record${r.job_title ? `, in ${r.job_title}` : ''}` : 'The Book, without a job');
+  const others = data.others.length ? `, with their ${data.others.length === 1 ? 'application' : 'applications'} for ${data.others.map((o) => o.job_title).join(', ')}` : '';
+  return (
+    <Modal title="Delete all data on this person" subtitle={candidate.name} size="sm" onClose={onClose} onSubmit={erase}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="danger" busy={busy}>{chosen.size ? `Delete ${chosen.size + 1} records` : 'Delete this record only'}</Button></>}>
+      <p className="text-sm text-stone-700">{candidate.name} is on file in more than one place. Each client keeps its own record of a person and The Book keeps its own, so deleting one leaves the others. Tick every record that should go.</p>
+      <div className="space-y-3 rounded-lg border border-line px-3 py-3">
+        <Checkbox checked disabled readOnly label={`This record: ${client ? `${client.name}’s${others}` : 'The Book, without a job'}`} />
+        {elsewhere.map((r) => (
+          <Checkbox key={r.candidate_id} checked={chosen.has(r.candidate_id)} onChange={() => toggle(r.candidate_id)}
+            label={<>{place(r)}{r.application_id && <> · <a href={`/candidates?c=${r.application_id}`} target="_blank" rel="noopener noreferrer" className="font-medium text-brand-700 underline">open</a></>}</>}
+            hint={r.same_email ? 'Same email address.' : `Same LinkedIn link${r.name !== candidate.name ? `, under the name ${r.name}` : ''}. Check that it is the same person before ticking.`} />
+        ))}
+      </div>
+      <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-900">
+        Everything held on each record ticked is deleted for good: contact details, notes, scorecards, interviews, emails, résumés and recorded calls. This cannot be undone.
+        {left.length > 0 && ` ${left.length === 1 ? 'The record' : 'The records'} left unticked will still be on file.`}
+      </p>
+      {metaviewToo && <p className="text-xs text-stone-500">The Book also forgets their Metaview calls. The conversations themselves stay in Metaview: delete them there too if they must go altogether.</p>}
     </Modal>
   );
 }

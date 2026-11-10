@@ -35,6 +35,9 @@ const put = (who, pathname, json) => who.putJson(pathname, json);
 const detail = async (who, id) => (await who.get(`/applications/${id}`)).body;
 const list = async (who, query = '') => (await who.get(`/applications${query}`)).body;
 const uploads = () => fs.readdirSync(path.join(dataDir, 'uploads')).sort();
+/** A history line and an e-mail as they read, whichever table they are kept in (the numbers differ between the two). */
+const line = (a) => [a.type, a.detail, a.created_at, a.user_name];
+const mail = (e) => [e.subject, e.body, e.to_email, e.delivery, e.created_at, e.sent_by_name];
 /** Read the server's database directly, for things no route shows. */
 function db(query, ...params) {
   const database = new DatabaseSync(path.join(dataDir, 'app.db'), { readOnly: true });
@@ -710,8 +713,13 @@ test('put on a job, their entry becomes that job\'s application: same id, at the
   // Everything that was on the entry is still on it: the résumé, the notes, the history, the photo, the call.
   assert.equal((await dana.get(`/applications/${book.cleo}/resume`)).body.toString(), 'Cleo, accountant');
   assert.deepEqual(cleo.notes.map((n) => n.id), before_.notes.map((n) => n.id));
-  assert.deepEqual(cleo.activities.slice(1).map((a) => a.id), before_.activities.map((a) => a.id));
-  assert.deepEqual(cleo.emails.map((e) => e.id), before_.emails.map((e) => e.id));
+  // The history and the e-mails from before the job read exactly as they did, in the same order. (They are the
+  // agency's own from here on and are kept in its own tables, so only the agency is ever read them.)
+  assert.deepEqual(cleo.activities.slice(1).map(line), before_.activities.map(line));
+  assert.deepEqual(cleo.emails.map(mail), before_.emails.map(mail));
+  assert.ok(before_.activities.length > 3 && before_.emails.length === 1);
+  assert.deepEqual(db('SELECT detail FROM activities WHERE application_id = ?', book.cleo), [{ detail: 'Added to Senior Accountant at Applied' }]);
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM emails WHERE application_id = ?', book.cleo), [{ n: 0 }]);
   assert.equal(cleo.candidate.photo, before_.candidate.photo);
   const call = (await dana.get(`/oracle/calls/${book.cleoCall}`)).body;
   assert.deepEqual([call.call.application_id, call.candidate.id, call.application.job_title, call.application.client_name], [book.cleo, before_.candidate.id, 'Senior Accountant', 'Maple Freight']);
@@ -820,7 +828,7 @@ test('joined to the client\'s record, the entry moves there with its notes, rés
   assert.equal((await dana.patch(`/oracle/calls/${call}`, { notes: 'Notice period is a month.' })).status, 200);
   assert.equal((await dana.post(`/oracle/calls/${call}/save-note`)).status, 200);
   const filesBefore = uploads();
-  const historyBefore = (await detail(dana, book.kevin)).activities.map((a) => a.id);
+  const historyBefore = (await detail(dana, book.kevin)).activities.map(line);
 
   const joined = await addToJob(dana, book.kevin, { job_id: job.payroll, stage_id: (await alex.get(`/jobs/${job.payroll}`)).body.stages[1].id, into: kevinAtMaple });
   assert.equal(joined.status, 200, JSON.stringify(joined.body));
@@ -839,7 +847,7 @@ test('joined to the client\'s record, the entry moves there with its notes, rés
   assert.equal((await dana.get(`/applications/${book.kevin}/resume`)).body.toString(), 'Kevin, controller');
   assert.deepEqual(kevin.notes.map((n) => [n.body, n.private]).sort(), [['Notes from Call with Kevin Tremblay\n\nNotice period is a month.', 1], ['Prefers contract roles.', 1]]);
   assert.deepEqual(kevin.activities.slice(0, 3).map((a) => a.detail).sort(), ['Added to Payroll Specialist at Recruiter screen', "Joined to Kevin Tremblay's record at Maple Freight", 'Started at Recruiter screen']);
-  assert.deepEqual(kevin.activities.slice(3).map((a) => a.id), historyBefore);
+  assert.deepEqual(kevin.activities.slice(3).map(line), historyBefore);
   const moved = (await dana.get(`/oracle/calls/${call}`)).body;
   assert.deepEqual([moved.call.application_id, moved.candidate.id, moved.application.job_title, moved.call.note_saved], [book.kevin, kevinAtMaple, 'Payroll Specialist', true]);
   assert.deepEqual((await dana.get(`/oracle/calls?candidate_id=${kevinAtMaple}`)).body.map((c) => c.id), [call]);
@@ -970,7 +978,10 @@ test('adding somebody who is in The Book to a job in the ordinary way puts their
   const teodor = await detail(dana, other);
   assert.deepEqual([teodor.application.resume_name, teodor.earlier_resumes.map((r) => r.name)], ['Teodor 2026.pdf', ['Teodor 2023.pdf']]);
   assert.equal((await dana.get(`/applications/${other}/resumes/${teodor.earlier_resumes[0].id}`)).body.toString(), 'Teodor, old');
-  assert.equal(teodor.activities[0].detail, 'A newer résumé was added. The one they had (Teodor 2023.pdf) is kept under Earlier résumés');
+  // Under the line that says she is on the job, the agency is told how he was found and what became of his résumé.
+  assert.deepEqual(teodor.activities.map((a) => a.detail), ['Added to Senior Accountant at Applied',
+    'Recognised as Teodor Blackwood by LinkedIn link: their entry in The Book was put on the job',
+    'A newer résumé was added. The one they had (Teodor 2023.pdf) is kept under Earlier résumés', 'Added to The Book (agency sourced)']);
   const seen = await detail(maya, other);
   assert.deepEqual([seen.application.resume_name, seen.earlier_resumes, seen.activities.map((a) => a.detail)], ['Teodor 2026.pdf', [], ['Added to Senior Accountant at Applied']]);
   assert.equal((await maya.get(`/applications/${other}/resumes/${teodor.earlier_resumes[0].id}`)).status, 403);
@@ -1042,8 +1053,11 @@ test('the hiring team is not shown when the agency first saved somebody, nor a c
   const person = db('SELECT c.id, c.created_at FROM candidates c JOIN applications a ON a.candidate_id = c.id WHERE a.id = ?', entry)[0];
   await new Promise((resolve) => setTimeout(resolve, 15));
   assert.deepEqual((await addToJob(dana, entry, { job_id: job.practice })).body, { id: entry, merged: false });
+  // The agency still has the covering note, as a note only it can read: it is no longer on the application at all.
   const ours = await detail(dana, entry);
-  assert.deepEqual([ours.candidate.created_at, ours.application.cover_note], [person.created_at, 'Agency eyes only: met at a conference.']);
+  assert.deepEqual([ours.candidate.created_at, ours.application.cover_note, ours.notes.map((n) => [n.body, n.private])],
+    [person.created_at, null, [['Saved with their entry in The Book: Agency eyes only: met at a conference.', 1]]]);
+  assert.deepEqual(db('SELECT cover_note FROM applications WHERE id = ?', entry), [{ cover_note: null }]);
   const theirs = await detail(noor, entry);
   assert.equal(theirs.application.cover_note, null);
   assert.equal(theirs.candidate.created_at, theirs.application.applied_at);
@@ -1279,7 +1293,9 @@ test('put on a job from The Book straight into an interview stage, Offer or Hire
   const uma = await detail(dana, book.uma);
   assert.deepEqual(uma.activities.map((a) => [a.type, a.detail]), [['stage_interview', `Started at ${interview.name}`], ['added', `Added to Credit Controller at ${interview.name}`], ['added', 'Added to The Book (agency sourced)']]);
   assert.deepEqual(uma.activities.slice(0, 2).map((a) => a.created_at), [uma.application.general_until, uma.application.general_until]);
-  assert.deepEqual(await feedOf(alex, 'Uma Interview'), [['interview', `Started at ${interview.name}`, 'Credit Controller'], [null, `Added to Credit Controller at ${interview.name}`, 'Credit Controller'], [null, 'Added to The Book (agency sourced)', 'Credit Controller']]);
+  // The feed has the job's news and nothing from before it, for the agency as well: "Added to The Book" beside the
+  // name of a job would read as that job's news.
+  assert.deepEqual(await feedOf(alex, 'Uma Interview'), [['interview', `Started at ${interview.name}`, 'Credit Controller'], [null, `Added to Credit Controller at ${interview.name}`, 'Credit Controller']]);
   // The hiring team sees the milestone too, and still nothing from before the job.
   assert.deepEqual(await feedOf(maya, 'Uma Interview'), [['interview', `Started at ${interview.name}`, 'Credit Controller'], [null, `Added to Credit Controller at ${interview.name}`, 'Credit Controller']]);
   assert.deepEqual((await detail(maya, book.uma)).activities.map((a) => a.detail), [`Started at ${interview.name}`, `Added to Credit Controller at ${interview.name}`]);
@@ -1296,7 +1312,7 @@ test('put on a job from The Book straight into an interview stage, Offer or Hire
   // At the job's first stage there is nothing to shout about: one line, and no milestone.
   book.xan = await inBook('Xan Applied');
   assert.equal((await addToJob(dana, book.xan, { job_id: job.credit })).status, 200);
-  assert.deepEqual(await feedOf(alex, 'Xan Applied'), [[null, 'Added to Credit Controller at Applied', 'Credit Controller'], [null, 'Added to The Book (agency sourced)', 'Credit Controller']]);
+  assert.deepEqual(await feedOf(alex, 'Xan Applied'), [[null, 'Added to Credit Controller at Applied', 'Credit Controller']]);
 
   // Sent with a job from the Add candidate dialog or the extension, their entry goes on the job the same way.
   const yara = await inBook('Yara Dialog');
@@ -1325,9 +1341,7 @@ test('back in The Book they are in no feed; on another job, what happened on the
   // Credit Controller is no longer picked out: it would read as an offer for the job named beside it.
   assert.equal((await addToJob(dana, book.uma, { job_id: job.payroll })).status, 200);
   const rows = await feedOf(alex, 'Uma Interview');
-  assert.deepEqual(rows[0], [null, 'Added to Payroll Specialist at Applied', 'Payroll Specialist']);
-  assert.ok(rows.some(([, detail]) => detail === 'Moved to Offer'), 'the earlier line is still in the feed');
-  assert.deepEqual(rows.filter(([milestone]) => milestone), []);
+  assert.deepEqual(rows, [[null, 'Added to Payroll Specialist at Applied', 'Payroll Specialist']], 'nothing from the first job is in the feed under the second');
   assert.ok((await detail(dana, book.uma)).activities.some((a) => a.type === 'stage_offer' && a.detail === 'Moved to Offer'));
   assert.deepEqual(await feedOf(maya, 'Uma Interview'), [[null, 'Added to Payroll Specialist at Applied', 'Payroll Specialist']]);
   // What happens on this job is its news again.
@@ -1514,6 +1528,180 @@ test('the reports count somebody who came from The Book like anyone else in a jo
   // The hiring team is not sent which stages are interviews with the client, here as anywhere.
   assert.equal(Object.hasOwn((await detail(maya, quiet)).stages[1], 'with_client'), false);
   assert.equal(Object.hasOwn((await detail(dana, quiet)).stages[1], 'with_client'), true);
+});
+
+test('what somebody wrote to one client when they applied there is never shown to another client\'s hiring team', async () => {
+  const slug = (await alex.get(`/clients/${client.northline}`)).body.client.slug;
+  const clinic = (await alex.post('/jobs', { client_id: client.northline, title: 'Clinic Lead', status: 'open',
+    questions: [{ id: 'q1', label: 'What salary do you expect at Northline?', type: 'short', required: true }, { id: 'q2', label: 'Can you work Saturdays?', type: 'yesno' }] })).body.id;
+  // Petra applies on Northline's careers page: she answers Northline's questions, writes them a note and ticks their consent box.
+  const sent = await session(api.base).upload(`/public/careers/${slug}/jobs/${clinic}/apply`, { name: 'Petra Novak', email: 'petra@example.com', consent: 'yes',
+    answers: JSON.stringify({ q1: 'NORTHLINE-ANSWER: 95k, and I would take less', q2: 'yes' }), cover_note: 'Dear Northline, I have always wanted to work for you.' });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  const hers = (await list(alex, `?job_id=${clinic}`))[0].id;
+  const atNorthline = await detail(noor, hers);
+  assert.deepEqual([atNorthline.application.answers.map((a) => a.answer), atNorthline.application.cover_note, atNorthline.application.source, Boolean(atNorthline.application.consent_at)],
+    [['NORTHLINE-ANSWER: 95k, and I would take less', 'yes'], 'Dear Northline, I have always wanted to work for you.', 'careers_page', true]);
+  // The agency has her in The Book as well, and joins that entry to the application she made.
+  const entry = await saved(dana, { name: 'Petra Novak', email: 'petra@example.com', note: 'Met at a careers fair.' });
+  assert.deepEqual((await addToJob(dana, entry, { job_id: clinic, into: atNorthline.candidate.id })).body, { id: hers, merged: true });
+  // Northline still sees what she wrote to Northline.
+  assert.equal((await detail(noor, hers)).application.answers.length, 2);
+
+  // Removed from the job, she goes back to The Book. What she wrote to Northline is kept for the agency as a note,
+  // and is no longer on the application that will go on to the next job.
+  assert.deepEqual((await dana.del(`/applications/${hers}`)).body, { ok: true, returned: true, id: hers });
+  const inBook = await detail(dana, hers);
+  assert.deepEqual([inBook.application.general, inBook.application.answers, inBook.application.cover_note, inBook.application.consent_at, inBook.application.source], [true, [], null, null, 'agency_sourced']);
+  assert.deepEqual(db('SELECT answers, cover_note, consent_at, source FROM applications WHERE id = ?', hers), [{ answers: '[]', cover_note: null, consent_at: null, source: 'agency_sourced' }]);
+  const kept = inBook.notes.find((n) => n.body.startsWith('From their own application'));
+  assert.equal(kept.private, 1);
+  assert.equal(kept.body, [
+    `From their own application for Clinic Lead at Northline Dental, where they agreed to their data being processed on ${atNorthline.application.consent_at.slice(0, 10)}. Kept for the agency only.`,
+    'Screening answers:\nWhat salary do you expect at Northline?\nNORTHLINE-ANSWER: 95k, and I would take less\n\nCan you work Saturdays?\nyes',
+    'Note from the candidate:\nDear Northline, I have always wanted to work for you.',
+  ].join('\n\n'));
+
+  // Put on a job at Maple. Maple's hiring team is shown her name, details and résumé, and not a word of Northline's.
+  const fleet = (await alex.post('/jobs', { client_id: client.maple, title: 'Fleet Planner', status: 'open' })).body.id;
+  assert.deepEqual((await addToJob(dana, hers, { job_id: fleet })).body, { id: hers, merged: false });
+  const atMaple = await detail(maya, hers);
+  assert.deepEqual([atMaple.application.answers, atMaple.application.cover_note, atMaple.application.consent_at, atMaple.application.source, atMaple.notes, atMaple.emails, atMaple.activities.map((a) => a.detail)],
+    [[], null, null, 'agency_sourced', [], [], ['Added to Fleet Planner at Applied']]);
+  for (const answer of [atMaple, (await maya.get('/dashboard')).body, await list(maya, '?status=all'), (await maya.get(`/reports?job_id=${fleet}`)).body]) {
+    assert.equal(/northline|95k|careers/i.test(JSON.stringify(answer)), false, 'nothing of Northline reaches Maple');
+  }
+  // The agency still has all of it.
+  const whole = await detail(dana, hers);
+  assert.ok(whole.notes.some((n) => n.body.includes('NORTHLINE-ANSWER')));
+  assert.ok(whole.emails.some((e) => /Clinic Lead/.test(e.subject)), 'the confirmation Northline sent her');
+  assert.ok(whole.activities.some((a) => a.detail === 'Applied via careers page'));
+
+  // The second lock. Were answers, a note or a consent date ever left on an entry that became a job's application,
+  // the hiring team would still not be passed them. (Written straight into the database: no screen can do it.)
+  const direct = new DatabaseSync(path.join(dataDir, 'app.db'));
+  direct.exec('PRAGMA busy_timeout = 2000');
+  direct.prepare(`UPDATE applications SET answers = ?, cover_note = 'LEFT BEHIND', consent_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`).run(JSON.stringify([{ question: 'Q', answer: 'LEFT BEHIND' }]), hers);
+  direct.close();
+  const still = await detail(maya, hers);
+  assert.deepEqual([still.application.answers, still.application.cover_note, still.application.consent_at], [[], null, null]);
+  assert.equal(JSON.stringify(still).includes('LEFT BEHIND'), false);
+  assert.equal((await detail(dana, hers)).application.cover_note, 'LEFT BEHIND');
+  // Somebody who applied to Maple themselves is shown to Maple with their answers, as before.
+  assert.equal((await dana.del(`/candidates/${whole.candidate.id}`)).status, 200);
+});
+
+test('found in The Book by their link with another address typed, the entry keeps its own address and the history says so, for the agency only', async () => {
+  const entry = await saved(dana, { name: 'Linus Varga', email: 'linus.old@example.com', linkedin: 'https://www.linkedin.com/in/linus-varga', phone: '416 555 0100' });
+  const depot = (await alex.post('/jobs', { client_id: client.maple, title: 'Depot Manager', status: 'open' })).body.id;
+  const added = await sam.upload('/applications', { job_id: depot, name: 'Linus Varga', email: 'linus.new@example.com', linkedin: 'https://linkedin.com/in/linus-varga/' });
+  assert.deepEqual(added.body, { id: entry, known: true, merged: true, name: 'Linus Varga', general: false, moved: true, joined: false });
+  const linus = await detail(dana, entry);
+  assert.deepEqual([linus.candidate.email, linus.candidate.phone], ['linus.old@example.com', '416 555 0100']);
+  assert.deepEqual(linus.activities.map((a) => a.detail), ['Added to Depot Manager at Applied',
+    'A different email address was entered (linus.new@example.com); the record keeps linus.old@example.com',
+    'Recognised as Linus Varga by LinkedIn link: their entry in The Book was put on the job', 'Added to The Book (agency sourced)']);
+  // How somebody was matched is the agency's business.
+  assert.deepEqual((await detail(maya, entry)).activities.map((a) => a.detail), ['Added to Depot Manager at Applied']);
+  assert.equal(JSON.stringify((await maya.get('/dashboard')).body).includes('linus.new'), false);
+  // Found by the address they have, nothing needs saying.
+  const other = await saved(dana, { name: 'Mina Varga', email: 'mina@example.com' });
+  assert.equal((await sam.upload('/applications', { job_id: depot, name: 'Mina Varga', email: 'mina@example.com' })).body.id, other);
+  assert.deepEqual((await detail(dana, other)).activities.map((a) => a.detail), ['Added to Depot Manager at Applied', 'Added to The Book (agency sourced)']);
+});
+
+test('one person on file in two places: each profile points to the other, and deleting all data on them can take both', async () => {
+  const days = (await alex.post('/jobs', { client_id: client.maple, title: 'Dispatcher', status: 'open' })).body.id;
+  const nights = (await alex.post('/jobs', { client_id: client.maple, title: 'Night Dispatcher', status: 'open' })).body.id;
+  const filesBefore = uploads();
+  // From The Book onto one of Maple's jobs, then onto a second. Removed from the first, what the agency kept on the
+  // entry goes back to The Book as a record of its own, and Maple keeps its record for the second job.
+  const entry = await saved(dana, { name: 'Odile Ferrand', email: 'odile@example.com', linkedin: 'https://www.linkedin.com/in/odile-ferrand', note: 'Kept on the entry.', resume: resume('Odile', 'Odile.pdf') });
+  assert.equal((await addToJob(dana, entry, { job_id: days })).status, 200);
+  const second = (await addToJob(dana, entry, { job_id: nights })).body.id;
+  assert.deepEqual((await dana.del(`/applications/${entry}`)).body, { ok: true, returned: true, id: entry });
+  const inBook = await detail(dana, entry), onJob = await detail(dana, second);
+  assert.notEqual(inBook.candidate.id, onJob.candidate.id);
+  assert.deepEqual([inBook.application.general, inBook.notes.map((n) => n.body), onJob.job.title, onJob.notes], [true, ['Kept on the entry.'], 'Night Dispatcher', []]);
+  // Each profile says where the other record is.
+  assert.deepEqual(onJob.elsewhere, [{ candidate_id: inBook.candidate.id, name: 'Odile Ferrand', client_id: null, client_name: null, application_id: entry, job_title: null, same_email: true }]);
+  assert.deepEqual(inBook.elsewhere, [{ candidate_id: onJob.candidate.id, name: 'Odile Ferrand', client_id: client.maple, client_name: 'Maple Freight', application_id: second, job_title: 'Night Dispatcher', same_email: true }]);
+  // The hiring team is told nothing about it.
+  const theirs = await detail(maya, second);
+  assert.equal('elsewhere' in theirs, false);
+  assert.equal(JSON.stringify(theirs).includes('The Book'), false);
+
+  // Another client's record of the same person is pointed out too: here one that shares only her LinkedIn link.
+  const hygiene = (await alex.post('/jobs', { client_id: client.northline, title: 'Hygiene Lead', status: 'open' })).body.id;
+  // (She applied there herself, under another address: an application through the careers page is never joined to anyone.)
+  const northline = (await alex.get(`/clients/${client.northline}`)).body.client.slug;
+  assert.equal((await session(api.base).upload(`/public/careers/${northline}/jobs/${hygiene}/apply`, { name: 'Odile Ferrand-Roy', email: 'odile.work@example.com', linkedin: 'https://linkedin.com/in/odile-ferrand', consent: 'yes' })).status, 200);
+  const third = (await list(alex, `?job_id=${hygiene}`))[0].id;
+  const atNorthline = (await detail(sam, third)).candidate.id;
+  assert.deepEqual((await detail(dana, second)).elsewhere.map((r) => [r.candidate_id, r.name, r.client_name, r.job_title, r.same_email]),
+    [[inBook.candidate.id, 'Odile Ferrand', null, null, true], [atNorthline, 'Odile Ferrand-Roy', 'Northline Dental', 'Hygiene Lead', false]]);
+
+  // Deleting all data on her: a record that is not one of hers is refused and nothing goes; a client user cannot ask at all.
+  const stranger = (await detail(dana, app.kevin)).candidate.id;
+  const refused = await dana.del(`/candidates/${onJob.candidate.id}?also=${inBook.candidate.id},${stranger}`);
+  assert.deepEqual([refused.status, refused.body.error], [409, 'One of the other records is no longer on file as this person’s. Nothing has been deleted: open the profile again and choose once more.']);
+  assert.equal((await maya.del(`/candidates/${onJob.candidate.id}?also=${inBook.candidate.id}`)).status, 403);
+  assert.deepEqual(db(`SELECT COUNT(*) AS n FROM candidates WHERE id IN (?, ?, ?, ?)`, onJob.candidate.id, inBook.candidate.id, atNorthline, stranger), [{ n: 4 }]);
+  // Asked for the Maple record and the one in The Book, both go, with their files; Northline's, left unticked, stays.
+  const gone = await dana.del(`/candidates/${onJob.candidate.id}?also=${inBook.candidate.id}`);
+  assert.deepEqual(gone.body, { ok: true, erased: 2 });
+  assert.deepEqual(db(`SELECT id FROM candidates WHERE email LIKE 'odile%' ORDER BY id`), [{ id: atNorthline }]);
+  assert.deepEqual(db('SELECT COUNT(*) AS n FROM applications WHERE id IN (?, ?)', entry, second), [{ n: 0 }]);
+  for (const table of ['notes', 'activities', 'agency_activities', 'emails', 'agency_emails']) assert.deepEqual(db(`SELECT COUNT(*) AS n FROM ${table} WHERE application_id IN (?, ?)`, entry, second), [{ n: 0 }], table);
+  assert.deepEqual(await until(async () => uploads(), (now_) => now_.length === filesBefore.length), filesBefore, 'the résumés of both records are removed');
+  assert.deepEqual((await detail(sam, third)).elsewhere, []);
+  // Deleted the ordinary way, one record goes and the answer says so.
+  assert.deepEqual((await dana.del(`/candidates/${atNorthline}`)).body, { ok: true, erased: 1 });
+
+  // The same two records arise when somebody who is in The Book applies on a client's careers page.
+  const slug = (await alex.get(`/clients/${client.maple}`)).body.client.slug;
+  const bookEntry = await saved(dana, { name: 'Quentin Roux', email: 'quentin@example.com' });
+  assert.equal((await session(api.base).upload(`/public/careers/${slug}/jobs/${days}/apply`, { name: 'Quentin Roux', email: 'quentin@example.com', consent: 'yes' })).status, 200);
+  const applied = (await list(alex, `?job_id=${days}`)).find((r) => r.name === 'Quentin Roux').id;
+  assert.deepEqual((await detail(dana, applied)).elsewhere.map((r) => [r.application_id, r.client_name]), [[bookEntry, null]]);
+  assert.deepEqual((await detail(dana, bookEntry)).elsewhere.map((r) => [r.application_id, r.client_name, r.job_title]), [[applied, 'Maple Freight', 'Dispatcher']]);
+});
+
+test('nothing the agency kept is stored where the hiring team is shown from: read the way the release before this one reads it, a client is shown exactly what it is shown now', async () => {
+  // Should a deploy ever be rolled back, the release before this one (6f279a9) would be reading this database. It
+  // knows nothing of people who came from The Book: it shows a client every history line that is not a call, every
+  // e-mail, every note that is not agency only, the covering note and the answers of an application in one of its
+  // jobs. These are its queries. For every application in a job, they must find what this release shows the client.
+  const asBefore = (id) => ({
+    history: db(`SELECT ac.detail FROM activities ac WHERE ac.application_id = ? AND ac.type != 'call' ORDER BY ac.created_at DESC, ac.id DESC`, id).map((r) => r.detail),
+    emails: db('SELECT e.subject FROM emails e WHERE e.application_id = ? ORDER BY e.created_at DESC', id).map((r) => r.subject).sort(),
+    notes: db('SELECT n.body FROM notes n WHERE n.application_id = ? AND n.private = 0 ORDER BY n.created_at DESC', id).map((r) => r.body).sort(),
+    written: db('SELECT cover_note, answers, consent_at FROM applications WHERE id = ?', id).map((r) => [r.cover_note, JSON.parse(r.answers), r.consent_at])[0],
+  });
+  let fromBook = 0, withHistory = 0;
+  for (const [who, clientId] of [[maya, client.maple], [noor, client.northline]]) {
+    for (const row of await list(alex, `?client_id=${clientId}&status=all`)) {
+      const shown = (await who.get(`/applications/${row.id}`)).body;
+      assert.deepEqual(asBefore(row.id), {
+        history: shown.activities.map((a) => a.detail), emails: shown.emails.map((e) => e.subject).sort(), notes: shown.notes.map((n) => n.body).sort(),
+        written: [shown.application.cover_note, shown.application.answers, shown.application.consent_at],
+      }, `${row.name} in ${row.job_title}`);
+      const ours = await detail(dana, row.id);
+      if (ours.application.from_book) fromBook += 1;
+      if (ours.activities.length > shown.activities.length + ours.activities.filter((a) => a.type === 'call').length || ours.emails.length > shown.emails.length) withHistory += 1;
+    }
+    // Its dashboard feed, too: the fifteen newest lines of this client's applications that are not calls.
+    const feed = db(
+      `SELECT ac.detail FROM activities ac JOIN applications a ON a.id = ac.application_id JOIN jobs j ON j.id = a.job_id
+       WHERE ac.type != 'call' AND j.client_id = ? ORDER BY ac.created_at DESC, ac.id DESC LIMIT 15`, clientId).map((r) => r.detail);
+    assert.deepEqual(feed, (await who.get('/dashboard')).body.recent.map((r) => r.detail));
+  }
+  // And no line about The Book hangs from an application in a job, where a feed or a profile could pick it up.
+  assert.deepEqual(db(`SELECT ac.detail FROM activities ac JOIN applications a ON a.id = ac.application_id WHERE a.job_id IS NOT NULL AND ac.detail LIKE '%The Book%'`), []);
+  assert.equal(JSON.stringify((await alex.get('/dashboard')).body.recent).includes('The Book'), false);
+  // The comparison was not an empty one: people who came from The Book are on these jobs, with history only the agency reads.
+  assert.ok(fromBook >= 8, `${fromBook} applications that came from The Book`);
+  assert.ok(withHistory >= 8, `${withHistory} with history or e-mails only the agency is shown`);
 });
 
 test('the demo data has people in The Book without a job', () => {

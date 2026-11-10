@@ -2,8 +2,9 @@
 //
 // The upgrade makes three columns optional (candidates.client_id, applications.job_id, applications.stage_id), adds
 // one empty column (applications.general_until) and two indexes. SQLite cannot change a column in place, so both
-// tables are rebuilt, on a database that holds real people. It also adds a marker to every line of history and
-// every e-mail (agency_only, 0 on all of them) and one new, empty table for résumés that a newer one replaced. These
+// tables are rebuilt, on a database that holds real people. It also adds three new, empty tables: one for résumés
+// that a newer one replaced, and two for the history lines and e-mails that only the agency may read (the tables of
+// history lines and e-mails that are there already are not touched at all). These
 // tests build a database with the code as it was before, fill it with awkward data, start the code as it is now on
 // it, and compare everything: every row of every table, every id, the counters that stop a deleted row's id being
 // used again, every index, trigger and foreign key.
@@ -30,8 +31,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tempDir } from './oracle-helpers.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -124,26 +125,23 @@ function openedByLive(dataDir) {
 /**
  * What the snapshot of a database the newest release without this change has opened should be after the upgrade:
  * the same, except that the three columns are optional, applications has one more column that is empty in every
- * row, there are two more indexes, history lines and e-mails each carry a marker that is 0 on every row, and there
- * is one new table with nothing in it.
+ * row, there are two more indexes, and there are three new tables with nothing in them. History lines and e-mails
+ * are exactly as they were.
  */
 function expectedAfter(before) {
   const want = plain(before);
   assert.ok(want.master.some((m) => m.name === 'report_events'), 'expectedAfter is given a database as the newest release without this change leaves it');
-  for (const table of ['activities', 'emails']) {
-    want.columns[table].push({ cid: want.columns[table].length, name: 'agency_only', type: 'INTEGER', notnull: 1, dflt_value: '0', pk: 0 });
-    want.rows[table] = want.rows[table].map((row) => ({ ...row, agency_only: 0 }));
-    const made = want.master.find((m) => m.name === table);
-    // SQLite writes a column added later at the very end of a table that closes straight after its last column.
-    made.sql = made.sql.replace(/(created_at TEXT NOT NULL\s*)\)$/, '$1, agency_only INTEGER NOT NULL DEFAULT 0)');
+  // Three new tables, each made as it is in a database made new today, and empty: résumés that a newer one took the
+  // place of, and the history lines and e-mails that are the agency's alone. Each hangs from an application and goes
+  // when the application does.
+  for (const [table, index] of [['earlier_resumes', 'idx_earlier_resumes_app'], ['agency_activities', 'idx_agency_activities_app'], ['agency_emails', 'idx_agency_emails_app']]) {
+    want.master.push(definedToday(table), definedToday(index));
+    want.rows[table] = [];
+    want.columns[table] = madeNewToday.columns[table];
+    want.foreignKeys[table] = [{ table: 'applications', from: 'application_id', to: 'id', on_update: 'NO ACTION', on_delete: 'CASCADE', match: 'NONE' }];
+    want.indexes[table] = [{ name: index, unique: 0, origin: 'c', partial: 0, columns: ['application_id'] }];
+    want.counters = want.counters.filter((c) => c.name !== table);
   }
-  // Résumés that a newer one took the place of: a new table, made as it is in a database made new today, and empty.
-  want.master.push(definedToday('earlier_resumes'), definedToday('idx_earlier_resumes_app'));
-  want.rows.earlier_resumes = [];
-  want.columns.earlier_resumes = madeNewToday.columns.earlier_resumes;
-  want.foreignKeys.earlier_resumes = [{ table: 'applications', from: 'application_id', to: 'id', on_update: 'NO ACTION', on_delete: 'CASCADE', match: 'NONE' }];
-  want.indexes.earlier_resumes = [{ name: 'idx_earlier_resumes_app', unique: 0, origin: 'c', partial: 0, columns: ['application_id'] }];
-  want.counters = want.counters.filter((c) => c.name !== 'earlier_resumes');
   const column = (table, name) => want.columns[table].find((c) => c.name === name);
   column('candidates', 'client_id').notnull = 0;
   column('applications', 'job_id').notnull = 0;
@@ -446,7 +444,7 @@ forEachBefore('the database code kept from before is the code that was released'
   for (const file of ['db.js', 'links.js']) assert.equal(fs.readFileSync(path.join(HERE, 'fixtures', release.folder, file), 'utf8'), released(file), file);
 });
 
-forEachBefore('upgrading changes nothing but the three columns, the new columns, the new empty table and the indexes, and starting twice changes nothing more', (release) => {
+forEachBefore('upgrading changes nothing but the three columns, the new column, the new empty tables and the indexes, and starting twice changes nothing more', (release) => {
   const dataDir = databaseFromBefore(release, 'pool-upgrade');
   const before = snapshot(dataDir);
   // Whether the release that made it had already given history lines their newer types is as the list above says.
@@ -787,6 +785,130 @@ forEachBefore('a start that is cut off in the middle of rebuilding a table leave
   const byLive = openedByLive(dataDir);
   start(NOW, dataDir);
   assertSame(snapshot(dataDir), expectedAfter(byLive), 'after the next start');
+});
+
+// Builds of this release from before it was finished kept the agency's own history lines and e-mails in the tables
+// the hiring team is shown from, marked with a column (agency_only) or told by their date. No released version did,
+// so no database in use has such lines; one that such a build opened is put right when it is next started.
+test('a database an unfinished build of this release has used: the lines it marked for the agency are moved to the agency\'s own tables', () => {
+  const dataDir = newDir('pool-marked');
+  start(NOW, dataDir);
+  const db = open(dataDir);
+  db.exec(`
+    ALTER TABLE activities ADD COLUMN agency_only INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE emails ADD COLUMN agency_only INTEGER NOT NULL DEFAULT 0;
+    INSERT INTO clients (id, name, slug, created_at) VALUES (1, 'Maple Freight', 'maple', '2026-01-01');
+    INSERT INTO jobs (id, client_id, title, created_at) VALUES (1, 1, 'Dispatcher', '2026-01-01');
+    INSERT INTO stages (id, job_id, name, kind, position) VALUES (1, 1, 'Applied', 'applied', 0);
+    INSERT INTO candidates (id, client_id, name, created_at) VALUES (1, 1, 'On A Job', '2026-04-01'), (2, NULL, 'In The Book', '2026-04-01'), (3, 1, 'Joined', '2026-04-01');
+    INSERT INTO applications (id, candidate_id, job_id, stage_id, applied_at, stage_entered_at, updated_at, general_until) VALUES
+      (1, 1, 1, 1, '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z'),
+      (2, 2, NULL, NULL, '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', NULL),
+      (3, 3, 1, 1, '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', NULL);
+    INSERT INTO activities (application_id, user_id, type, detail, created_at, agency_only) VALUES
+      (1, 7, 'added', 'Added to The Book (linkedin)', '2026-04-01T00:00:00.000Z', 0),
+      (1, 7, 'call', 'Call added, 9 min', '2026-04-02T00:00:00.000Z', 0),
+      (1, 7, 'added', 'Added to Dispatcher at Applied', '2026-05-01T00:00:00.000Z', 0),
+      (1, 7, 'added', 'A newer résumé was added', '2026-05-01T00:00:00.000Z', 1),
+      (2, 7, 'added', 'Added to The Book (referral)', '2026-04-01T00:00:00.000Z', 0),
+      (3, NULL, 'applied', 'Applied via careers page', '2026-03-01T00:00:00.000Z', 0),
+      (3, 7, 'added', 'Added to The Book (agency sourced)', '2026-02-01T00:00:00.000Z', 1),
+      (3, 7, 'merged', 'Joined with their entry in The Book, which had no job', '2026-03-05T00:00:00.000Z', 1);
+    INSERT INTO emails (application_id, to_email, subject, body, sent_by, delivery, created_at, agency_only) VALUES
+      (1, 'a@example.com', 'Before the job', 'Between us', 7, 'sent', '2026-04-03T00:00:00.000Z', 0),
+      (1, 'a@example.com', 'On the job', 'Interview', 7, 'sent', '2026-05-02T00:00:00.000Z', 0),
+      (2, 'b@example.com', 'In The Book', 'Hello', 7, 'sent', '2026-04-03T00:00:00.000Z', 0),
+      (3, 'c@example.com', 'From the entry', 'Between us', 7, 'sent', '2026-02-02T00:00:00.000Z', 1),
+      (3, 'c@example.com', 'We received your application', 'Thanks', NULL, 'sent', '2026-03-01T00:00:00.000Z', 0);`);
+  db.close();
+  const read = () => {
+    const now = open(dataDir);
+    const all = (sql) => plain(now.prepare(sql).all());
+    const out = {
+      shown: all('SELECT application_id, detail FROM activities ORDER BY application_id, created_at, id').map((r) => `${r.application_id} ${r.detail}`),
+      kept: all('SELECT application_id, user_id, type, detail, created_at FROM agency_activities ORDER BY application_id, id'),
+      mailShown: all('SELECT application_id, subject FROM emails ORDER BY application_id, created_at, id').map((r) => `${r.application_id} ${r.subject}`),
+      mailKept: all('SELECT application_id, to_email, subject, body, sent_by, delivery, created_at FROM agency_emails ORDER BY application_id, id'),
+    };
+    now.close();
+    return out;
+  };
+  start(NOW, dataDir);
+  const after_ = read();
+  // What the hiring team is shown from holds the job's own lines and nothing else; somebody in The Book is left alone.
+  assert.deepEqual(after_.shown, ['1 Added to Dispatcher at Applied', '2 Added to The Book (referral)', '3 Applied via careers page']);
+  assert.deepEqual(after_.mailShown, ['1 On the job', '2 In The Book', '3 We received your application']);
+  // The rest is the agency's, whole and in the order it was written.
+  assert.deepEqual(after_.kept, [
+    { application_id: 1, user_id: 7, type: 'added', detail: 'Added to The Book (linkedin)', created_at: '2026-04-01T00:00:00.000Z' },
+    { application_id: 1, user_id: 7, type: 'call', detail: 'Call added, 9 min', created_at: '2026-04-02T00:00:00.000Z' },
+    { application_id: 1, user_id: 7, type: 'added', detail: 'A newer résumé was added', created_at: '2026-05-01T00:00:00.000Z' },
+    { application_id: 3, user_id: 7, type: 'added', detail: 'Added to The Book (agency sourced)', created_at: '2026-02-01T00:00:00.000Z' },
+    { application_id: 3, user_id: 7, type: 'merged', detail: 'Joined with their entry in The Book, which had no job', created_at: '2026-03-05T00:00:00.000Z' },
+  ]);
+  assert.deepEqual(after_.mailKept, [
+    { application_id: 1, to_email: 'a@example.com', subject: 'Before the job', body: 'Between us', sent_by: 7, delivery: 'sent', created_at: '2026-04-03T00:00:00.000Z' },
+    { application_id: 3, to_email: 'c@example.com', subject: 'From the entry', body: 'Between us', sent_by: 7, delivery: 'sent', created_at: '2026-02-02T00:00:00.000Z' },
+  ]);
+  start(NOW, dataDir);
+  assert.deepEqual(read(), after_, 'the next start changes nothing more');
+});
+
+// A disk that fills up in the middle of the upgrade. SQLite undoes the transaction by itself when that happens, so
+// undoing it again fails; that second failure used to be all the owner was told ("cannot rollback - no transaction
+// is active"), on every restart, with no mention of the disk.
+forEachBefore('a disk that fills up during the upgrade is reported as a full disk, nothing is changed, and the next start finishes the job', (release) => {
+  const dataDir = databaseFromBefore(release, 'pool-disk-full');
+  const before = snapshot(dataDir);
+  const byLive = openedByLive(dataDir);
+  // What every release up to the live one does first is not what fills the disk: it is done, and then compared against.
+  const run = open_(NOW, dataDir, { DISK_FULL: '1' });
+  assert.notEqual(run.status, 0, 'the start fails');
+  assert.match(run.stderr, /The disk that holds .* is full, so the database could not be upgraded\. Nothing has been changed or lost\./);
+  assert.match(run.stderr, /about one and a half times the size of app\.db \(it is \d+ MB now\) while it rebuilds the table "\w+"/);
+  assert.doesNotMatch(run.stderr, /cannot rollback/);
+  const left = snapshot(dataDir);
+  assert.deepEqual(left.problems, { integrity: [{ integrity_check: 'ok' }], foreignKeys: [] });
+  for (const table of Object.keys(before.rows)) assert.deepEqual(left.rows[table], before.rows[table], `${table} after the start that ran out of disk`);
+  assert.equal(left.master.some((m) => /__new$/.test(m.name)), false, 'no half-built table is left behind');
+  start(NOW, dataDir);
+  assertSame(snapshot(dataDir), expectedAfter(byLive), 'after the next start, with room on the disk');
+});
+
+test('an error inside a transaction is the error that is reported, even when SQLite has already undone the transaction itself', () => {
+  const script = `
+    const { db, tx } = await import(${JSON.stringify(pathToFileURL(NOW).href)});
+    try { tx(() => { db.exec('ROLLBACK'); throw new Error('the real reason'); }); } catch (err) { console.log(err.message); }
+    console.log(tx(() => 'and the next transaction works'));
+    db.close();`;
+  const run = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--input-type=module', '-e', script], {
+    cwd: ROOT, env: { PATH: process.env.PATH, HOME: process.env.HOME, DATA_DIR: newDir('pool-tx') }, encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.stdout.trim().split('\n'), ['the real reason', 'and the next transaction works']);
+});
+
+// Two processes on one data folder: a deploy that starts the new container before the old one has stopped, or two
+// starts at the same moment. The one that finds the database being written to used to fail at once with "database
+// is locked"; it now waits its turn.
+test('a start waits for another process that is writing to the database, and then upgrades it as if it had been alone', async () => {
+  const dataDir = databaseFromBefore(LIVE, 'pool-busy');
+  const byLive = openedByLive(dataDir);
+  // Another process takes the database for writing, says so, and lets go a second and a half later.
+  const holder = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '-e', `
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(process.argv[1]);
+    db.exec('BEGIN IMMEDIATE');
+    console.log('locked');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+    db.exec('COMMIT');
+    db.close();`, path.join(dataDir, 'app.db')], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const done = new Promise((resolve) => holder.once('exit', resolve));
+  await new Promise((resolve, reject) => { holder.stdout.once('data', resolve); holder.once('error', reject); });
+  const began = Date.now();
+  start(NOW, dataDir);
+  assert.ok(Date.now() - began >= 1000, `the start waited for the other process (it took ${Date.now() - began} ms)`);
+  assert.equal(await done, 0);
+  assertSame(snapshot(dataDir), expectedAfter(byLive), 'after the start that had to wait');
 });
 
 forEachBefore('a start that stops between the two tables is carried on by the next one', (release) => {

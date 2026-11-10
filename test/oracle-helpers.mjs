@@ -24,9 +24,26 @@ export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-c
 //   +14, +15    people saved without a job (pool.test.mjs): a server and a stand-in for Metaview
 //   +16, +17    the reporting tests: two servers
 //   +20 to +29  the Metaview tests (see metaview-helpers.mjs)
-// Node refuses to fetch from a few ports whatever is listening there, and the tests then fail with nothing but
-// "Connection error" in the server's log. Keep all thirty clear of 3659, 4045, 5060, 5061, 6000 and 6665 to 6669.
+// Node refuses to fetch from a few ports whatever is listening there (the list browsers refuse, among them 3659,
+// 4045, 5060, 5061, 6000 and 6665 to 6669). Tests on such a port fail with nothing but "fetch failed", and one of
+// them waits for minutes first. So a base that puts any of the thirty on one of them is refused here, before a
+// single test runs, with a sentence that says which port and what to choose instead.
+const REFUSED_BY_NODE = [1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139,
+  143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061,
+  6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080];
+export const PORT_COUNT = 30;
+/** Why this base cannot be used for the tests' thirty ports, as a sentence; nothing when it can. */
+export function portsProblem(base) {
+  if (!Number.isInteger(base) || base < 1024 || base + PORT_COUNT - 1 > 65535) return `ORACLE_TEST_PORT must be a whole number from 1024 to ${65536 - PORT_COUNT}: the tests use ${PORT_COUNT} ports in a row from it.`;
+  const refused = REFUSED_BY_NODE.filter((port) => port >= base && port < base + PORT_COUNT);
+  if (!refused.length) return null;
+  const last = refused.at(-1);
+  return `ORACLE_TEST_PORT=${base} cannot be used: the tests use the ${PORT_COUNT} ports ${base} to ${base + PORT_COUNT - 1}, and Node refuses to fetch from port ${refused.join(' and ')} `
+    + `whatever is listening there. Choose a base above ${last} or below ${refused[0] - PORT_COUNT + 1} (and clear of ${REFUSED_BY_NODE.filter((port) => port > 1024).join(', ')}).`;
+}
 const BASE_PORT = Number(process.env.ORACLE_TEST_PORT) || 3610;
+const problem = portsProblem(BASE_PORT);
+if (problem) throw new Error(problem);
 export const PORTS = { main: BASE_PORT, bare: BASE_PORT + 1, restart: BASE_PORT + 2, deepgram: BASE_PORT + 3, anthropic: BASE_PORT + 4, workspace: BASE_PORT + 12, workspaceAi: BASE_PORT + 13, pool: BASE_PORT + 14, metaview: BASE_PORT + 20 };
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

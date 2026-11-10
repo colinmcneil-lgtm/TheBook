@@ -11,7 +11,7 @@ import { CallStatus, MetaviewMark, callName, callWhen, fmtLength, madeBy, useLiv
 import { kindLine, oraclePath } from '../oracle/calls.js';
 import { ChannelBadge, problemOf } from '../oracle/metaview.jsx';
 import { NoJobBadge } from './bits.jsx';
-import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, PlacementFeeModal, EditCandidateModal, AddToJobModal } from './CandidateModals.jsx';
+import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, PlacementFeeModal, EditCandidateModal, AddToJobModal, EraseModal } from './CandidateModals.jsx';
 
 const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
 const DELIVERY = { sent: { label: 'Sent', tone: 'green' }, failed: { label: 'Delivery failed', tone: 'red' }, not_configured: { label: 'Saved, not sent', tone: 'amber' } };
@@ -31,7 +31,7 @@ function CandidateView({ data, onClose }) {
   const { isAgency, bump, user } = useApp();
   const toast = useToast();
   const [tab, setTab] = useState('overview');
-  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'fee' | 'edit' | 'addToJob' | { review } | { scorecard }
+  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'fee' | 'edit' | 'addToJob' | 'erase' | { review } | { scorecard }
   const { application: app, candidate, job, client, stages } = data;
   // Someone saved to The Book without a job: there is no job, client or stage, so everything that works on one
   // (moving, rejecting, scheduling, submitting, offers) is left off their profile, and "Add to a job" leads instead.
@@ -54,9 +54,15 @@ function CandidateView({ data, onClose }) {
   const [withdraw] = useAction(async () => { await api.post(`/applications/${app.id}/withdraw`); toast('Marked as withdrawn'); bump(); });
   // Only asked for the agency: erasing somebody says what happens to their Metaview calls when Metaview is connected.
   const { data: metaview } = useApi(isAgency ? '/metaview/status' : null);
+  // The same person on file somewhere else (another client's record of them, or their own in The Book).
+  const elsewhere = isAgency ? data.elsewhere || [] : [];
+  const metaviewToo = metaview?.connected || calls?.some((c) => c.source === 'metaview');
   const [erase] = useAction(async () => {
+    // Somebody who is on file in more than one place: a dialog names each record and asks which to delete, so a
+    // request to be erased is not believed done while another record of them is still there.
+    if (elsewhere.length) return setModal('erase');
     const others = data.others.length ? ` This also removes their ${data.others.length === 1 ? 'application' : 'applications'} for ${data.others.map((o) => o.job_title).join(', ')}.` : '';
-    const inMetaview = metaview?.connected || calls?.some((c) => c.source === 'metaview')
+    const inMetaview = metaviewToo
       ? `\n\nThe Book also forgets their Metaview calls. The conversations themselves stay in Metaview: delete them there too if they must go altogether.` : '';
     if (!window.confirm(`Permanently delete everything held on ${candidate.name}${client ? ` at ${client.name}` : ''}: contact details, notes, scorecards, interviews, emails, résumé and recorded calls?${others} This cannot be undone.${inMetaview}`)) return;
     await api.del(`/candidates/${candidate.id}`);
@@ -68,7 +74,12 @@ function CandidateView({ data, onClose }) {
   const [removeFromJob] = useAction(async () => {
     // Someone who was in The Book before this job goes back to it, with what the agency kept on them. Anyone else
     // is removed with what was written for the job.
-    const question = app.from_book
+    // Still on another job of this client: the client's record stays for that job, and what the agency kept on this
+    // entry goes back to The Book as a record of its own. The question says so, and both profiles then point at each other.
+    const staysIn = data.others.map((o) => o.job_title).join(', ');
+    const question = app.from_book && data.others.length
+      ? `Remove ${candidate.name} from ${job.title}? They stay in ${staysIn} at ${client.name}. What was kept on this entry (its notes, résumé, calls and history) goes back to The Book without a job as a separate record, and is no longer on their ${client.name} profile, which will say where it went. Their interviews, scorecards, rating and any offer for ${job.title} are deleted.`
+      : app.from_book
       ? `Remove ${candidate.name} from ${job.title}? They go back to The Book without a job and keep their notes, résumé, calls and history. Their interviews, scorecards, rating and any offer for this job are deleted.`
       : `Remove ${candidate.name} from ${job.title}? Their notes, scorecards and interviews for this job are deleted.${data.others.length ? ' Their other applications are kept.' : ` This is their only application, so their record is removed too${calls?.length ? ', along with the calls recorded with them' : ''}.`}`;
     if (!window.confirm(question)) return;
@@ -201,6 +212,16 @@ function CandidateView({ data, onClose }) {
             </span>
           </div>
         ))}
+        {elsewhere.map((r) => (
+          <div key={r.candidate_id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-stone-50 px-4 py-3 text-sm text-stone-700">
+            <span className="min-w-0 flex-1 basis-56">
+              <span className="font-medium text-stone-900">{r.client_id ? `Also on ${r.client_name}’s record` : 'Also in The Book without a job'}</span>
+              {r.client_id && r.job_title ? `, in ${r.job_title}` : ''}{r.name !== candidate.name ? `, as ${r.name}` : ''}.
+              {' '}{r.same_email ? 'Same email address.' : 'Same LinkedIn link.'} It is a separate record: notes, calls and history on one are not on the other, and deleting one leaves the other.
+            </span>
+            {r.application_id && <Link to={`?c=${r.application_id}`} className="inline-flex h-8 items-center rounded-lg border border-line bg-white px-2.5 text-[13px] font-medium text-stone-800 shadow-sm hover:bg-stone-50">Open</Link>}
+          </div>
+        ))}
         <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
 
         {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} />}
@@ -220,6 +241,7 @@ function CandidateView({ data, onClose }) {
       {modal === 'fee' && <PlacementFeeModal data={data} onClose={() => setModal(null)} />}
       {modal === 'edit' && <EditCandidateModal data={data} onClose={() => setModal(null)} />}
       {modal === 'addToJob' && <AddToJobModal data={data} onClose={() => setModal(null)} />}
+      {modal === 'erase' && <EraseModal data={data} elsewhere={elsewhere} metaviewToo={metaviewToo} onClose={() => setModal(null)} onDone={onClose} />}
       {modal?.review && <ReviewModal data={data} decision={modal.review} onClose={() => setModal(null)} />}
       {modal?.scorecard && job && <ScorecardModal interview={modal.scorecard} criteria={job.criteria} candidateName={candidate.name} onClose={() => setModal(null)} />}
     </>

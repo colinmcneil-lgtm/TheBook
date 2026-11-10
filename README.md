@@ -90,27 +90,49 @@ candidate in the app, and put on a job later when the right role comes up.
   none is), and keeps its notes, résumé, calls and history. The date they entered the job is the day they were put
   on it, so time to hire is not counted from the day they were first saved. The client's hiring team sees the
   application from that moment on: nothing written or sent while the person was on no job is shown to them, nor
-  the date they were first saved. Put straight into an interview stage, Offer or Hired, they are picked out in
-  Recent activity on the dashboard as anyone added straight into that stage is. If they go back to The Book and
-  are later put on another job, what happened on the first job stays in their history and is not picked out
-  again under the second.
+  the date they were first saved. That is not left to a filter. At the moment they go on the job, the history and
+  the e-mails from before it are moved off the application into tables only the agency is read from, their notes
+  are all agency-only, and a covering note saved with their entry becomes an agency-only note ("Saved with their
+  entry in The Book: ..."). Your own view of the profile is unchanged: the whole history, every e-mail and note.
+  Put straight into an interview stage, Offer or Hired, they are picked out in Recent activity on the dashboard
+  as anyone added straight into that stage is. Recent activity holds the job's news only, for you as for the
+  client: nothing from before the job is listed beside the job's name. If they go back to The Book and are later
+  put on another job, what happened on the first job stays in their history, for the agency only, and is neither
+  shown to the second job's hiring team nor listed under the second job.
 - **However you add them, it is the same entry.** "Add to a job" on their profile, choosing a job in the
   extension, and Add candidate in the app with a job chosen all do this: there is no way to end up with a second
   record of somebody who was in The Book. Add candidate and the extension recognise them by e-mail address or
-  LinkedIn link when the name agrees. The other way round, "No job yet" for somebody who is already on a client's
-  job shows you where they are instead of saving them a second time.
+  LinkedIn link when the name agrees. Found by their link with a different e-mail address typed, their entry keeps
+  the address it has and the history says which one was typed (for the agency only), as it does for a client's
+  record. The other way round, "No job yet" for somebody who is already on a client's job shows you where they
+  are instead of saving them a second time.
 - **When the client already has a record of them.** From their profile you are asked whether to join the two; from
   Add candidate and the extension, which add to the client's existing record anyway, the entry is joined to it.
   The entry then moves onto the client's record. Where the two disagreed (another e-mail address, phone number,
   location), the client's record keeps its own, and the history says what the entry had, for the agency only. If
   the client's record is already in the job you chose, "Join this entry to that record" folds the entry into the
-  application they have there: its notes stay agency-only and its history and e-mails are hidden from the hiring
-  team.
+  application they have there: its notes stay agency-only and its history and e-mails go to the agency's own
+  tables, so the hiring team is never shown them. What the hiring team does see from the entry is what their
+  record was missing: contact details, a photo, and the résumé if the application had none (a second résumé is
+  kept as an earlier one, for the agency). The dialog says so before you join.
 - **If the job is deleted, or they are removed from it,** somebody who was in The Book before goes back to The Book
   without a job, with their notes, résumé, e-mails, calls and history, including what was added while they were on
   the job. Only what belonged to the job goes: interviews and scorecards, the offer, the rating and the write-up for
-  the hiring team. Everyone else in a deleted job is deleted with it, as before. "Delete all data on this person"
-  still erases them completely.
+  the hiring team. Everyone else in a deleted job is deleted with it, as before.
+- **What they wrote to one client never reaches another.** Somebody may have applied on a client's careers page
+  themselves and then been joined with their entry in The Book. When that application goes back to The Book, the
+  answers they gave to that client's questions, their note to that client and the consent they ticked there are
+  taken off it and kept as one agency-only note ("From their own application for ... at ..."), and its source
+  becomes "Agency sourced". Put on another client's job afterwards, that client's hiring team is shown none of it.
+- **One person, more than one record.** Each client keeps its own record of a person and The Book keeps its own,
+  so the same person can be on file in two places: in The Book and on a client's record (they applied on a careers
+  page while in The Book, or were removed from one of a client's jobs while still on another, which sends what you
+  kept on the entry back to The Book as a record of its own), or at two clients. Each profile says so ("Also in
+  The Book without a job", "Also on Maple Freight's record, in ..."), found by e-mail address or LinkedIn link,
+  with a link to the other. Only the agency is told. "Delete all data on this person" names every such record and
+  asks which to delete: the ones under the same e-mail address are ticked, one that only shares a LinkedIn link is
+  left for you to tick, and everything ticked is erased together. A request to be forgotten is only done when
+  every record of them is gone.
 - **Somebody already on a job** can be added to another job of the same client the same way, as a new application
   with a copy of their résumé. Each client keeps its own record of a person, so for a job at another client they
   are added as a new candidate.
@@ -121,9 +143,10 @@ candidate in the app, and put on a job later when the right role comes up.
   counted for them in that job goes, as it does when anyone else is removed from a job; on their next job they
   are counted afresh, for that job.
 
-The first start after this was added changes the database in place: three columns stop being required, history
-lines and e-mails gain a marker that is off on every existing row, one empty table is added for earlier résumés,
-and nothing else about existing people or applications changes. The two tables that are rebuilt for this keep
+The first start after this was added changes the database in place: three columns stop being required, one empty
+column is added to applications, three empty tables are added (earlier résumés, and the history lines and e-mails
+only the agency reads), and nothing else about existing people or applications changes. The tables of history
+lines and e-mails that are there already are not touched. The two tables that are rebuilt for this keep
 every index and trigger they had, including ones an earlier version made and this one no longer makes.
 `test/pool-upgrade.test.mjs` builds a database with the code from before, fills it, upgrades it and compares every
 row, id, counter, index, trigger and foreign key. "Before" is three releases, each kept word for word under
@@ -142,9 +165,43 @@ gives each candidate an owner, and the one that says which interview stages are 
 tick first arrives. Each is now saved in one piece. A database that has already been through a step is not put
 through it again.) All of this was run on made-up databases, not on a copy of a live one, so take a back-up of
 `DATA_DIR` before the first deploy.
+
+**Before the first deploy, and if you ever go back.**
+
+- **Room on the disk.** Rebuilding the two tables needs free space of about one and a half times the size of
+  `app.db` for the length of the first start (a 92 MB database needed 124 MB). With less, the start fails and the
+  log says that the disk is full ("The disk that holds ... is full, so the database could not be upgraded. Nothing
+  has been changed or lost.", or SQLite's own "database or disk is full" when it runs out after the tables are
+  rebuilt). Nothing is lost either way: the version before still starts on the database, and the next start with
+  room finishes the job.
+- **Two copies of the app on one data folder.** A host that starts the new container before the old one has
+  stopped has both writing to the same database for a moment. Each now waits up to five seconds for the other
+  instead of failing with "database is locked", and two first starts at the same moment leave the database as one
+  would have.
+- **Treat this deploy as one-way once somebody from The Book has been put on a job.** The version before this one
+  starts on the upgraded database and loses nothing by itself, but it does not know about people without a job:
+  - They disappear from its lists, their profiles answer "Not found", looking one up finds nothing (so adding them
+    again makes a second record), and new Metaview conversations with them are not matched. They are all there
+    again when this version is back.
+  - **Do not delete a job, or remove anybody from one, while rolled back.** The old version deletes everybody in a
+    deleted job, including people who came from The Book, whom this version would have returned to The Book.
+  - What the client's hiring team may not see stays unseen. Notes, history and e-mails from before the job, how
+    somebody was matched, a covering note saved with an entry, and what somebody wrote to another client are not
+    stored where the old version shows the hiring team from (see above), and `test/pool.test.mjs` reads the
+    database with the old version's own queries to check it. Two dates are in what the old version sends a client
+    user's browser about somebody who came from The Book, though neither is on its screens: the date the agency
+    first saved them (as the date their record was made) and the moment they went on the job. On the old version
+    the agency does not see the history and e-mails from before the job either, until this version is back;
+    nothing is deleted.
+  - If you must go back for longer than it takes to fix a start, the safe order is: on this version, remove the
+    people who came from The Book from their jobs (they return to The Book, which the old version shows to
+    nobody), then roll back.
 `test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview, on two ports from
 `POOL_TEST_PORT` (the fifteenth and sixteenth from `ORACLE_TEST_PORT` unless set; `test/oracle-helpers.mjs` lists
-which test file uses which port).
+which test file uses which port). `npm test` uses thirty ports in a row from `ORACLE_TEST_PORT` (3610 unless
+set): `ORACLE_TEST_PORT=5080 npm test`. Node refuses to fetch from a few ports whatever is listening on them
+(5060 and 5061 among them), so a base that puts one of the thirty on such a port, any base from 5031 to 5061 for
+one, is refused before a test runs, with a sentence that says which base to choose instead.
 
 ## Reporting
 

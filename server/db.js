@@ -8,9 +8,23 @@ export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 export const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
+// If another process has the database open and is writing to it (a deploy that starts the new container before the
+// old one has stopped, two starts at once), wait up to five seconds for it instead of failing with "database is
+// locked". Set before anything else, so that it also covers the lines below and every step of an upgrade.
+db.exec('PRAGMA busy_timeout = 5000');
 // secure_delete: what is deleted is written over, not just marked as free space. People ask to be erased and keys
 // get replaced, and neither should be readable afterwards in a copy of the file.
 db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;');
+/**
+ * Undo the transaction that just failed. SQLite has sometimes undone it already by itself (a full disk does that),
+ * and a second ROLLBACK then fails with "no transaction is active". That must never take the place of the error
+ * that says what actually went wrong, so it is swallowed here and the caller throws the real one.
+ */
+function undo() {
+  try { db.exec('ROLLBACK'); } catch { /* SQLite had already rolled the transaction back */ }
+}
+/** Whether this error is SQLite saying the disk (or the volume the data folder is on) is full. */
+const diskFull = (err) => err?.errcode === 13 || /database or disk is full/i.test(String(err?.message));
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
@@ -266,31 +280,47 @@ function addColumn(table, column, type) {
  * one that an earlier version made and this one no longer makes would otherwise be gone for good.
  */
 function rebuildTable(table, change) {
-  const { sql } = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
-  const changed = change(sql);
-  if (changed === sql) return;
-  const belongings = db.prepare(`SELECT sql FROM sqlite_master WHERE tbl_name = ? AND type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY rowid`).all(table);
-  const rebuilt = changed.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?\w+["`]?/i, `CREATE TABLE ${table}__new`);
-  // sqlite_sequence only exists once some table uses AUTOINCREMENT, and dropping a table discards its row.
-  const hasSequences = db.prepare(`SELECT 1 AS x FROM sqlite_master WHERE name = 'sqlite_sequence'`).get();
-  const highest = hasSequences ? db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table)?.seq : undefined;
+  const defined = () => db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table).sql;
+  if (change(defined()) === defined()) return;
   db.exec('PRAGMA foreign_keys = OFF'); // must be off, or dropping the old table would cascade into its children
-  db.exec('BEGIN');
   try {
-    db.exec(rebuilt);
-    db.exec(`INSERT INTO ${table}__new SELECT * FROM ${table}`);
-    db.exec(`DROP TABLE ${table}`);
-    db.exec(`ALTER TABLE ${table}__new RENAME TO ${table}`);
-    for (const own of belongings) db.exec(own.sql);
-    if (highest != null && /AUTOINCREMENT/i.test(changed)) {
-      // The copy only counted up to the highest row that still exists; put back the real high-water mark.
-      const kept = db.prepare('UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = ?').run(highest, table).changes;
-      if (!kept) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, highest);
+    // IMMEDIATE: wait here for any other process that is writing, and then look again. Two starts at the same
+    // moment both get this far, and the second must find the table already rebuilt and leave it alone.
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const sql = defined();
+      const changed = change(sql);
+      if (changed !== sql) {
+        const belongings = db.prepare(`SELECT sql FROM sqlite_master WHERE tbl_name = ? AND type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY rowid`).all(table);
+        const rebuilt = changed.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?\w+["`]?/i, `CREATE TABLE ${table}__new`);
+        // sqlite_sequence only exists once some table uses AUTOINCREMENT, and dropping a table discards its row.
+        const hasSequences = db.prepare(`SELECT 1 AS x FROM sqlite_master WHERE name = 'sqlite_sequence'`).get();
+        const highest = hasSequences ? db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table)?.seq : undefined;
+        db.exec(rebuilt);
+        db.exec(`INSERT INTO ${table}__new SELECT * FROM ${table}`);
+        db.exec(`DROP TABLE ${table}`);
+        db.exec(`ALTER TABLE ${table}__new RENAME TO ${table}`);
+        for (const own of belongings) db.exec(own.sql);
+        if (highest != null && /AUTOINCREMENT/i.test(changed)) {
+          // The copy only counted up to the highest row that still exists; put back the real high-water mark.
+          const kept = db.prepare('UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = ?').run(highest, table).changes;
+          if (!kept) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, highest);
+        }
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      undo();
+      if (diskFull(err)) {
+        // Said in plain words, because the owner of a nearly full volume would otherwise see the server start, fail
+        // and start again with nothing to go on. Nothing has been changed: the table is as it was before this start.
+        let size = '';
+        try { size = ` (it is ${Math.ceil(fs.statSync(path.join(DATA_DIR, 'app.db')).size / 1e6)} MB now)`; } catch { /* the sentence does without it */ }
+        throw new Error(`The disk that holds ${DATA_DIR} is full, so the database could not be upgraded. Nothing has been changed or lost. `
+          + `The first start of this version needs free space of about one and a half times the size of app.db${size} while it rebuilds the table "${table}". `
+          + 'Free some space or make the volume larger, and start again.', { cause: err });
+      }
+      throw err;
     }
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
   } finally {
     db.exec('PRAGMA foreign_keys = ON');
   }
@@ -324,7 +354,7 @@ if (!db.prepare('PRAGMA table_info(applications)').all().some((c) => c.name === 
       WHERE ac.application_id = applications.id AND ac.type = 'added' ORDER BY ac.id LIMIT 1)`);
     db.exec('COMMIT');
   } catch (err) {
-    db.exec('ROLLBACK');
+    undo();
     throw err;
   }
 }
@@ -350,14 +380,10 @@ for (const [table, column] of [['candidates', 'client_id'], ['applications', 'jo
   }
 }
 // When such a person is put on a job, their entry becomes that job's application. What was written on it before
-// then (notes, e-mails, history) was written for the agency's eyes, so the moment is kept and the client's hiring
-// team is only shown what came after it.
+// then (notes, e-mails, history) was written for the agency's eyes. It is taken off the application at that moment
+// (see agency_activities below), and the moment itself is kept here: it says the application came from The Book, and
+// the client's hiring team is only ever shown what came after it.
 addColumn('applications', 'general_until', 'TEXT');
-// The entry of someone in The Book can also be joined to an application the client already has for them. The history
-// and e-mails that come across with it were the agency's own, and sit among lines the hiring team may see, so each
-// such line is marked: the hiring team is never shown a marked line.
-addColumn('activities', 'agency_only', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('emails', 'agency_only', 'INTEGER NOT NULL DEFAULT 0');
 // Profile links used to be saved as typed. People are recognised by the stored form of a LinkedIn profile link, so
 // links saved by an earlier version are rewritten once into that form. Two records that end up with the same link
 // are both kept: the workspace points them out as possible duplicates and leaves the decision to a person.
@@ -372,7 +398,7 @@ if (!db.prepare(`SELECT 1 AS x FROM settings WHERE key = 'links_normalised'`).ge
     db.prepare(`INSERT INTO settings (key, value) VALUES ('links_normalised', '1')`).run();
     db.exec('COMMIT');
   } catch (err) {
-    db.exec('ROLLBACK');
+    undo();
     throw err;
   }
 }
@@ -397,7 +423,7 @@ if (!db.prepare(`SELECT 1 AS x FROM settings WHERE key = 'activity_types_v2'`).g
     db.prepare(`INSERT INTO settings (key, value) VALUES ('activity_types_v2', '1')`).run();
     db.exec('COMMIT');
   } catch (err) {
-    db.exec('ROLLBACK');
+    undo();
     throw err;
   }
 }
@@ -431,7 +457,66 @@ CREATE TABLE IF NOT EXISTS earlier_resumes (
   kept_at TEXT NOT NULL,                             -- when the newer résumé took its place
   kept_by INTEGER                                    -- who sent the newer one
 );
-CREATE INDEX IF NOT EXISTS idx_earlier_resumes_app ON earlier_resumes(application_id);`);
+CREATE INDEX IF NOT EXISTS idx_earlier_resumes_app ON earlier_resumes(application_id);
+
+-- History lines and e-mails on an application that only the agency may read: everything written while the person
+-- was in The Book without a job (moved here the moment they are put on one), and the lines that say how they were
+-- matched or joined to a record. They are kept in tables of their own, never in activities and emails, because
+-- those two are what the client's hiring team is shown from. So nothing that reads those two tables can show a
+-- client what is kept here: not a mistake in a later change, and not the release from before this was built, should
+-- a deploy ever be rolled back to it. The columns are the ones activities and emails have.
+CREATE TABLE IF NOT EXISTS agency_activities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  user_id INTEGER,
+  type TEXT NOT NULL,
+  detail TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agency_activities_app ON agency_activities(application_id);
+CREATE TABLE IF NOT EXISTS agency_emails (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  to_email TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  sent_by INTEGER,
+  delivery TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agency_emails_app ON agency_emails(application_id);`);
+/**
+ * Move history lines and e-mails of an application out of the tables the hiring team is shown from and into the
+ * agency's own (inside a transaction). `which` picks the lines, written against activities or emails as "x" and the
+ * application as "a"; they arrive on `toApplicationId`, or stay on the application they were on when none is given.
+ * Lines keep their order: they are copied oldest first, and the agency's tables number them as they arrive.
+ */
+export function keepForAgency(which, params = [], toApplicationId = null) {
+  const to = toApplicationId == null ? 'x.application_id' : '?';
+  const target = toApplicationId == null ? [] : [toApplicationId];
+  for (const [from, into, columns] of [
+    ['activities', 'agency_activities', 'user_id, type, detail, created_at'],
+    ['emails', 'agency_emails', 'to_email, subject, body, sent_by, delivery, created_at'],
+  ]) {
+    const chosen = `FROM ${from} x JOIN applications a ON a.id = x.application_id WHERE ${which}`;
+    db.prepare(`INSERT INTO ${into} (application_id, ${columns}) SELECT ${to}, ${columns.split(', ').map((c) => `x.${c}`).join(', ')} ${chosen} ORDER BY x.created_at, x.id`).run(...target, ...params);
+    db.prepare(`DELETE FROM ${from} WHERE id IN (SELECT x.id ${chosen})`).run(...params);
+  }
+}
+// A build of this release that was never deployed kept such lines where they were and marked them (a column
+// agency_only on activities and on emails), or told them by their date (older than applications.general_until). A
+// database that build has opened is put right here: the lines move to the agency's tables. The two columns stay,
+// unused. A database that has only ever been opened by released versions has neither column, and nothing happens.
+if (['activities', 'emails'].every((table) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === 'agency_only'))) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    keepForAgency('x.agency_only = 1 OR (a.job_id IS NOT NULL AND a.general_until IS NOT NULL AND x.created_at < a.general_until)');
+    db.exec('COMMIT');
+  } catch (err) {
+    undo();
+    throw err;
+  }
+}
 
 // ---------- features that have been taken out ----------
 // The Book once had phone calls of its own and a calendar in The Oracle. Both are gone, and a database made today has
@@ -561,7 +646,7 @@ if (!db.prepare('PRAGMA table_info(stages)').all().some((c) => c.name === 'with_
     db.exec(`UPDATE stages SET with_client = 0 WHERE kind = 'interview' AND (name LIKE '%recruiter%' OR name LIKE '%screen%' OR name LIKE '%agency%')`);
     db.exec('COMMIT');
   } catch (err) {
-    db.exec('ROLLBACK');
+    undo();
     throw err;
   }
 }
@@ -622,7 +707,7 @@ export function tx(fn) {
     db.exec('COMMIT');
     return result;
   } catch (err) {
-    db.exec('ROLLBACK');
+    undo();
     throw err;
   }
 }

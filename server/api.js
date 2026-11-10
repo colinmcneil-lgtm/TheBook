@@ -3,7 +3,7 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
-import { q, now, tx, scrub, UPLOAD_DIR, getSetting, setSetting, createStages, agencyStageName, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
+import { q, now, tx, scrub, keepForAgency, UPLOAD_DIR, getSetting, setSetting, createStages, agencyStageName, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
 import { registerAutofill } from './autofill.js';
 import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, forgetDraftsFor, moveCalls, moveCallsToEntry, moveEntryCallsToRecord, forgetSavedNote } from './oracle.js';
@@ -224,9 +224,13 @@ const seesPhotos = (user) => isAgency(user) || getSetting('client_photos', '1') 
 const photoTag = (file) => (file ? file.slice(0, 8) : null);
 const hidePhotos = (rows, user) => (seesPhotos(user) ? rows : rows.map((r) => ({ ...r, photo: null })));
 
-/** A line for a profile's history. `agencyOnly` keeps it from the client's hiring team; `at` gives it a moment other than now. */
+/**
+ * A line for a profile's history. `at` gives it a moment other than now. `agencyOnly` keeps it from the client's
+ * hiring team by writing it to the agency's own table (see agency_activities in db.js): the hiring team is shown
+ * from `activities` and nothing else, so such a line is never where it could be shown to them.
+ */
 const logActivity = (applicationId, userId, type, detail, { at = now(), agencyOnly = false } = {}) =>
-  q.run('INSERT INTO activities (application_id, user_id, type, detail, created_at, agency_only) VALUES (?, ?, ?, ?, ?, ?)', applicationId, userId, type, detail, at, agencyOnly ? 1 : 0);
+  q.run(`INSERT INTO ${agencyOnly ? 'agency_activities' : 'activities'} (application_id, user_id, type, detail, created_at) VALUES (?, ?, ?, ?, ?)`, applicationId, userId, type, detail, at);
 
 const SOURCE_LABELS = {
   careers_page: 'Careers page', agency_sourced: 'Agency sourced', referral: 'Referral',
@@ -476,7 +480,9 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
     stored = Boolean(result.appId);
 
     // The address is unverified, so cap how many confirmations any one address can be sent.
-    const recent = q.get('SELECT COUNT(*) AS n FROM emails WHERE to_email = ? AND created_at > ?', email, new Date(Date.now() - 3600000).toISOString()).n;
+    const recent = q.get(
+      `SELECT (SELECT COUNT(*) FROM emails WHERE to_email = ?1 AND created_at > ?2) + (SELECT COUNT(*) FROM agency_emails WHERE to_email = ?1 AND created_at > ?2) AS n`,
+      email, new Date(Date.now() - 3600000).toISOString()).n;
     if (result.appId && recent < 3) {
       await sendTemplate('application_received', {
         applicationId: result.appId, to: email,
@@ -1056,10 +1062,10 @@ function loadApp(id, user) {
 const isGeneral = (a) => a.job_id == null;
 /**
  * Whether this application holds what the agency kept on somebody in The Book before they were on the job: their
- * entry became this application, or was joined to it (which always leaves an agency-only line in its history).
+ * entry became this application, or was joined to it (which always leaves a line in the agency's own history).
  * Such a person goes back to The Book when the job goes, where anyone else in the job is deleted with it.
  */
-const cameFromBook = (a) => !isGeneral(a) && Boolean(a.general_until || q.get('SELECT 1 AS x FROM activities WHERE application_id = ? AND agency_only = 1 LIMIT 1', a.id));
+const cameFromBook = (a) => !isGeneral(a) && Boolean(a.general_until || q.get('SELECT 1 AS x FROM agency_activities WHERE application_id = ? LIMIT 1', a.id));
 /** Stages, rejections, the hiring team, interviews and offers all belong to a job, so they wait until the person is on one. */
 const needsJob = (a) => { if (isGeneral(a)) bad('Add them to a job first.'); };
 const mailVars = (a, user) => ({
@@ -1217,6 +1223,13 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
         else if (key) remarks.push(`Recognised as ${cand.name} by LinkedIn link and added to their existing record`);
         else if (!samePerson(cand.name, c.name)) remarks.push(`Entered as “${c.name}”; this email address belongs to ${cand.name}, so they were added to that record`);
         if (email && cand.email && cand.email !== email) remarks.push(`A different email address was entered (${email}); the record keeps ${cand.email}`);
+      } else if (book) {
+        // Their entry in The Book is what goes on the job, and it keeps its own address. When they were found by
+        // their link and another address was typed, the history says so, as it does for a client's record: an
+        // address a recruiter typed is not dropped without a word.
+        const theirs = book.person;
+        if (!(email && theirs.email === email)) remarks.push(`Recognised as ${theirs.name} by LinkedIn link: their entry in The Book was put on the job`);
+        if (email && theirs.email && theirs.email !== email) remarks.push(`A different email address was entered (${email}); the record keeps ${theirs.email}`);
       }
       let t = now();
       let appId, resumeChange = null, sparePhoto = null;
@@ -1337,6 +1350,26 @@ api.get('/owners', (req, res) => {
      ORDER BY u.active DESC, u.name`, ...(cid ? [cid] : [])));
 });
 
+/**
+ * The other records that are, or look like, this same person: the ones with their e-mail address or their LinkedIn
+ * link that belong somewhere else (another client's record of them, or their own record in The Book without a
+ * job). Each client keeps its own record of a person and The Book keeps its own, so one person can be on file
+ * several times, and a request to be erased has to reach every one of them. For the agency only.
+ */
+function recordsElsewhere(person) {
+  const key = identityKey(person.linkedin);
+  if (!person.email && !key) return [];
+  return q.all(
+    `SELECT c.id AS candidate_id, c.name, c.client_id, cl.name AS client_name, a.id AS application_id, j.title AS job_title,
+       ?1 != '' AND c.email IS NOT NULL AND c.email = ?1 AS same_email
+     FROM candidates c LEFT JOIN clients cl ON cl.id = c.client_id
+     LEFT JOIN applications a ON a.id = (SELECT x.id FROM applications x WHERE x.candidate_id = c.id ORDER BY x.applied_at DESC, x.id DESC LIMIT 1)
+     LEFT JOIN jobs j ON j.id = a.job_id
+     WHERE c.id != ?3 AND c.client_id IS NOT ?4 AND ((?1 != '' AND c.email = ?1) OR (?2 != '' AND c.linkedin = ?2))
+     ORDER BY c.client_id IS NOT NULL, cl.name, c.id LIMIT 20`, person.email ?? '', key ?? '', person.id, person.client_id)
+    .map((r) => ({ ...r, same_email: Boolean(r.same_email) }));
+}
+
 api.get('/applications/:id', (req, res) => {
   const a = loadApp(req.params.id, req.user);
   const agency = isAgency(req.user);
@@ -1357,14 +1390,26 @@ api.get('/applications/:id', (req, res) => {
   const stages = general ? [] : stagesOf(a.job_id, req.user);
   // What was written while the person was in The Book without a job was written for the agency. Once they are on a
   // job, the client's hiring team sees this entry's notes, history and e-mails from that moment on, and nothing earlier.
+  // (The earlier history and e-mails are no longer in the tables read here at all, and the earlier notes are all
+  // agency only. Asking by the date as well costs nothing and holds even if a row were ever left behind.)
   const sinceJob = (column) => (agency || !a.general_until ? { sql: '', p: [] } : { sql: `AND ${column} >= ?`, p: [a.general_until] });
   const notes = q.all(
     `SELECT n.*, u.name AS user_name, u.role AS user_role FROM notes n LEFT JOIN users u ON u.id = n.user_id
      WHERE n.application_id = ? ${agency ? '' : 'AND n.private = 0'} ${sinceJob('n.created_at').sql} ORDER BY n.created_at DESC`, a.id, ...sinceJob('n.created_at').p);
-  // That a call was recorded is the agency's business: clients never see anything of the Oracle, this line included.
-  const activities = q.all(
-    `SELECT ac.*, u.name AS user_name FROM activities ac LEFT JOIN users u ON u.id = ac.user_id
-     WHERE ac.application_id = ? ${agency ? '' : `AND ac.type != 'call' AND ac.agency_only = 0`} ${sinceJob('ac.created_at').sql} ORDER BY ac.created_at DESC, ac.id DESC`, a.id, ...sinceJob('ac.created_at').p);
+  // The agency reads the history and the e-mails from two places: the tables the hiring team is shown from, and its
+  // own (what was written before the person was on this job, and how they were matched). The agency's own lines are
+  // numbered below zero, so that no two lines of one list share a number. The hiring team is only ever read the
+  // first of the two. That a call was recorded is the agency's business as well: clients never see anything of the
+  // Oracle, that line included.
+  const both = (shown, kept, columns) =>
+    `(SELECT id, application_id, ${columns}, created_at, 0 AS agency_only FROM ${shown} WHERE application_id = ?1
+      UNION ALL SELECT -id, application_id, ${columns}, created_at, 1 FROM ${kept} WHERE application_id = ?1)`;
+  const newestFirst = 'ORDER BY x.created_at DESC, x.agency_only, ABS(x.id) DESC';
+  const activities = agency
+    ? q.all(`SELECT x.*, u.name AS user_name FROM ${both('activities', 'agency_activities', 'user_id, type, detail')} x LEFT JOIN users u ON u.id = x.user_id ${newestFirst}`, a.id)
+    : q.all(
+      `SELECT ac.id, ac.application_id, ac.user_id, ac.type, ac.detail, ac.created_at, u.name AS user_name FROM activities ac LEFT JOIN users u ON u.id = ac.user_id
+       WHERE ac.application_id = ? AND ac.type != 'call' ${sinceJob('ac.created_at').sql} ORDER BY ac.created_at DESC, ac.id DESC`, a.id, ...sinceJob('ac.created_at').p);
   const interviews = q.all('SELECT * FROM interviews WHERE application_id = ? ORDER BY starts_at DESC', a.id).map((i) => ({
     ...i,
     panel: q.all(`SELECT u.id, u.name, u.title, u.role FROM interview_panel p JOIN users u ON u.id = p.user_id WHERE p.interview_id = ?`, i.id),
@@ -1373,9 +1418,11 @@ api.get('/applications/:id', (req, res) => {
   }));
   // The columns the profile has always shown. When the offer was accepted is kept for the reports alone (see reporting.js).
   const offer = q.get('SELECT id, application_id, salary, start_date, status, notes, created_at, updated_at FROM offers WHERE application_id = ?', a.id) || null;
-  const emails = q.all(
-    `SELECT e.*, u.name AS sent_by_name FROM emails e LEFT JOIN users u ON u.id = e.sent_by
-     WHERE e.application_id = ? ${agency ? '' : 'AND e.agency_only = 0'} ${sinceJob('e.created_at').sql} ORDER BY e.created_at DESC`, a.id, ...sinceJob('e.created_at').p);
+  const emails = agency
+    ? q.all(`SELECT x.*, u.name AS sent_by_name FROM ${both('emails', 'agency_emails', 'to_email, subject, body, sent_by, delivery')} x LEFT JOIN users u ON u.id = x.sent_by ${newestFirst}`, a.id)
+    : q.all(
+      `SELECT e.id, e.application_id, e.to_email, e.subject, e.body, e.sent_by, e.delivery, e.created_at, u.name AS sent_by_name FROM emails e LEFT JOIN users u ON u.id = e.sent_by
+       WHERE e.application_id = ? ${sinceJob('e.created_at').sql} ORDER BY e.created_at DESC, e.id DESC`, a.id, ...sinceJob('e.created_at').p);
   const others = q.all(
     `SELECT a.id, a.status, a.job_id, j.title AS job_title, s.name AS stage_name FROM applications a JOIN jobs j ON j.id = a.job_id JOIN stages s ON s.id = a.stage_id
      WHERE a.candidate_id = ? AND a.id != ?`, a.candidate_id, a.id);
@@ -1388,6 +1435,9 @@ api.get('/applications/:id', (req, res) => {
      FROM candidates c JOIN applications a ON a.id = (SELECT x.id FROM applications x WHERE x.candidate_id = c.id ORDER BY x.applied_at DESC, x.id DESC LIMIT 1)
      LEFT JOIN jobs j ON j.id = a.job_id LEFT JOIN stages s ON s.id = a.stage_id
      WHERE c.client_id IS ? AND c.linkedin = ? AND c.id != ? ORDER BY c.id LIMIT 20`, a.client_id, key, candidate.id) : [];
+  // The same person on file somewhere else: on another client's record, or in The Book without a job. The agency
+  // is shown them on the profile, and asked about them before "Delete all data on this person". Never a client user.
+  const elsewhere = agency ? recordsElsewhere(candidate) : [];
   const names = (id) => (id ? q.get('SELECT name FROM users WHERE id = ?', id)?.name ?? null : null);
   const { client_id, job_title, candidate_name, candidate_email, client_name, ...application } = a;
   if (agency) {
@@ -1395,14 +1445,18 @@ api.get('/applications/:id', (req, res) => {
     application.from_book = cameFromBook(a);
   } else {
     delete application.general_until; // that they were in The Book before this job is the agency's business
-    // A covering note saved with their entry in The Book was not written to this client.
-    if (a.general_until) application.cover_note = null;
+    // An entry that became this job's application holds nothing the person wrote to this client: they never applied
+    // here themselves. A covering note, screening answers or a consent date still on it would be from The Book, or
+    // from another client's job they were on before, so none of the three is passed on. (None should be there: each
+    // is taken off the application when it goes back to The Book or onto a job. This is the second lock.)
+    if (a.general_until) Object.assign(application, { cover_note: null, answers: '[]', consent_at: null });
   }
   // Résumés that a newer one took the place of. They were the agency's to keep, so only the agency is given them.
   const earlier_resumes = agency ? q.all('SELECT id, resume_name AS name, kept_at FROM earlier_resumes WHERE application_id = ? ORDER BY kept_at DESC, id DESC', a.id) : [];
   res.json({
-    application: { ...application, general, answers: json(a.answers, []), submitted_by_name: names(a.submitted_by), reviewed_by_name: names(a.reviewed_by), owner_name: names(a.owner_id) },
+    application: { ...application, general, answers: json(application.answers, []), submitted_by_name: names(a.submitted_by), reviewed_by_name: names(a.reviewed_by), owner_name: names(a.owner_id) },
     candidate, job, client, stages, notes, activities, interviews, offer, emails, others, duplicates, earlier_resumes,
+    ...(agency ? { elsewhere } : {}),
     ...(agency ? { placement: reporting.placementOf(a.id) } : {}), // the fee recorded when they were hired: the agency's business only
   });
 });
@@ -1663,22 +1717,35 @@ api.delete('/applications/:id', agencyOnly, (req, res) => {
 // on no job), with its notes, scorecards, interviews, emails and résumé files, their recorded calls (audio,
 // transcripts and notes), their contact record, and what The Book remembered about their conversations in Metaview.
 // (The conversations themselves stay in Metaview.)
+//
+// One person can be on file more than once: each client keeps its own record of them, and The Book its own. `also`
+// names other records of the same person to erase in the same go (candidate ids, separated by commas). Only records
+// the profile showed as theirs are accepted (see recordsElsewhere); anything else is refused and nothing is deleted.
 api.delete('/candidates/:id', agencyOnly, (req, res) => {
   const cand = q.get('SELECT * FROM candidates WHERE id = ?', int(req.params.id));
   if (!cand || !canSee(req.user, cand.client_id)) bad('Not found', 404);
-  const files = [...q.all('SELECT resume_file FROM applications WHERE candidate_id = ?', cand.id).map((r) => r.resume_file), ...earlierResumeFiles('a.candidate_id = ?', cand.id)];
-  const calls = callFilesOf([cand.id]);
-  const inMetaview = conversationsWith(cand.id);
+  const asked = [...new Set(String(req.query.also ?? '').split(',').map((v) => v.trim()).filter(Boolean).map(int))];
+  const theirs = asked.length ? recordsElsewhere(cand) : [];
+  if (asked.some((id) => !theirs.some((r) => r.candidate_id === id))) {
+    bad('One of the other records is no longer on file as this person’s. Nothing has been deleted: open the profile again and choose once more.', 409);
+  }
+  const people = [cand, ...asked.map((id) => q.get('SELECT * FROM candidates WHERE id = ?', id))];
+  const ids = people.map((p) => p.id);
+  const files = people.flatMap((p) => [...q.all('SELECT resume_file FROM applications WHERE candidate_id = ?', p.id).map((r) => r.resume_file), ...earlierResumeFiles('a.candidate_id = ?', p.id)]);
+  const calls = callFilesOf(ids);
+  const inMetaview = people.flatMap((p) => conversationsWith(p.id));
   tx(() => {
     forgetConversations(inMetaview);
-    q.run('DELETE FROM applications WHERE candidate_id = ?', cand.id);
-    q.run('DELETE FROM candidates WHERE id = ?', cand.id); // their calls are removed with them
+    for (const id of ids) {
+      q.run('DELETE FROM applications WHERE candidate_id = ?', id);
+      q.run('DELETE FROM candidates WHERE id = ?', id); // their calls are removed with them
+    }
   });
   files.forEach(removeUpload);
-  removeUpload(cand.photo_file);
+  people.forEach((p) => removeUpload(p.photo_file));
   removeCallFiles(calls);
   scrub();   // what was deleted is not left readable in the database's files
-  res.json({ ok: true });
+  res.json({ ok: true, erased: ids.length });
 });
 
 // A candidate's photo. Shown inside the workspace only, to people who can see that candidate.
@@ -1792,7 +1859,7 @@ function carryResume(going, kept, userId) {
  * résumé is kept as an earlier one. Returns a résumé file to remove once the change is saved (see carryResume).
  */
 function foldEntry(going, kept, userId) {
-  for (const table of ['notes', 'activities', 'emails']) q.run(`UPDATE ${table} SET application_id = ? WHERE application_id = ?`, kept.id, going.id);
+  for (const table of ['notes', 'activities', 'emails', 'agency_activities', 'agency_emails']) q.run(`UPDATE ${table} SET application_id = ? WHERE application_id = ?`, kept.id, going.id);
   moveCallsToEntry(going.id, kept.id);
   const spare = carryResume(going, kept, userId);
   q.run('UPDATE applications SET cover_note = COALESCE(cover_note, ?), owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', going.cover_note, going.owner_id, now(), kept.id);
@@ -1812,8 +1879,15 @@ function copyUpload(name) {
 
 /**
  * The entry of someone in The Book becomes a job's application (inside a transaction). It keeps its id, so the
- * notes, résumé, calls and history written on it stay where they are. The person takes the job's client; or, when
- * `into` is that client's own record of them, the entry moves onto that record and theirs in The Book is absorbed.
+ * notes, résumé and calls on it stay where they are, and the agency goes on reading its whole history. The person
+ * takes the job's client; or, when `into` is that client's own record of them, the entry moves onto that record and
+ * theirs in The Book is absorbed.
+ *
+ * From this moment the application is one a client's hiring team can open, so what the agency wrote before it is
+ * taken off it first: the history and the e-mails go to the agency's own tables, the notes are made agency only,
+ * and a covering note saved with the entry becomes an agency-only note. None of it is left where the hiring team is
+ * shown from, whichever version of the code does the showing.
+ *
  * Returns the moment they joined the job, and the photo file that is left over when both records had one.
  */
 function entryToJob({ entry, person, job, stage, into, user }) {
@@ -1822,8 +1896,16 @@ function entryToJob({ entry, person, job, stage, into, user }) {
   // shown the entry's history from this moment on, so what is written here carries exactly this time.
   const last = q.get(
     `SELECT MAX(at) AS at FROM (SELECT MAX(created_at) AS at FROM activities WHERE application_id = ?1
-     UNION ALL SELECT MAX(created_at) FROM notes WHERE application_id = ?1 UNION ALL SELECT MAX(created_at) FROM emails WHERE application_id = ?1)`, entry.id).at;
+     UNION ALL SELECT MAX(created_at) FROM agency_activities WHERE application_id = ?1
+     UNION ALL SELECT MAX(created_at) FROM notes WHERE application_id = ?1
+     UNION ALL SELECT MAX(created_at) FROM emails WHERE application_id = ?1
+     UNION ALL SELECT MAX(created_at) FROM agency_emails WHERE application_id = ?1)`, entry.id).at;
   const at = new Date(Math.max(Date.now(), (Date.parse(last) || 0) + 1)).toISOString();
+  keepForAgency('x.application_id = ?', [entry.id]);
+  if (entry.cover_note) {
+    q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', entry.id, user.id, `Saved with their entry in The Book: ${entry.cover_note}`, at);
+    q.run('UPDATE applications SET cover_note = NULL WHERE id = ?', entry.id);
+  }
   if (into) {
     q.run('UPDATE applications SET candidate_id = ? WHERE id = ?', into.id, entry.id);
     // The client's record keeps its own details and takes only what it was missing. That the two were joined, and
@@ -1849,12 +1931,15 @@ function entryToJob({ entry, person, job, stage, into, user }) {
 /**
  * The entry of someone in The Book is joined to the application the client's record of them already has in the job
  * (inside a transaction). One person cannot be in a job twice, so the entry does not become a second application:
- * everything on it moves onto the one that is there. Its notes stay agency only, and its history and e-mails are
- * marked agency only, because they sit from now on among lines the hiring team may read. Returns files to remove.
+ * everything on it moves onto the one that is there. Its notes stay agency only, and its history and e-mails go to
+ * the agency's own tables under that application, never among the lines the hiring team is shown. What the hiring
+ * team does get to see from the entry is what the client's record was missing: contact details, a photo, and the
+ * résumé when the application had none (the screen says so before asking). Returns files to remove.
  */
 function entryIntoApplication({ entry, person, into, there, job, user }) {
   q.run('UPDATE notes SET application_id = ?, private = 1 WHERE application_id = ?', there.id, entry.id);
-  for (const table of ['activities', 'emails']) q.run(`UPDATE ${table} SET application_id = ?, agency_only = 1 WHERE application_id = ?`, there.id, entry.id);
+  keepForAgency('x.application_id = ?', [entry.id], there.id);
+  for (const table of ['agency_activities', 'agency_emails']) q.run(`UPDATE ${table} SET application_id = ? WHERE application_id = ?`, there.id, entry.id);
   moveCallsToEntry(entry.id, there.id);
   const spareResume = carryResume(entry, there, user.id);
   // A covering note saved with the entry was never the candidate's word to this client, so it becomes an agency-only note.
@@ -1891,10 +1976,31 @@ function returnToBook(a, user, said, made) {
   // entry keeps its id, and what it is counted for on the next job must start from nothing.
   reporting.leftJob(a.id);
   // "Added" on an entry is the day the person was first saved, which is the first line of its history.
-  const first = q.get('SELECT MIN(created_at) AS at FROM activities WHERE application_id = ?', a.id).at ?? a.applied_at;
+  const first = q.get(
+    `SELECT MIN(at) AS at FROM (SELECT MIN(created_at) AS at FROM activities WHERE application_id = ?1
+     UNION ALL SELECT MIN(created_at) FROM agency_activities WHERE application_id = ?1)`, a.id).at ?? a.applied_at;
+  // What the person wrote to this client when they applied here themselves (the entry was joined to an application
+  // they had made): their answers to this client's questions, their covering note, and the consent they gave on
+  // this client's form. None of it may travel on the application to the next job, which can be another client's. It
+  // is kept for the agency as a note, and the application goes back to The Book without it.
+  const given = json(a.answers, []);
+  const answers = (Array.isArray(given) ? given : []).filter((x) => x && (x.question || x.answer));
+  if (answers.length || a.cover_note || a.consent_at) {
+    const where = q.get('SELECT j.title, cl.name AS client FROM jobs j JOIN clients cl ON cl.id = j.client_id WHERE j.id = ?', a.job_id);
+    const whose = where ? `${where.title} at ${where.client}` : 'the job they were on';
+    const kept = [
+      `From their own application for ${whose}${a.consent_at ? `, where they agreed to their data being processed on ${a.consent_at.slice(0, 10)}` : ''}. Kept for the agency only.`,
+      answers.length ? `Screening answers:\n${answers.map((x) => `${x.question || 'Question'}\n${x.answer || '(no answer)'}`).join('\n\n')}` : null,
+      a.cover_note ? `Note from the candidate:\n${a.cover_note}` : null,
+    ].filter(Boolean).join('\n\n');
+    q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', a.id, user.id, kept, t);
+  }
   q.run(
     `UPDATE applications SET job_id = NULL, stage_id = NULL, status = 'active', rating = NULL, reject_reason = NULL, review_status = NULL, submission_note = NULL,
        review_note = NULL, submitted_by = NULL, reviewed_by = NULL, reviewed_at = NULL, hired_at = NULL, general_until = NULL,
+       answers = '[]', cover_note = NULL, consent_at = NULL,
+       -- They applied to that client themselves; in The Book they are somebody the agency holds.
+       source = CASE WHEN consent_at IS NOT NULL OR source = 'careers_page' THEN 'agency_sourced' ELSE source END,
        applied_at = ?, stage_entered_at = ?, updated_at = ? WHERE id = ?`, first, t, t, a.id);
   // Notes on someone without a job are the agency's own, including any the hiring team could read while they were on the job.
   q.run('UPDATE notes SET private = 1 WHERE application_id = ?', a.id);
@@ -2177,9 +2283,11 @@ api.get('/dashboard', (req, res) => {
        -- The moments worth shouting about: into an interview stage, an interview booked, approved by the hiring team,
        -- an offer made or accepted, a hire. Each is told by its type (older rows are given theirs when the database opens).
        -- A line from before somebody was put on this job is not this job's news: they were in The Book then, or on
-       -- an earlier job they came back from, and its interviews and offers were that job's.
+       -- an earlier job they came back from, and its interviews and offers were that job's. Such lines are not in
+       -- this table once the person is on a job (they are the agency's own, see agency_activities), so they are in
+       -- nobody's feed, the agency's included; the date is asked as well in case one ever were.
        CASE
-         WHEN ac.agency_only = 1 OR (a.general_until IS NOT NULL AND ac.created_at < a.general_until) THEN NULL
+         WHEN a.general_until IS NOT NULL AND ac.created_at < a.general_until THEN NULL
          WHEN ac.type = 'hired' THEN 'hired'
          WHEN ac.type = 'stage_interview' THEN 'interview'
          WHEN ac.type = 'stage_offer' THEN 'offer'
@@ -2190,7 +2298,7 @@ api.get('/dashboard', (req, res) => {
        END AS milestone
      FROM activities ac JOIN applications a ON a.id = ac.application_id JOIN candidates c ON c.id = a.candidate_id
      JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = ac.user_id
-     WHERE ${isAgency(req.user) ? '1 = 1' : `ac.type != 'call' AND ac.agency_only = 0 AND (a.general_until IS NULL OR ac.created_at >= a.general_until)`} ${w} ORDER BY ac.created_at DESC, ac.id DESC LIMIT 15`, ...p);
+     WHERE ${isAgency(req.user) ? '1 = 1' : `ac.type != 'call' AND (a.general_until IS NULL OR ac.created_at >= a.general_until)`} ${w} ORDER BY ac.created_at DESC, ac.id DESC LIMIT 15`, ...p);
   const stale = q.all(
     `${appSelect} WHERE a.status = 'active' AND s.kind IN ('interview', 'offer') AND a.stage_entered_at < ? ${w}
      AND NOT EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = a.id AND i.status = 'scheduled' AND i.starts_at >= ?)
