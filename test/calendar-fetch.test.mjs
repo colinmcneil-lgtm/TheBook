@@ -18,11 +18,22 @@ import https from 'node:https';
 import zlib from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { safeFetchIcs, blockedReason, normalizeFeedUrl, providerOf, createFeedCache, FeedFetchError } from '../server/calendar-fetch.js';
 import { CALENDARS, PORTS } from './calendar-helpers.mjs';
 
 const ICS = fs.readFileSync(path.join(CALENDARS, 'google-like.ics'));
-const cert = (name) => fs.readFileSync(path.join(CALENDARS, 'certs', name));
+// The https "calendar" needs a certificate. It is made fresh for each run with the openssl command, because a private
+// key does not belong in the repository, even a throwaway one.
+const CERTS = fs.mkdtempSync(path.join(os.tmpdir(), 'thebook-test-certs-'));
+const openssl = (...args) => execFileSync('openssl', args, { cwd: CERTS, stdio: 'ignore' });
+openssl('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '2', '-subj', '/CN=Throwaway test authority for The Book calendar tests');
+openssl('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'srv.key', '-out', 'srv.csr', '-subj', '/CN=calendar.test');
+fs.writeFileSync(path.join(CERTS, 'san.cnf'), 'subjectAltName=DNS:calendar.test\n');
+openssl('x509', '-req', '-in', 'srv.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'srv.pem', '-days', '2', '-extfile', 'san.cnf');
+const cert = (name) => fs.readFileSync(path.join(CERTS, name));
+process.on('exit', () => fs.rmSync(CERTS, { recursive: true, force: true }));
 const SECRET = 'private-0123456789abcdef0123456789abcdef';   // stands for the secret part of a calendar link
 const PUB = '127.0.0.77', PUB2 = '127.0.0.79', DEAD = '127.0.0.78';
 const P = PORTS.feeds, PT = PORTS.feedsTls, PS = PORTS.internal;
