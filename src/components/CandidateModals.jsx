@@ -195,7 +195,7 @@ export function EmailModal({ data, onClose }) {
   );
 }
 
-/** `initialNote` starts the write-up from a draft (The Oracle's, written from a call) instead of the last one sent. */
+/** `initialNote` starts the write-up from a draft (Otterview's, written from a call) instead of the last one sent. */
 export function SubmitModal({ data, onClose, initialNote, onSubmitted }) {
   const { bump } = useApp();
   const toast = useToast();

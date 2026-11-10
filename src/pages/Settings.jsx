@@ -41,7 +41,7 @@ function Account() {
   );
 }
 
-/** What the AI and The Oracle are connected to. `metaview` is Metaview's connection, once it is known. */
+/** What the AI and Otterview are connected to. `metaview` is Metaview's connection, once it is known. */
 function AiCard({ metaview }) {
   const { isAdmin } = useApp();
   const { data: status } = useApi('/jobs/autofill/status');
@@ -63,13 +63,13 @@ function AiCard({ metaview }) {
         {oracle && (
           <div className="mt-3 space-y-2 border-t border-line pt-3">
             <p className="flex flex-wrap items-center gap-2 font-medium text-stone-900">
-              The Oracle
+              Otterview
               {metaview && <Badge tone={metaview.connected ? 'green' : 'amber'}>{metaview.connected ? 'Metaview connected' : 'Metaview not connected'}</Badge>}
               <Badge tone={oracle.transcription ? 'green' : 'amber'}>{oracle.transcription ? 'Transcripts connected' : 'Transcripts not connected'}</Badge>
               <Badge tone={oracle.ai ? 'green' : 'amber'}>{oracle.ai ? 'Notes and drafts connected' : 'Notes and drafts not connected'}</Badge>
             </p>
             <p>
-              The Oracle uses three connections. Your team’s calls are read from Metaview, with their transcripts and notes{metaview && !metaview.connected ? (isAdmin ? ' (connect it in the Metaview card below)' : ' (an admin can connect it here)') : ''}.
+              Otterview uses three connections. Your team’s calls are read from Metaview, with their transcripts and notes{metaview && !metaview.connected ? (isAdmin ? ' (connect it in the Metaview card below)' : ' (an admin can connect it here)') : ''}.
               {' '}Calls recorded or uploaded in The Book are sent to Deepgram to be transcribed{oracle.transcription ? '' : <> (create an API key at deepgram.com and set {code('DEEPGRAM_API_KEY')})</>},
               and transcripts are sent to Claude to write notes summaries and draft submissions{oracle.ai ? '' : <> (the {code('ANTHROPIC_API_KEY')} above)</>}.
               {' '}Without Deepgram and Claude, calls are still recorded and saved, and a transcript can be pasted in. Both are billed to your own accounts per use.
@@ -118,7 +118,7 @@ function MetaviewCard({ metaview }) {
   const [setAuto, savingAuto] = useAction(async (auto) => metaview.set(await api.put('/metaview/settings', { auto })));
   const [disconnect, disconnecting] = useAction(async () => {
     const here = Number(status.in_the_book || 0);
-    if (!window.confirm(`Disconnect Metaview?\n\nKept: ${here === 1 ? 'the 1 call' : `the ${here.toLocaleString('en-CA')} calls`} already in The Oracle, with ${here === 1 ? 'its' : 'their'} transcripts, notes and submission drafts.\n\nForgotten: the key, and what The Book remembered about the Metaview calls that were never brought in.\n\nNothing in Metaview is changed. The key itself keeps working there until you delete it in Metaview (Settings, Integrations, MCP).`)) return;
+    if (!window.confirm(`Disconnect Metaview?\n\nKept: ${here === 1 ? 'the 1 call' : `the ${here.toLocaleString('en-CA')} calls`} already in Otterview, with ${here === 1 ? 'its' : 'their'} transcripts, notes and submission drafts.\n\nForgotten: the key, and what The Book remembered about the Metaview calls that were never brought in.\n\nNothing in Metaview is changed. The key itself keeps working there until you delete it in Metaview (Settings, Integrations, MCP).`)) return;
     await api.del('/metaview/key');
     toast('Metaview disconnected');
     await metaview.reload();
@@ -143,7 +143,7 @@ function MetaviewCard({ metaview }) {
     <Card id="metaview" className="scroll-mt-4">
       <CardHeader title="Metaview" action={status && <Badge tone={!status.connected ? 'amber' : status.error ? 'red' : 'green'}>{!status.connected ? 'Not connected' : status.error ? 'Not being read' : 'Connected'}</Badge>} />
       <div className="space-y-4 p-4 text-sm leading-relaxed text-stone-600">
-        <p>Metaview records your team’s calls with candidates. Connect it and those calls appear in The Oracle with their transcripts and notes, on the right candidates. The Book only reads from Metaview: nothing there is changed.</p>
+        <p>Metaview records your team’s calls with candidates. Connect it and those calls appear in Otterview with their transcripts and notes, on the right candidates. The Book only reads from Metaview: nothing there is changed.</p>
         {!status ? (
           metaview.error ? <Notice tone="bad">The Metaview connection could not be checked. {metaview.error}</Notice> : <LoaderCircle className="size-5 animate-spin text-stone-400" aria-label="Loading" />
         ) : !status.connected ? (
@@ -165,7 +165,7 @@ function MetaviewCard({ metaview }) {
               {reading && <p className="mt-1 flex items-center gap-2 text-[13px] text-stone-600" role="status"><LoaderCircle className="size-3.5 shrink-0 animate-spin text-brand-600" />{reading}.</p>}
             </div>
             {status.error && <Notice tone="warn"><span className="font-medium">Metaview could not be read the last time The Book looked.</span> {status.error}</Notice>}
-            {autoBox('Other calls wait on the Metaview tab of The Oracle until somebody opens them or chooses their candidate.')}
+            {autoBox('Other calls wait on the Metaview tab of Otterview until somebody opens them or chooses their candidate.')}
             <div className="flex flex-wrap gap-2">
               <Button icon={RefreshCw} busy={metaview.looking} onClick={metaview.look}>Look for new calls now</Button>
               {status.source !== 'server' && <Button variant="danger" busy={disconnecting} onClick={disconnect}>Disconnect</Button>}

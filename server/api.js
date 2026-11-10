@@ -512,9 +512,9 @@ const adminOnly = (req, res, next) => (req.user.role === 'admin' ? next() : res.
 
 // Drafting a job from a job description and intake notes lives in its own module.
 registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, briefFields: (b) => briefFields(b) });
-// The Oracle (recording calls with candidates, transcripts, notes and submission drafts) lives in its own module too.
+// Otterview (recording calls with candidates, transcripts, notes and submission drafts) lives in its own module too.
 registerOracle(api, { agencyOnly, bad, clean, int, takeHit, logActivity, loadApp: (id, user) => loadApp(id, user) });
-// Metaview in The Oracle (the agency's conversations recorded in Metaview, listed and brought in as calls) is a module of its own as well.
+// Metaview in Otterview (the agency's conversations recorded in Metaview, listed and brought in as calls) is a module of its own as well.
 registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, takeHit });
 // Reporting (the Individual and Clients reports, and the record of the moments they count) is a module of its own too.
 // The routes below tell it when one of those moments happens: each call to `reporting.` is one of them.

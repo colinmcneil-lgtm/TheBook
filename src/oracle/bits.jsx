@@ -1,4 +1,4 @@
-// Pieces shared by The Oracle's pages and the Calls tab on a candidate's profile.
+// Pieces shared by Otterview's pages and the Calls tab on a candidate's profile.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Check, Copy, Info, LoaderCircle, Search, UserPlus, X } from 'lucide-react';
@@ -148,7 +148,7 @@ export function CandidatePicker({ value, onChange, label = 'Who is this call wit
         <span className="mb-1 block text-[13px] font-medium text-stone-700">{label}</span>
         <span className="relative block">
           <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-stone-400 max-sm:top-3.5" />
-          {/* Enter here must not submit the form around it: on The Oracle that form starts a recording. */}
+          {/* Enter here must not submit the form around it: on Otterview that form starts a recording. */}
           <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search candidates by name" className="pl-9 max-sm:!h-11 max-sm:!text-base" autoFocus={autoFocus} autoComplete="off"
             onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} />
         </span>
@@ -263,7 +263,7 @@ export function WhoToggle({ everyone, onChange }) {
   return <div className="flex shrink-0 gap-0.5 rounded-lg bg-stone-100 p-0.5" role="group" aria-label="Whose calls to show">{option('Mine', !everyone, 'mine')}{option('Everyone', everyone, 'everyone')}</div>;
 }
 
-/** The top of a card in The Oracle: a round badge, what the card is called, and what it is for in a line or two. */
+/** The top of a card in Otterview: a round badge, what the card is called, and what it is for in a line or two. */
 export function CardIntro({ icon: Icon, title, action, children }) {
   return (
     <div className="flex items-start gap-3">

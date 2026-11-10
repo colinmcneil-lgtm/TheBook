@@ -1,4 +1,4 @@
-// The Oracle's call recorder. No React in here: CallRecorder owns the microphone and the audio mix, ChunkUploader gets
+// Otterview's call recorder. No React in here: CallRecorder owns the microphone and the audio mix, ChunkUploader gets
 // the recording to the server a few seconds at a time and keeps whatever has not arrived yet in this browser.
 import { api } from '../lib.js';
 

@@ -404,7 +404,7 @@ test('everyone who owns somebody in The Book is offered as an owner, even after 
 });
 
 // ---------- calls, and conversations in Metaview ----------
-test('a call in The Oracle can be put on somebody who is on no job, and its summary saved on their profile', async () => {
+test('a call in Otterview can be put on somebody who is on no job, and its summary saved on their profile', async () => {
   const uploaded = await dana.upload('/oracle/calls/upload', { audio: { name: 'call.webm', bytes: RECORDING }, consent: 'true', application_id: book.cleo });
   assert.equal(uploaded.status, 201, JSON.stringify(uploaded.body));
   const callId = uploaded.body.id;
@@ -471,7 +471,7 @@ test('a conversation in Metaview is matched to somebody who is on no job, listed
   const waiting = await listed(`?candidate_id=${bruno}&show=new`);
   assert.deepEqual(waiting.calls.map((c) => [c.id, c.match.candidate_id, c.call_id]), [[intro.id, bruno, null]]);
 
-  // Brought in from their profile, it is a call in The Oracle on their entry, with a line in their history.
+  // Brought in from their profile, it is a call in Otterview on their entry, with a line in their history.
   const opened = await dana.post(`/metaview/calls/${intro.id}/open`, { application_id: book.bruno });
   assert.equal(opened.status, 200, JSON.stringify(opened.body));
   const calls = (await dana.get(`/oracle/calls?application_id=${book.bruno}`)).body;

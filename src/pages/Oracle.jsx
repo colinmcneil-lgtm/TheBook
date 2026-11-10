@@ -243,7 +243,7 @@ function UploadModal({ maxMb, initial, onClose }) {
       upload.current = null;
       toast('Recording uploaded');
       onClose();
-      navigate(`/oracle/${id}`);
+      navigate(`/otterview/${id}`);
     } catch (err) {
       upload.current = null;
       setSent(null);
@@ -294,7 +294,7 @@ function CallRow({ call, back, onAttach }) {
       {call.candidate_id ? <Avatar name={call.candidate_name} size={36} src={photoUrl(call.candidate_id, call.candidate_photo)} /> : <MicBadge size={36} />}
       <div className="min-w-0 flex-1 basis-56">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <Link to={`/oracle/${call.id}`} state={{ back }} className="truncate text-sm font-medium text-stone-900 after:absolute after:inset-0">{callName(call)}</Link>
+          <Link to={`/otterview/${call.id}`} state={{ back }} className="truncate text-sm font-medium text-stone-900 after:absolute after:inset-0">{callName(call)}</Link>
           <CallStatus status={call.status} />
         </div>
         {call.candidate_id ? <p className="truncate text-[13px] text-stone-500">{who}</p> : (
@@ -396,7 +396,7 @@ function RecordTab() {
   );
 }
 
-/** The Oracle: the team's Metaview calls on one tab, recording a conversation in The Book on the other. */
+/** Otterview: the team's Metaview calls on one tab, recording a conversation in The Book on the other. */
 export default function Oracle() {
   const recorder = useRecorder();
   const navigate = useNavigate();
@@ -414,7 +414,7 @@ export default function Oracle() {
   const recording = recorder.live || recorder.state === 'stopping';
 
   return (
-    <Page title="The Oracle" subtitle="Your calls with candidates, each with its transcript, notes and a draft submission for the hiring team.">
+    <Page title="Otterview" subtitle="Your calls with candidates, each with its transcript, notes and a draft submission for the hiring team.">
       <Tabs className="mb-5" value={tab} onChange={go}
         tabs={[
           { id: 'metaview', label: 'Metaview' },

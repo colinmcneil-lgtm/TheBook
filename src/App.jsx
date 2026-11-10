@@ -82,7 +82,7 @@ function Workspace() {
   if (!me) return <Login onDone={reloadMe} />;
 
   // The call recorder sits above the pages, so a recording carries on while the recruiter moves around the workspace.
-  // Client hiring teams have no part in The Oracle, so they get no recorder and no routes to it.
+  // Client hiring teams have no part in Otterview, so they get no recorder and no routes to it.
   const Providers = ctx.isAgency ? RecorderProvider : React.Fragment;
   return (
     <AppContext.Provider value={ctx}>

@@ -1,4 +1,4 @@
-// Metaview in The Oracle, end to end: the real server on a throwaway data folder, reading the stand-in for Metaview
+// Metaview in Otterview, end to end: the real server on a throwaway data folder, reading the stand-in for Metaview
 // (test/metaview-standin.mjs) and a stand-in for the AI service. Run with `npm test`.
 //
 // The tests run in order and build on each other: connect, read the history, list, match, bring calls in, break the
@@ -264,7 +264,7 @@ test('somebody with a login to The Book is never taken for a candidate', async (
   assert.ok((await listed()).calls.every((call) => call.match?.candidate_id !== samOnFile.candidate_id && call.match?.candidate_id !== asCandidate.candidate_id));
 });
 
-test('opening a call brings it into The Oracle with its transcript, on the candidate it certainly was with', async () => {
+test('opening a call brings it into Otterview with its transcript, on the candidate it certainly was with', async () => {
   const conv = standIn.at(0);
   conv.summary = 'Job Interview with Dana\r\n\r\nBackground\r\n- Leads a team of six.\n\n\nNext steps\n- Send the job description.\n';
   standIn.notesAfter = Infinity;   // Metaview is still writing the notes
@@ -370,7 +370,7 @@ test('a call nobody on file matches is brought in on its own; one over an hour l
   assert.equal(call.created_by_name, 'Priya Nair');
 });
 
-test('a caller Metaview knows only by number is matched by it, and takes the candidate\'s name in The Oracle', async () => {
+test('a caller Metaview knows only by number is matched by it, and takes the candidate\'s name in Otterview', async () => {
   const conv = standIn.at(SPECIAL.numberForName);
   // Nobody on file has the number: the call is offered to nobody, and a number is never mistaken for a name.
   assert.deepEqual([(await row(conv.id)).match, (await row(conv.id)).suggestions], [null, []]);
@@ -673,7 +673,7 @@ test('only the read-only tools were ever asked for, each with a reason, and the 
   assert.equal(/@mail\.example|5550\d{3}/.test(server.output()), false);
 });
 
-test('forgetting the key forgets what was never brought in; the calls in The Oracle stay', async () => {
+test('forgetting the key forgets what was never brought in; the calls in Otterview stay', async () => {
   const before = await status();
   assert.ok(before.in_the_book >= 5 && before.known > 120);
   const kept = (await w.owner.get('/oracle/calls?source=metaview')).body;
@@ -687,7 +687,7 @@ test('forgetting the key forgets what was never brought in; the calls in The Ora
     assert.deepEqual(all(`SELECT key FROM settings WHERE key LIKE 'metaview_%' AND key != 'metaview_auto'`), []);
     assert.equal(all('SELECT COUNT(*) AS n FROM metaview_calls WHERE call_id IS NULL')[0].n, 0);
   });
-  // What is left of the list is the calls that are in The Oracle, and they still open, with nothing asked of Metaview.
+  // What is left of the list is the calls that are in Otterview, and they still open, with nothing asked of Metaview.
   const asked = standIn.requests.length;
   const left = await listed();
   assert.equal(left.total, before.in_the_book);

@@ -376,7 +376,7 @@ tx(() => {
     }
   }
 
-  // The Oracle: three calls Priya recorded, so the page has something on it. The demo holds their transcripts and
+  // Otterview: three calls Priya recorded, so the page has something on it. The demo holds their transcripts and
   // notes but no audio. Two are on a candidate; the third has not been added to anyone yet.
   const CONSENT = 'I have told everyone on this call that it is being recorded and transcribed, and they have agreed.';
   /** Give each turn a start and end, at an ordinary speaking pace with a short pause between speakers. */

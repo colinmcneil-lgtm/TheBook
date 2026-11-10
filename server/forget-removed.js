@@ -10,7 +10,7 @@
 //   node server/forget-removed.js --yes    clears it
 //
 // It reads DATA_DIR like the app does, and can be run while the app is running. It leaves everything else alone,
-// the calls that were made by phone among it: those are calls in The Oracle like any other. What is cleared is
+// the calls that were made by phone among it: those are calls in Otterview like any other. What is cleared is
 // written over, not just marked as deleted. It does nothing on a database that never had these features.
 import fs from 'node:fs';
 import path from 'node:path';

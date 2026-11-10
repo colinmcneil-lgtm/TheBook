@@ -1,4 +1,4 @@
-// What the Oracle tests share: a way to start the real server on a throwaway data folder, stand-ins for the two
+// What Otterview tests share: a way to start the real server on a throwaway data folder, stand-ins for the two
 // outside services it talks to (Deepgram for transcription, Anthropic for notes and write-ups), and a signed-in
 // browser session.
 //
@@ -19,7 +19,7 @@ export const RECORDING = fs.readFileSync(path.join(FIXTURES, 'call.webm'));
 export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-canned.json'), 'utf8'));
 
 // Ports: every test file's ports are counted from ORACLE_TEST_PORT (3610 unless set), thirty in a row in all.
-//   +0 to +4    the Oracle tests: three for servers, then one for each stand-in
+//   +0 to +4    Otterview tests: three for servers, then one for each stand-in
 //   +12, +13    the workspace tests: a server and a stand-in
 //   +14, +15    people saved without a job (pool.test.mjs): a server and a stand-in for Metaview
 //   +16, +17    the reporting tests: two servers

@@ -1,4 +1,4 @@
-// The Oracle's uploader: what happens to a recording that was cut off. Run with `npm test`.
+// Otterview's uploader: what happens to a recording that was cut off. Run with `npm test`.
 // The browser pieces it leans on (fetch, localStorage, window events) are stood in for here; the recorder itself
 // (microphone, audio mix) only exists in a browser and was checked there.
 import test from 'node:test';

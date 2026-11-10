@@ -312,7 +312,7 @@ function fill(dataDir) {
   run(`INSERT INTO email_templates (key, name, subject, body) VALUES (NULL, 'Checking in', 'Still interested?', 'Hi {{candidate_first_name}}')`);
   run(`DELETE FROM email_templates WHERE name = 'Offer follow-up'`);
 
-  // The Oracle: a recorded call on a candidate whose summary was saved as note 1, a call left with a person after its
+  // Otterview: a recorded call on a candidate whose summary was saved as note 1, a call left with a person after its
   // application was removed, a call on nobody, and three phone calls (one that never connected, one from a stranger).
   const call = (recording, title, source, extra = {}) => run(
     `INSERT INTO calls (recording_id, title, status, source, audio_file, audio_type, audio_size, duration_ms, transcript, transcript_source, speakers, notes, notes_at, submission, note_id,

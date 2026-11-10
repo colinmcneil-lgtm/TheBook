@@ -1,7 +1,7 @@
-// The Metaview tab of The Oracle, and the pieces about Metaview that other screens share.
+// The Metaview tab of Otterview, and the pieces about Metaview that other screens share.
 //
 // Metaview is where the agency's calls are recorded. The Book reads the list of those calls and shows it here. A call
-// is "brought in" (its transcript and Metaview's notes are copied into The Oracle) the first time somebody opens it
+// is "brought in" (its transcript and Metaview's notes are copied into Otterview) the first time somebody opens it
 // or chooses its candidate, or by itself when it clearly belongs to one candidate. Nothing here changes anything in
 // Metaview: The Book only reads from it.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -146,7 +146,7 @@ function Whose({ call, onChoose }) {
   );
 }
 
-/** One of Metaview's calls. Clicking it opens it in The Oracle, bringing it in first if it is not there yet. */
+/** One of Metaview's calls. Clicking it opens it in Otterview, bringing it in first if it is not there yet. */
 function Row({ call, back, opening, held, onOpen, onChoose }) {
   const title = 'min-w-0 truncate text-left text-sm font-medium text-stone-900 after:absolute after:inset-0';
   const about = [peopleLine(call), kindLine(call)].filter(Boolean).join(' · ');
@@ -155,7 +155,7 @@ function Row({ call, back, opening, held, onOpen, onChoose }) {
       <ChannelBadge call={call} />
       <div className="min-w-0 flex-1 basis-56">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          {call.call_id ? <Link to={`/oracle/${call.call_id}`} state={{ back }} className={title}>{call.title}</Link>
+          {call.call_id ? <Link to={`/otterview/${call.call_id}`} state={{ back }} className={title}>{call.title}</Link>
             : <button type="button" onClick={onOpen} disabled={opening} className={title}>{call.title}</button>}
           {call.call_id && <Badge tone="green" icon={Check}>In The Book</Badge>}
           {!call.has_transcript && <Badge>No transcript</Badge>}
@@ -194,7 +194,7 @@ function NotConnected({ status }) {
   );
 }
 
-/** The first tab of The Oracle: the team's Metaview calls, findable, each on its candidate in The Book. */
+/** The first tab of Otterview: the team's Metaview calls, findable, each on its candidate in The Book. */
 export function MetaviewTab() {
   const { user, isAdmin } = useApp();
   const navigate = useNavigate();
@@ -231,7 +231,7 @@ export function MetaviewTab() {
     setOpening(call.id);
     try {
       const { call_id } = await api.post(`/metaview/calls/${call.id}/open`);
-      navigate(`/oracle/${call_id}`, { state: { back } });
+      navigate(`/otterview/${call_id}`, { state: { back } });
     } catch (err) {
       toast(problemOf(err), 'error');
       setOpening(null);

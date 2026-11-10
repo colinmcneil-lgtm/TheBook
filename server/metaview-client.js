@@ -259,10 +259,10 @@ const secondsOf = (clock) => clock.split(':').reduce((total, part) => total * 60
 const MAX_SPEAKERS = 40;
 
 /**
- * Metaview's transcript (one string, one line per turn) as the turns The Oracle keeps, [{ speaker, start, end, text }]
+ * Metaview's transcript (one string, one line per turn) as the turns Otterview keeps, [{ speaker, start, end, text }]
  * with times in seconds, and the name of each speaker number. A line that is not the start of a turn carries on the
  * turn before it. Somebody Metaview has no name for, or only a phone number for, is called by their part in the
- * call ("Candidate"): The Oracle puts the candidate's own name there once the call is on a candidate.
+ * call ("Candidate"): Otterview puts the candidate's own name there once the call is on a candidate.
  */
 export function transcriptTurns(transcript) {
   const turns = [], names = [];

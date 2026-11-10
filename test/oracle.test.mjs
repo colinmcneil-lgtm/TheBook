@@ -1,4 +1,4 @@
-// The Oracle, end to end: the real server on a throwaway data folder, with stand-ins for Deepgram and Anthropic.
+// Otterview, end to end: the real server on a throwaway data folder, with stand-ins for Deepgram and Anthropic.
 // Run with `npm test`. Nothing here reaches the real services (see oracle-helpers.mjs for what that leaves unproven).
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';

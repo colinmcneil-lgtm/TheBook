@@ -1,4 +1,4 @@
-// The small readers behind Metaview in The Oracle, on their own: what an answer from Metaview says, a transcript's
+// The small readers behind Metaview in Otterview, on their own: what an answer from Metaview says, a transcript's
 // lines, who a conversation was with, and the sealing of the key. Run with `npm test`.
 import test from 'node:test';
 import assert from 'node:assert/strict';

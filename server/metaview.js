@@ -1,4 +1,4 @@
-// Metaview in The Oracle: the conversations the agency records in Metaview, listed in The Book, matched to the
+// Metaview in Otterview: the conversations the agency records in Metaview, listed in The Book, matched to the
 // candidates they were with, and brought in as calls.
 //
 // How it works:
@@ -86,7 +86,7 @@ function statusFor(user) {
   };
 }
 
-/** Forget every conversation that was never brought in, and how far the history had been read. Calls in The Oracle stay, with their link to Metaview. */
+/** Forget every conversation that was never brought in, and how far the history had been read. Calls in Otterview stay, with their link to Metaview. */
 function forgetUnbrought() {
   q.run('DELETE FROM metaview_calls WHERE call_id IS NULL');
   q.run('UPDATE metaview_calls SET fetch_next_at = NULL, fetch_tries = 0');
@@ -235,9 +235,9 @@ function remember(conversations) {
   });
 }
 
-// ---------- bringing a conversation into The Oracle ----------
+// ---------- bringing a conversation into Otterview ----------
 const rowOf = (id) => q.get('SELECT * FROM metaview_calls WHERE id = ?', id) ?? null;
-/** The call in The Oracle that a conversation already is, if it is still there. */
+/** The call in Otterview that a conversation already is, if it is still there. */
 const callOf = (id) => q.get('SELECT k.id FROM metaview_calls m JOIN calls k ON k.id = m.call_id WHERE m.id = ?', id)?.id ?? null;
 /** Whose call it is in The Book: an interviewer who has a login here, else whoever opened it, else the first admin. */
 function ownerOf(people, openedBy) {
@@ -338,7 +338,7 @@ async function readHistoryPage(link) {
  * Once a week the whole list is read again, a page a round like the first time. That brings older conversations up
  * to date, and it is how one that was deleted in Metaview leaves The Book's list: whatever the reading did not come
  * across is asked for by its number, and what Metaview no longer has is forgotten. Only conversations that were
- * never brought in are forgotten this way; a call in The Oracle is The Book's own and stays.
+ * never brought in are forgotten this way; a call in Otterview is The Book's own and stays.
  * Resolves to true while the reading is under way.
  */
 async function readAgain(link) {
@@ -371,7 +371,7 @@ async function readAgain(link) {
 }
 
 /**
- * Fetch what is still owed to calls already in The Oracle: notes Metaview had not finished writing, and transcripts
+ * Fetch what is still owed to calls already in Otterview: notes Metaview had not finished writing, and transcripts
  * that arrived after the call was brought in. A few at a time. Each conversation is asked for a limited number of
  * times, so one that Metaview cannot answer for never holds up the rest.
  */
@@ -587,7 +587,7 @@ export function registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, 
     const computed = found.get(row.id) ?? { match: null, suggestions: [] };
     let match = computed.match, suggestions = computed.suggestions;
     if (row.call_id) {
-      // Once a conversation is a call in The Oracle, who that call is on is the answer, whoever put it there.
+      // Once a conversation is a call in Otterview, who that call is on is the answer, whoever put it there.
       const onto = row.on_application ?? (row.on_candidate
         ? q.get(`SELECT id FROM applications WHERE candidate_id = ? ORDER BY status = 'active' DESC, updated_at DESC LIMIT 1`, row.on_candidate)?.id : null);
       match = onto ? chosenMatch(onto, computed.match?.candidate_id === row.on_candidate ? computed.match.how : 'chosen') : null;
@@ -650,7 +650,7 @@ export function registerMetaview(api, { agencyOnly, adminOnly, bad, clean, int, 
     res.json({ total, calls: page.map((row) => shape(row, found)) });
   });
 
-  // Open a conversation as a call in The Oracle, bringing it in first if it is not there yet.
+  // Open a conversation as a call in Otterview, bringing it in first if it is not there yet.
   api.post('/metaview/calls/:id/open', agencyOnly, async (req, res) => {
     const id = int(req.params.id);
     if (!rowOf(id)) bad('This Metaview call was not found. It may be older than The Book has read so far.', 404);
