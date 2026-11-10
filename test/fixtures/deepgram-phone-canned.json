@@ -1,0 +1,63 @@
+{
+  "metadata": {
+    "transaction_key": "deprecated",
+    "request_id": "00000000-0000-4000-8000-000000000002",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "created": "2026-11-10T09:00:00.000Z",
+    "duration": 27.36,
+    "channels": 2,
+    "models": ["11111111-1111-4111-8111-111111111111"],
+    "model_info": { "11111111-1111-4111-8111-111111111111": { "name": "general-nova-3", "version": "stub", "arch": "nova-3" } }
+  },
+  "results": {
+    "channels": [
+      {
+        "alternatives": [
+          {
+            "transcript": "Hi Dana, it's Maya from Kestrel Recruitment. Is now still a good time? Great. Can you tell me about your current role? And how big is the team? Mhmm. And what are you looking for on salary?",
+            "confidence": 0.99,
+            "words": [],
+            "paragraphs": {
+              "transcript": "\nHi Dana, it's Maya from Kestrel Recruitment. Is now still a good time?\n\nGreat. Can you tell me about your current role? And how big is the team?\n\nMhmm.\n\nAnd what are you looking for on salary?",
+              "paragraphs": [
+                { "sentences": [ { "text": "Hi Dana, it's Maya from Kestrel Recruitment.", "start": 0.6, "end": 2.6 }, { "text": "Is now still a good time?", "start": 2.8, "end": 3.9 } ], "num_words": 13, "start": 0.6, "end": 3.9 },
+                { "sentences": [ { "text": "Great.", "start": 6.1, "end": 6.5 }, { "text": "Can you tell me about your current role?", "start": 6.9, "end": 9.8 }, { "text": "And how big is the team?", "start": 10.6, "end": 12.9 } ], "num_words": 15, "start": 6.1, "end": 12.9 },
+                { "sentences": [ { "text": "Mhmm.", "start": 15.0, "end": 15.4 } ], "num_words": 1, "start": 15.0, "end": 15.4 },
+                { "sentences": [ { "text": "And what are you looking for on salary?", "start": 21.9, "end": 24.1 } ], "num_words": 8, "start": 21.9, "end": 24.1 }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "alternatives": [
+          {
+            "transcript": "Yes, now is fine. Sure. I lead six account executives at Varsity Freight. We closed 2.4 million last year. Around 90,000 base.",
+            "confidence": 0.98,
+            "words": [],
+            "paragraphs": {
+              "transcript": "\nYes, now is fine.\n\nSure. I lead six account executives at Varsity Freight.\n\nWe closed 2.4 million last year.\n\nAround 90,000 base.",
+              "paragraphs": [
+                { "sentences": [ { "text": "Yes, now is fine.", "start": 4.4, "end": 5.6 } ], "num_words": 4, "start": 4.4, "end": 5.6 },
+                { "sentences": [ { "text": "Sure.", "start": 12.4, "end": 12.8 }, { "text": "I lead six account executives at Varsity Freight.", "start": 13.1, "end": 17.8 } ], "num_words": 9, "start": 12.4, "end": 17.8 },
+                { "sentences": [ { "text": "We closed 2.4 million last year.", "start": 18.6, "end": 21.0 } ], "num_words": 6, "start": 18.6, "end": 21.0 },
+                { "sentences": [ { "text": "Around 90,000 base.", "start": 24.9, "end": 26.3 } ], "num_words": 3, "start": 24.9, "end": 26.3 }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "utterances": [
+      { "start": 0.6, "end": 3.9, "confidence": 0.99, "channel": 0, "transcript": "Hi Dana, it's Maya from Kestrel Recruitment. Is now still a good time?", "words": [], "id": "bbbbbbbb-0000-4000-8000-000000000001" },
+      { "start": 6.1, "end": 9.8, "confidence": 0.99, "channel": 0, "transcript": "Great. Can you tell me about your current role?", "words": [], "id": "bbbbbbbb-0000-4000-8000-000000000002" },
+      { "start": 10.6, "end": 12.9, "confidence": 0.99, "channel": 0, "transcript": "And how big is the team?", "words": [], "id": "bbbbbbbb-0000-4000-8000-000000000003" },
+      { "start": 15.0, "end": 15.4, "confidence": 0.93, "channel": 0, "transcript": "Mhmm.", "words": [], "id": "bbbbbbbb-0000-4000-8000-000000000004" },
+      { "start": 21.9, "end": 24.1, "confidence": 0.99, "channel": 0, "transcript": "And what are you looking for on salary?", "words": [], "id": "bbbbbbbb-0000-4000-8000-000000000005" },
+      { "start": 4.4, "end": 5.6, "confidence": 0.99, "channel": 1, "transcript": "Yes, now is fine.", "words": [], "id": "bbbbbbbb-0000-4000-8000-000000000006" },
+      { "start": 12.4, "end": 17.8, "confidence": 0.98, "channel": 1, "transcript": "Sure. I lead six account executives at Varsity Freight.", "words": [], "id": "bbbbbbbb-0000-4000-8000-000000000007" },
+      { "start": 18.6, "end": 21.0, "confidence": 0.98, "channel": 1, "transcript": "We closed 2.4 million last year.", "words": [], "id": "bbbbbbbb-0000-4000-8000-000000000008" },
+      { "start": 24.9, "end": 26.3, "confidence": 0.97, "channel": 1, "transcript": "Around 90,000 base.", "words": [], "id": "bbbbbbbb-0000-4000-8000-000000000009" }
+    ]
+  }
+}

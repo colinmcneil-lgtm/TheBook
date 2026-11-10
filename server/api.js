@@ -7,6 +7,7 @@ import { q, now, tx, UPLOAD_DIR, getSetting, setSetting, createStages, DEFAULT_C
 import { sendMail, sendTemplate, mailConfigured, notify, appUrl } from './mail.js';
 import { registerAutofill } from './autofill.js';
 import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCalls, forgetSavedNote } from './oracle.js';
+import { registerPhone, registerPhoneWebhooks } from './phone.js';
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
 
 export const api = express.Router();
@@ -446,6 +447,10 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
   }
 });
 
+// ---------- phone calls: the routes the phone service itself calls ----------
+// These take no sign-in (Twilio has no cookie): each request is trusted only by Twilio's signature. See phone.js.
+registerPhoneWebhooks(api);
+
 // ---------- everything below requires a signed-in user ----------
 api.use((req, res, next) => {
   req.user = readSession(req);
@@ -465,6 +470,8 @@ const adminOnly = (req, res, next) => (req.user.role === 'admin' ? next() : res.
 registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, briefFields: (b) => briefFields(b) });
 // The Oracle (recording calls with candidates, transcripts, notes and submission drafts) lives in its own module too.
 registerOracle(api, { agencyOnly, bad, clean, int, takeHit, logActivity, loadApp: (id, user) => loadApp(id, user) });
+// Phone calls (click to call, the switchboard, calls coming in to The Book's number) live in their own module as well.
+registerPhone(api, { agencyOnly, bad, clean, int, logActivity, loadApp: (id, user) => loadApp(id, user) });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);

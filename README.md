@@ -16,6 +16,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **The Oracle** | Record a call with a candidate in the browser, or upload a recording. The call is written out with who said what, a notes summary is drafted, and one click drafts the write-up for the hiring team. A call can be recorded first and added to a candidate afterwards. Agency only. See [The Oracle](#the-oracle). |
+| **Phone calls** | Call a candidate from The Book: your own phone rings, you press 1, and the candidate is rung from the agency's number. Or ring that number from your mobile while you are out, key in a PIN and the number, and talk as you walk. Either way the call is recorded with each of you on your own channel, written out, summarised, put on the candidate, and you are e-mailed when the notes are ready. Candidates who ring the number are put through to their recruiter. Agency only. See [Phone calls](#phone-calls). |
 | **Inbox** | Every new application across all clients lands in one review queue, oldest first. |
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
 | **Shortlist hand-off** | Submit a candidate to the hiring team with your write-up. They approve (the candidate moves to the next interview stage) or decline with a reason, so you can calibrate. |
@@ -150,8 +151,9 @@ size the file is. Transcripts and notes are in the database.
 ### Consent to recording
 
 A call with a candidate is personal data, and in many places it is against the law to record a call unless everyone
-on it has agreed. The Book does not announce the recording to the candidate: the recruiter has to tell them and get
-their agreement. Before every recording and every upload the recruiter must confirm that everyone on the call has
+on it has agreed. For a call recorded in the browser or uploaded, The Book does not announce the recording to the
+candidate: the recruiter has to tell them and get their agreement. (A call placed through The Book's phone number is
+different: the other person hears a notice first. See [Phone calls](#phone-calls).) Before every recording and every upload the recruiter must confirm that everyone on the call has
 agreed, and the workspace stores who confirmed it, when, and the sentence they ticked. A recording cannot be started
 without that sentence; an upload sent without one is recorded against the standard sentence ("Everyone on this call
 knew it was being recorded and agreed."). Nothing is recorded or kept without that. Check what the law requires where you and your candidates are, and say in your privacy notice that
@@ -187,6 +189,188 @@ for Claude, so read the first few real ones closely.
 Recording was tested in Chrome only. Edge, Safari, Firefox and phones have not been
 tried, and neither has a real call of an hour or more. The cases where a day or a week passes (the server saving a
 call by itself, a browser coming back later with the rest) were run by putting the clock back, not by waiting.
+
+## Phone calls
+
+With a Twilio account connected, The Book has a phone number of its own, and calls made through it land in the
+Oracle without anyone pressing Record.
+
+1. **Call from the app.** Find a candidate (or type a number) and press Call. Your own mobile rings. A voice says who
+   you are about to call and asks you to press 1; only then is the candidate rung, and they see The Book's number,
+   not yours. The key press is there so that if your voicemail answers your phone, it is never connected to a
+   candidate. The screen follows the call: ringing you, waiting for you to press 1, calling them, in the call, and
+   one plain sentence for how it ended ("Kevin's phone was busy", "You did not pick up"). You can hang up from the
+   screen. If the call does not connect, the voice tells you why before it hangs up.
+2. **Call from your phone (the switchboard).** Save The Book's number in your contacts. Ring it from the mobile you
+   saved in The Book, key in your PIN and #, then the number you want and #. The call is placed and recorded the
+   same way, with no screen needed. If the number is exactly one candidate's, the call goes on that candidate. Three
+   wrong PINs end the call and lock that mobile out of the switchboard for fifteen minutes (you are e-mailed when it
+   happens); wrong PINs add up across calls, so hanging up and trying again does not help a guesser.
+3. **Somebody rings the number.** The caller is found by their number and put through to the recruiter who last
+   called them, or else the owner of their most recent application, or else the first admin who has a mobile saved.
+   Your phone shows The Book's number, and before you are joined a voice says "Call from Dana Whitlock, a candidate"
+   (or that the number is not known). If you do not answer within twenty seconds the caller is asked to leave a
+   message, and the message becomes a call in the Oracle too, titled "Voicemail from ...". A number nobody knows is
+   put through the same way and waits in the Oracle to be added to a candidate. Ringing back from your call log
+   reaches the switchboard, so the call back is recorded as well. (Set `PHONE_FORWARD_SHOWS=caller` if you would
+   rather see the caller's own number; calls passed on that way are more likely to be labelled as spam by your carrier.)
+
+### After the call
+
+When Twilio says the recording is ready, The Book fetches it with both channels, checks that it really has two,
+stores it next to the other call audio, and only then deletes Twilio's copy. The call appears in the Oracle with
+"phone" as its source, which way it went and the other person's number. It is put on the candidate automatically
+when it was placed on a candidate or when the number is exactly one candidate's (on their most recent active
+application), and their history says "Phone call, 12 min". Otherwise it is left for the recruiter to add to someone.
+
+The transcript does not guess who is speaking: Twilio puts the person it rang first on the first channel, so on a
+call you placed the first channel is you, and on a call that came in it is the caller. Each channel is written out
+on its own and the two are woven together by time, with the names filled in. Notes are then written as for any
+Oracle call, and the recruiter is e-mailed "Your call notes for Dana Whitlock are ready" with a link. Without e-mail
+connected, no e-mail is sent and nothing else changes.
+
+Twilio's messages to The Book (webhooks) are not guaranteed to arrive, or to arrive once. Every one can be
+repeated without harm, and once a minute The Book asks Twilio about calls it has heard nothing about and about
+recordings that never turned up. A recording that cannot be fetched is tried again for up to thirty days (one day,
+if Twilio keeps answering that it has no such recording) and stays at Twilio meanwhile; it is never deleted there
+until it is safely here. A restart in the middle loses nothing.
+
+### Telling people the call is recorded
+
+Before a recorded call is connected, the person who did not place it hears, alone:
+
+> "This call from Harbour Talent is recorded and transcribed for recruitment notes. Tell your recruiter if you'd
+> prefer it wasn't."
+
+(with your agency's name). A caller hears it when they ring in, after "Thanks for calling". It takes under ten
+seconds. It is played before recording starts, which is when it has to be; for the same reason it is **not in the
+audio**. What proves it was played is the call's own record: the Oracle shows the words, to whom and when. The
+recruiter can also say it once connected, which puts it in the recording.
+
+- `PHONE_NOTICE=off` plays no notice. The call's record then says so, and telling the other person is up to the
+  recruiter. Any other text replaces the wording, for example a version your lawyer has approved. Keep it short.
+- **Call without recording** places the call with no recording and no notice, and nothing goes to the Oracle. Use
+  it when a candidate asks not to be recorded.
+- The recruiter hears on their own phone, before pressing 1, whether the call will be recorded.
+
+Canada's privacy law expects people to be told that a call is recorded and why, whoever placed it, and about a dozen
+US states require everyone on a call to agree. You cannot tell where somebody is from their number. Telling everyone
+on every call covers all of them, which is why it is the default. This is a careful reading of second-hand sources,
+not legal advice: have a privacy lawyer confirm the wording once, and add a line about call recording to your
+privacy notice. Twilio, Deepgram and Anthropic all process calls in the United States.
+
+### Settings
+
+| Setting | What it is |
+| --- | --- |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | From the front page of the Twilio Console. The token signs in to Twilio and is what proves a webhook came from Twilio. |
+| `TWILIO_NUMBER` | The number you bought, for example `+16475550100`. |
+| `APP_URL` | **The exact public https address of the workspace**, for example `https://hiring.youragency.com`. Twilio signs every webhook with the address it was sent to, and The Book checks that signature against this setting, so it must be the address you gave Twilio, letter for letter: `https`, the same domain (your own domain if you use one, not the Railway one), no path. If it is wrong, every call fails with "an application error has occurred". |
+| `PHONE_COUNTRIES` | Countries that may be called, as two-letter codes. Default `CA,US`. |
+| `PHONE_NOTICE` | See above. Default on. |
+| `PHONE_FORWARD_SHOWS` | `caller` to show a caller's own number when they are put through. Default: The Book's number. |
+| `PHONE_CALLS_PER_HOUR` | The most calls one person can place in an hour. Default 30. |
+| `PHONE_VOICE` | Optional: which of Twilio's voices reads the prompts (for example `alice`). |
+
+Without the three Twilio settings (or without an address in `APP_URL`), the app says phone calls are not connected,
+and everything else works as before. People can still save their mobile and PIN ahead of time.
+
+### Setting it up
+
+1. Open a Twilio account and upgrade it from the trial. A trial account can only ring numbers you have verified,
+   plays its own message, cuts calls at ten minutes and, if opened in Canada, cannot ring US numbers at all.
+2. Buy a local number with Voice. An Ontario number (416, 647, 437, 905, 289, 365) suits an Ontario agency.
+3. In Voice, Settings, Geo permissions, allow United States and Canada only, and leave every high-risk box off.
+   Check that "Enforce HTTP Auth on Media URLs" (Voice, Settings, General) is on, so recordings cannot be fetched
+   without your credentials.
+4. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_NUMBER` and `APP_URL` on the server and restart it. Set
+   `DEEPGRAM_API_KEY` and `ANTHROPIC_API_KEY` too if they are not already (see [The Oracle](#the-oracle)), and
+   connect e-mail if you want the "notes are ready" message.
+5. In Twilio, open Phone Numbers, Active numbers, your number, Voice configuration. For **A call comes in** choose
+   Webhook, `https://<your address>/api/phone/twilio/inbound`, HTTP POST. For **Call status changes** enter
+   `https://<your address>/api/phone/twilio/status`, HTTP POST. Save.
+6. In The Book, each person on the agency team saves their own mobile number, and a PIN of 4 to 6 digits if they
+   want to ring in. Save The Book's number in your phone as "The Book".
+
+### What stops it running up a bill
+
+- A call can only be placed by a signed-in agency user, or from that user's own saved mobile with their PIN. Caller
+  ID can be faked, which is why the PIN exists.
+- Numbers are checked before Twilio is asked for anything. Only ordinary numbers in the allowed countries are
+  rung. `+1` is not only Canada and the United States: 1-900 and other premium lines, toll-free numbers, and the
+  Caribbean countries and US territories that share `+1` (Jamaica, the Dominican Republic, Puerto Rico and the
+  rest, each priced on its own) are refused. The same check applies to the mobile a person saves, since The Book
+  rings that too. For countries other than Canada and the US, The Book cannot tell a premium-rate number from an
+  ordinary one, so if you add any, rely on Twilio's geographic permissions as well.
+- Each person can place 30 calls an hour and one at a time from the app. The count is kept in the database, so a
+  restart does not reset it. A call is cut off at three hours.
+- Calls coming in are put through at most 10 an hour from one number and 60 an hour in all; beyond that the call is
+  turned away with a busy tone, without being answered.
+- Webhooks are accepted only with Twilio's signature. Anything else is answered 403 and changes nothing.
+
+### Privacy
+
+Phone calls follow the Oracle's rules: agency only; client users are refused on every route and see nothing of a
+call, not even the line on a candidate's history. Deleting a candidate deletes their phone calls with the audio,
+transcripts and notes, and the entries in each recruiter's list of calls; if a call with them is still going, its
+recording is deleted from Twilio when it arrives. Deleting a call in the Oracle while it is still going does the
+same. Phone numbers and PINs are never written to the server log. PINs are stored as salted hashes. What Twilio
+told The Book about each call is kept for two weeks to help with fault-finding, with numbers and keys masked.
+
+A phone recording is a WAV file, about 2 MB a minute (115 MB an hour), much larger than a browser recording, so
+watch the disk. Until The Book has fetched and deleted it, a recording sits on Twilio's servers in the United
+States; that is normally under a minute.
+
+### What it costs
+
+Estimates gathered in November 2026 from Twilio's published prices, in US dollars; check your own account.
+
+- The number: about $1.15 a month.
+- A call you place is two calls to Twilio (to you, then to the candidate) at about $0.014 a minute each, plus
+  recording at $0.0025 a minute: **about 90 cents for half an hour**. A call that comes in and is put through is
+  about 75 cents for half an hour.
+- Some places cost far more per minute: Yukon, the Northwest Territories and Nunavut (area code 867) about $0.15,
+  Alaska about $0.09.
+- Transcription is billed for both channels, so a half-hour phone call counts as an hour of audio at Deepgram.
+
+### Before you rely on it
+
+**None of this has been run against Twilio.** Twilio could not be reached from where it was built. The requests
+follow Twilio's published API description and the code of its own library, and the signature check passes that
+library's own test cases; but what Twilio sends in each webhook, and in what order, comes partly from second-hand
+summaries of its documentation. Everything was tested against a stand-in written from those sources
+(`test/twilio-standin/`), which shows that The Book and the stand-in agree, not that Twilio behaves this way. The
+same goes for Deepgram's handling of a two-channel file. Before recruiters use it with candidates, make these
+checks on real calls between the team's own phones, in this order:
+
+1. With the account upgraded and the number bought, confirm the two Console settings in step 3 above.
+2. Place one call from the app between two of your phones. If a voice says "an application error has occurred",
+   `APP_URL` does not match the address Twilio was given (the server log shows requests answered 403).
+3. Press 1, talk for a minute with each person saying who they are, and hang up. The call should show as ended
+   with its length, and appear in the Oracle within a minute or two.
+4. Open the call in the Oracle. The audio should have both voices, and **the names on the transcript should be the
+   right way round**. If they are swapped, the channel order is not what Twilio's documentation says; tell whoever
+   maintains The Book, because it is one line to change.
+5. Listen to the start of the recording: the notice should not be in it. Ask the person called what they heard, and
+   note what the caller hears while the notice plays.
+6. In the Twilio Console, under Monitor, Logs, Call recordings, the recording should be gone.
+7. Place a call and let your own phone go to voicemail. The other phone must not ring, and the call should end as
+   "You did not press 1".
+8. Ring The Book's number from a phone that is not saved in it: check what the recruiter's phone shows and hears,
+   then try again without answering and leave a message. The message should appear in the Oracle.
+9. Ring in from a saved mobile and place a call with the PIN. Then call a US mobile on each big carrier you can and
+   see how The Book's number is labelled; if it shows as spam, register for caller-ID attestation in Twilio's
+   Trust Hub.
+10. Look at the first calls in Twilio's usage page and compare the prices with the figures above.
+
+### Not built for phone calls yet
+
+- Stopping a recording part-way through a call. Until then: hang up and call back without recording, and delete the
+  call in the Oracle.
+- A French notice, or transcription of calls held in French (`DEEPGRAM_LANGUAGE` sets one language for all calls).
+- Deleting call audio automatically after a set time.
+- Talking through the browser with a headset instead of your own phone.
+- Ringing several recruiters at once for a call that comes in, and text messages.
 
 ## Chrome extension
 
@@ -291,6 +475,9 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   write call notes and submission drafts.
 - **Connect call transcription (optional)** by setting `DEEPGRAM_API_KEY`. See [The Oracle](#the-oracle) for what is
   sent, what it costs and what happens without it.
+- **Connect phone calls (optional)** by setting `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_NUMBER` and
+  `APP_URL`, and pointing the number's voice webhook at the workspace. See [Phone calls](#phone-calls) for the steps;
+  `APP_URL` must be the exact public https address.
 - **Tell the app about proxies.** Leave `TRUST_PROXY` unset when the app is reached directly (plain `docker run`).
   Behind a reverse proxy set it to the number of proxies in front, or sign-in and application rate limits will
   either lump every visitor together or be trivially bypassed.
@@ -312,6 +499,9 @@ server/
   api.js     All API routes: auth, careers pages, jobs, pipeline, interviews, reports
   autofill.js  Drafting a job and its brief from a job description and intake notes
   oracle.js  The Oracle: recording and uploading calls, transcription, notes and submission drafts
+  phone.js   Phone calls through Twilio: click to call, the switchboard, calls coming in, fetching the recording
+  phone-numbers.js     Reading a phone number as typed, and which numbers may be rung
+  twilio-signature.js  Checking that a webhook really came from Twilio
   webm.js    Writes a browser recording's length into the file, so the player can seek
   db.js      SQLite schema and helpers (Node's built-in node:sqlite, no native modules)
   links.js   How profile links are stored, and which ones identify a person
@@ -344,7 +534,7 @@ they made at that client, their résumé files, and their recorded calls with th
 - Joining a video call to record it. The Oracle records in the recruiter's browser, or takes an uploaded recording.
 - Multi-posting to job boards, e-signature for offers, and headcount planning or onboarding checklists.
 - Automated tests that drive the screens in a browser as part of `npm test`. `npm test` covers the résumé reader,
-  job autofill, the Oracle's server side and the Oracle's uploader. The Oracle's screens were driven end to end in
+  job autofill, the Oracle's server side, the Oracle's uploader, and phone calls against a stand-in for Twilio. The Oracle's screens were driven end to end in
   Chrome with a simulated microphone while it was built (record, reload and server restart mid-call, a lost connection,
   two people on one computer, transcript, notes, add to a candidate, draft, submit, delete), against stand-ins for
   Deepgram and Claude; the other screens were verified by hand.

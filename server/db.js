@@ -343,6 +343,76 @@ CREATE INDEX IF NOT EXISTS idx_calls_candidate ON calls(candidate_id);
 CREATE INDEX IF NOT EXISTS idx_calls_application ON calls(application_id);
 CREATE INDEX IF NOT EXISTS idx_calls_created_by ON calls(created_by);`);
 
+// ---------- phone calls ----------
+// Calls placed and received through The Book's own phone number (see phone.js). Agency only, like the Oracle.
+db.exec(`
+-- One row for each phone call, from the moment it is placed or arrives. This is what the screen follows while the
+-- call is live, and what ties the phone service's webhooks and its recording to the call in the Oracle.
+CREATE TABLE IF NOT EXISTS phone_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,   -- the recruiter on the call
+  direction TEXT NOT NULL,                                   -- outbound (clicked in the app) | switchboard (dialled in from their own phone) | inbound
+  status TEXT NOT NULL,                                      -- ringing_you | waiting_for_you | calling_them | in_call | ended | failed
+  outcome TEXT,                                              -- completed | busy | no_answer | failed | you_did_not_answer | cancelled
+  reason TEXT,                                               -- which sentence explains the outcome, when the outcome alone does not say
+  to_number TEXT,                                            -- the other person's number, in the stored form (+1...)
+  user_number TEXT,                                          -- the recruiter's own phone that was rung, or that rang in
+  -- Erasing a person erases the record of the calls with them. Removing an application leaves it with the person.
+  candidate_id INTEGER REFERENCES candidates(id) ON DELETE CASCADE,
+  application_id INTEGER REFERENCES applications(id) ON DELETE SET NULL,
+  record INTEGER NOT NULL DEFAULT 1,                         -- 0 = placed with no recording and no notice
+  event_key TEXT,                                            -- the calendar event this call was made from, if any
+  call_sid TEXT, child_sid TEXT,                             -- the phone service's names for the two halves of the call
+  pin_ok INTEGER NOT NULL DEFAULT 0,                         -- switchboard: the right PIN has been keyed in on this call
+  tries INTEGER NOT NULL DEFAULT 0,                          -- how many times this call has been asked for a key or a number
+  notice_at TEXT,                                            -- when the recorded-call notice was played to the other person
+  answered_at TEXT, ended_at TEXT, hangup_at TEXT,           -- when the two were joined, when it ended, when the app asked to hang up
+  talk_sec INTEGER,                                          -- how long the two spoke
+  voicemail INTEGER NOT NULL DEFAULT 0,                      -- 1 = nobody answered and the caller left a message
+  -- The recording: waiting (for the phone service to say it is ready) | pending (ready, to be fetched) | fetching |
+  -- stored (the audio is on our disk) | absent (none was made) | discarded (the call was deleted first) | failed
+  recording_state TEXT, recording_sid TEXT, recording_channels INTEGER, recording_sec INTEGER,
+  recording_tries INTEGER NOT NULL DEFAULT 0, recording_next_at TEXT, recording_since TEXT,
+  recording_deleted_at TEXT,                                 -- when the phone service's own copy was deleted
+  call_id INTEGER REFERENCES calls(id) ON DELETE SET NULL,   -- the call in the Oracle that this one is, or will become
+  call_made INTEGER NOT NULL DEFAULT 0,                      -- 1 = it has had a call in the Oracle; with call_id empty, that call was deleted
+  checked_at TEXT,                                           -- when the phone service was last asked about a call that went quiet
+  started_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- What the phone service told us about each call, kept for two weeks so a call that went wrong can be understood.
+-- Numbers and keys pressed are masked before a row is written: nothing here can be used to ring anyone.
+CREATE TABLE IF NOT EXISTS phone_webhooks (
+  id INTEGER PRIMARY KEY,
+  phone_call_id INTEGER REFERENCES phone_calls(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  params TEXT NOT NULL,
+  received_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_phone_calls_sid ON phone_calls(call_sid) WHERE call_sid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_phone_calls_user ON phone_calls(user_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_phone_calls_candidate ON phone_calls(candidate_id);
+CREATE INDEX IF NOT EXISTS idx_phone_calls_call ON phone_calls(call_id);
+CREATE INDEX IF NOT EXISTS idx_phone_webhooks_call ON phone_webhooks(phone_call_id);`);
+// Each agency user's own mobile (the phone The Book rings for them, and the one they may ring in from) and the PIN
+// that goes with ringing in. Only a hash of the PIN is kept. Three wrong PINs lock that phone out for a while.
+addColumn('users', 'phone', 'TEXT');
+addColumn('users', 'phone_pin_hash', 'TEXT');
+addColumn('users', 'phone_pin_fails', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('users', 'phone_locked_until', 'TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone) WHERE phone IS NOT NULL'); // a phone says who is ringing in, so no two people share one
+// What a call in the Oracle carries when it was a phone call (calls.source = 'phone').
+addColumn('calls', 'direction', 'TEXT');                       // outbound | inbound
+addColumn('calls', 'phone_number', 'TEXT');                    // the other person's number
+addColumn('calls', 'speaker_roles', 'TEXT');                   // JSON: channel of the audio -> recruiter | candidate
+addColumn('calls', 'audio_channels', 'INTEGER');               // 2 = each person is on a channel of their own
+addColumn('calls', 'voicemail', 'INTEGER NOT NULL DEFAULT 0'); // 1 = a message a caller left when nobody answered
+addColumn('calls', 'notified_at', 'TEXT');                     // when the recruiter was e-mailed that the notes are ready
+addColumn('calls', 'event_key', 'TEXT');                       // the calendar event the call was made from, if any
+// ---------- end of phone calls ----------
+
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
   get: (sql, ...p) => db.prepare(sql).get(...p),

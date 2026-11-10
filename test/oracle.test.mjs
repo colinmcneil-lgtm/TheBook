@@ -352,6 +352,8 @@ test('a recording that was cut short is finished from what arrived, and can be a
     candidate_id: detail.candidate.id, candidate_name: 'Jonas Brandt', candidate_photo: null,
     application_id: appB, job_id: otherJob, job_title: 'Sales Manager', client_name: 'Kestrel Logistics',
     has_transcript: true, has_notes: true, has_submission: false, error: null,
+    // What a phone call carries; a call recorded in the browser has none of it.
+    direction: null, phone_display: null, voicemail: false,
   });
   assert.deepEqual((await priya.get(`/oracle/calls?candidate_id=${detail.candidate.id}`)).body.map((c) => c.id), [call_id]);
   const all = (await sam.get('/oracle/calls')).body;
