@@ -1,11 +1,13 @@
 // Popup for The Book extension. It reads the profile in the current tab (only when the recruiter opens this popup),
 // lets them pick a job and stage, and adds the person to that pipeline in their workspace. It talks only to the
 // workspace address the recruiter entered, using the session they are already signed in with there.
+// Anything that comes from the page or the workspace is put on screen as plain text (value / textContent), never as markup.
 
 const $ = (id) => document.getElementById(id);
 const VIEWS = ['loading', 'setup', 'signin', 'form', 'done'];
 const show = (name) => VIEWS.forEach((v) => { $(`view-${v}`).hidden = v !== name; });
 const setError = (id, message) => { $(id).textContent = message || ''; $(id).hidden = !message; };
+const LINK_MAX = 300; // the longest link the workspace stores
 
 let base = '';        // the workspace origin, e.g. https://hiring.youragency.com
 let jobs = [];
@@ -23,6 +25,7 @@ async function api(path, options = {}) {
   if (!res.ok) {
     const err = new Error((data && data.error) || `Your workspace answered with an error (${res.status}).`);
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;
@@ -38,6 +41,23 @@ function parseBase(value) {
   return url.origin;
 }
 
+/** Does this address answer like a hiring workspace? Returns the agency's name when it does. */
+async function checkWorkspace(origin) {
+  let res;
+  try {
+    res = await fetch(`${origin}/api/bootstrap`);
+  } catch {
+    return { ok: false, message: 'Could not reach that address. Check it and your connection, then try again.' };
+  }
+  try {
+    const info = await res.json();
+    if (typeof info.needsSetup !== 'boolean') throw new Error('not a workspace');
+    return { ok: true, name: typeof info.agencyName === 'string' ? info.agencyName.trim() : '' };
+  } catch {
+    return { ok: false, message: 'That address did not answer like a hiring workspace. Check it and try again.' };
+  }
+}
+
 $('setup-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   setError('setup-error', '');
@@ -48,37 +68,55 @@ $('setup-form').addEventListener('submit', async (e) => {
     return setError('setup-error', err.message.includes('https') ? err.message : 'That does not look like a web address.');
   }
   // Saved before asking: Chrome's permission prompt can close this popup, and the address must survive that.
-  // When the popup is opened again, start() finds the address and the permission and carries on.
-  await chrome.storage.local.set({ base: origin });
+  // When the popup is opened again, start() finds the address and the permission, checks the address and carries on.
+  const previous = base;
+  const changes = [chrome.storage.local.set({ base: origin })];
+  if (origin !== previous) {
+    // Another workspace has its own jobs and stages, and has to be checked before it is used.
+    changes.push(chrome.storage.local.remove(['verified', 'lastJob', 'lastStages']));
+    // The old address no longer needs to be reachable, so the permission for it is given back.
+    if (previous) changes.push(chrome.permissions.remove({ origins: [`${previous}/*`] }).catch(() => {}));
+  }
+  await Promise.all(changes);
   const origins = [`${origin}/*`];
   const granted = (await chrome.permissions.contains({ origins })) || (await chrome.permissions.request({ origins }));
-  if (!granted) return setError('setup-error', 'Chrome needs your permission to connect to that address.');
-  try {
-    const res = await fetch(`${origin}/api/bootstrap`);
-    const info = await res.json();
-    if (typeof info.needsSetup !== 'boolean') throw new Error('not a workspace');
-  } catch {
-    return setError('setup-error', 'That address did not answer like a hiring workspace. Check it and try again.');
-  }
+  if (!granted) { base = origin; return setError('setup-error', 'Chrome needs your permission to connect to that address.'); }
   start();
 });
 
-$('open-settings').addEventListener('click', () => { $('base-url').value = base; show('setup'); });
+$('open-settings').addEventListener('click', () => { $('base-url').value = base; setError('setup-error', ''); $('connected').hidden = true; show('setup'); });
 $('open-workspace').addEventListener('click', () => chrome.tabs.create({ url: base }));
 $('retry').addEventListener('click', start);
 $('close').addEventListener('click', () => window.close());
 
 // ---------- reading the page ----------
+const READ = ['name', 'title', 'company', 'location', 'email', 'phone'];
+
 async function readPage() {
+  // ?tabId= lets the popup be opened as an ordinary tab against a chosen tab (used for testing).
+  let tabId = Number(new URLSearchParams(location.search).get('tabId')) || null;
+  let frames;
   try {
-    // ?tabId= lets the popup be opened as an ordinary tab against a chosen tab (used for testing).
-    let tabId = Number(new URLSearchParams(location.search).get('tabId')) || null;
     if (!tabId) tabId = (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
-    const [injected] = await chrome.scripting.executeScript({ target: { tabId }, files: ['extract.js'] });
-    return (injected && injected.result) || null;
+    // Every frame is read, because LinkedIn sometimes draws the profile inside a frame of its own. Frames from other
+    // sites (adverts, embedded players) are not covered by the click that opened this popup, and the reader ignores them.
+    frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['extract.js'] });
   } catch {
-    return null; // pages Chrome does not let extensions read (new tab page, the Web Store, PDFs)
+    try {
+      frames = await chrome.scripting.executeScript({ target: { tabId }, files: ['extract.js'] });
+    } catch {
+      return null; // pages Chrome does not let extensions read (new tab page, the Web Store, PDFs)
+    }
   }
+  const read = frames.filter((f) => f && f.result && typeof f.result === 'object').sort((a, b) => a.frameId - b.frameId);
+  const top = read.find((f) => f.frameId === 0)?.result;
+  if (!top) return null;
+  // The frame that holds the profile is the one where most was found; the tab itself wins a tie.
+  const filled = (r) => READ.filter((k) => r[k]).length;
+  const best = read.map((f) => f.result).reduce((a, b) => (filled(b) > filled(a) ? b : a), top);
+  const page = { ...top };
+  for (const k of READ) page[k] = [best, ...read.map((f) => f.result)].map((r) => r[k]).find((v) => typeof v === 'string' && v) || '';
+  return page;
 }
 
 // ---------- the form ----------
@@ -125,86 +163,157 @@ async function loadStages() {
   }
 }
 
+/** Two spellings of one person's name: the same first and last name, or one name inside the other. Case and accents are ignored. */
+function sameName(a, b) {
+  const words = (s) => String(s || '').normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const x = words(a), y = words(b);
+  if (!x.length || !y.length) return true; // nothing to compare yet
+  const one = x.join(' '), other = y.join(' ');
+  return one.includes(other) || other.includes(one) || (x[0] === y[0] && x.at(-1) === y.at(-1));
+}
+
+/** A notice: one sentence, then the records it is about as links that open in the workspace. */
+function fillNotice(box, lead, records) {
+  const strong = document.createElement('strong');
+  strong.textContent = lead;
+  const list = document.createElement('ul');
+  const named = new Set(records.map((r) => r.name)).size > 1; // say who each record is when it is not all one person
+  for (const r of records) {
+    const item = document.createElement('li');
+    const link = document.createElement('a');
+    link.href = '#';
+    link.textContent = [named && r.name, r.job_title, r.client_name].filter(Boolean).join(' · ');
+    link.addEventListener('click', (e) => { e.preventDefault(); chrome.tabs.create({ url: `${base}/jobs/${Number(r.job_id)}?c=${Number(r.application_id)}` }); });
+    const stage = r.status && r.status !== 'active' ? r.status : r.stage_name;
+    item.append(link, stage ? ` (${stage})` : '');
+    list.append(item);
+  }
+  box.replaceChildren(strong, ...(records.length ? [list] : []));
+  box.hidden = false;
+}
+
 /** Show where this person already is, and stop a duplicate being added to the selected job. */
 function markKnown() {
   const box = $('known');
   box.replaceChildren();
-  box.hidden = !known.length;
+  box.hidden = true;
   const jobId = Number($('f-job').value);
   const here = known.find((k) => k.job_id === jobId);
   $('submit').disabled = Boolean(here);
   $('submit').textContent = here ? 'Already in this job' : 'Add to pipeline';
   if (!known.length) return;
-  const lead = document.createElement('strong');
-  lead.textContent = 'Already in your workspace';
-  const list = document.createElement('ul');
-  for (const k of known) {
-    const item = document.createElement('li');
-    const link = document.createElement('a');
-    link.href = '#';
-    link.textContent = `${k.job_title} · ${k.client_name}`;
-    link.addEventListener('click', (e) => { e.preventDefault(); chrome.tabs.create({ url: `${base}/jobs/${k.job_id}?c=${k.application_id}` }); });
-    item.append(link, ` (${k.status === 'active' ? k.stage_name : k.status})`);
-    list.append(item);
+  const names = [...new Set(known.map((k) => k.name).filter(Boolean))];
+  const who = names.length === 1 ? names[0] : '';
+  let lead = 'Already in your workspace';
+  if (who && !sameName(who, $('f-name').value)) {
+    // The email address or link belongs to somebody with another name: adding would go onto that person's record.
+    lead = `This email address or profile link is on ${who}'s record. Check it before you add this person.`;
+  } else if (who) {
+    lead = here ? `${who} is already in this job.` : `${who} is already in your workspace; this adds them to another job.`;
   }
-  box.append(lead, list);
+  fillNotice(box, lead, known);
+}
+
+/** A link is never cut short to fit: the part after "?" goes first, and one that is still too long is refused. */
+function tidyLink(value) {
+  const typed = value.trim();
+  if (typed.length <= LINK_MAX) return typed;
+  const short = typed.replace(/[?#].*$/, '');
+  if (short.length > LINK_MAX) throw new Error('That link is too long. Paste the person\'s public profile link instead.');
+  return short;
 }
 
 async function lookUp() {
-  const link = $('f-link').value.trim();
+  let link = '';
+  try { link = tidyLink($('f-link').value); } catch { /* said when the form is sent */ }
   const email = $('f-email').value.trim();
   if (!link && !email) { known = []; return markKnown(); }
   try {
-    known = await api(`/candidates/lookup?${new URLSearchParams({ linkedin: link, email })}`);
+    const found = await api(`/candidates/lookup?${new URLSearchParams({ linkedin: link, email })}`);
+    known = Array.isArray(found) ? found : [];
   } catch {
     known = [];
   }
   markKnown();
 }
 
-$('f-job').addEventListener('change', loadStages);
-$('f-link').addEventListener('change', lookUp);
-$('f-email').addEventListener('change', lookUp);
+const clearConflict = () => { $('conflict').hidden = true; $('conflict').replaceChildren(); };
+$('f-job').addEventListener('change', () => { clearConflict(); loadStages(); });
+$('f-link').addEventListener('change', () => { clearConflict(); lookUp(); });
+$('f-email').addEventListener('change', () => { clearConflict(); lookUp(); });
+$('f-name').addEventListener('change', () => { clearConflict(); markKnown(); });
 
 $('add-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   setError('form-error', '');
+  clearConflict();
   const jobId = Number($('f-job').value);
   const stageId = Number($('f-stage').value) || '';
+  let link;
+  try { link = tidyLink($('f-link').value); } catch (err) { return setError('form-error', err.message); }
   const body = new FormData();
   const fields = {
     job_id: jobId, stage_id: stageId, source: $('f-source').value, name: $('f-name').value, email: $('f-email').value,
-    linkedin: $('f-link').value, location: $('f-location').value, current_title: $('f-title').value, current_company: $('f-company').value,
+    linkedin: link, location: $('f-location').value, current_title: $('f-title').value, current_company: $('f-company').value,
     note: $('f-note').value, note_private: 'true',
   };
   for (const [key, value] of Object.entries(fields)) if (String(value).trim()) body.append(key, String(value).trim());
   $('submit').disabled = true;
   try {
-    const { id } = await api('/applications', { method: 'POST', body });
+    const result = await api('/applications', { method: 'POST', body });
     lastStages[jobId] = stageId || undefined;
     await chrome.storage.local.set({ lastJob: jobId, lastStages });
     const job = jobs.find((j) => j.id === jobId);
-    $('done-title').textContent = `${$('f-name').value.trim()} added`;
+    const typed = $('f-name').value.trim();
+    // When the person was already in the workspace the job goes onto their record, under the name stored there.
+    const stored = (typeof result.name === 'string' && result.name) || known.find((k) => k.client_name === job.client_name)?.name || typed;
+    $('done-title').textContent = result.known ? `Added to ${stored}'s existing record` : `${typed} added`;
     $('done-text').textContent = `${job.title} · ${job.client_name} · ${$('f-stage').selectedOptions[0]?.textContent || 'Applied'}`;
-    $('open-candidate').onclick = () => chrome.tabs.create({ url: `${base}/jobs/${jobId}?c=${id}` });
+    $('open-candidate').onclick = () => chrome.tabs.create({ url: `${base}/jobs/${jobId}?c=${Number(result.id)}` });
     show('done');
   } catch (err) {
     if (err.status === 401) return start();
-    setError('form-error', err.message);
+    if (err.status === 409 && err.data && err.data.code === 'link_conflict') {
+      // The link is on somebody else's record. Nothing was added; show whose, so the recruiter can open it or fix the link.
+      const matches = Array.isArray(err.data.matches) ? err.data.matches.filter((m) => m && typeof m === 'object').slice(0, 10) : [];
+      fillNotice($('conflict'), err.message, matches);
+    } else {
+      setError('form-error', err.message);
+    }
     $('submit').disabled = false;
   }
 });
 
 // ---------- start ----------
+// What to say under the profile link when the page has no address that identifies the person.
+const LINK_HINTS = {
+  seat: 'LinkedIn Recruiter and Sales Navigator pages do not have a link that identifies the person. Paste their public profile link (linkedin.com/in/…) here.',
+  other: 'This page is not one person\'s profile, so nothing was filled in. Open their profile and click the extension again, or paste their public profile link here.',
+};
+
 async function start() {
   show('loading');
-  const saved = await chrome.storage.local.get(['base', 'lastJob', 'lastStages']);
+  $('connected').hidden = true;
+  const saved = await chrome.storage.local.get(['base', 'verified', 'lastJob', 'lastStages']);
   base = saved.base || '';
   lastStages = saved.lastStages || {};
   $('open-settings').hidden = !base;
   if (!base || !(await chrome.permissions.contains({ origins: [`${base}/*`] }))) {
     $('base-url').value = base;
     return show('setup');
+  }
+  // An address is checked once before it is trusted. The check is here and not in the Connect handler because
+  // Chrome's permission prompt can close the popup the moment Connect is pressed; it then runs on the next open.
+  if (saved.verified !== base) {
+    const found = await checkWorkspace(base);
+    if (!found.ok) {
+      $('base-url').value = base;
+      setError('setup-error', found.message);
+      return show('setup');
+    }
+    await chrome.storage.local.set({ verified: base });
+    $('connected').textContent = `Connected to ${found.name || 'your workspace'}`;
+    $('connected').hidden = false;
   }
 
   let me;
@@ -236,9 +345,13 @@ async function start() {
   $('f-email').value = (page && page.email) || '';
   $('f-link').value = page && /^https?:/.test(page.url) ? page.url : '';
   $('f-source').value = onLinkedIn ? 'linkedin' : 'agency_sourced';
+  const hint = (page && !$('f-link').value && Object.hasOwn(LINK_HINTS, page.kind) && LINK_HINTS[page.kind]) || '';
+  $('link-hint').textContent = hint;
+  $('link-hint').hidden = !hint;
   fillJobs(saved.lastJob);
+  clearConflict();
   show('form');
-  if (!page) setError('form-error', 'This page could not be read, so fill in the details yourself.');
+  setError('form-error', page ? '' : 'This page could not be read, so fill in the details yourself.');
   await Promise.all([loadStages(), lookUp()]);
   if (!$('f-name').value) $('f-name').focus();
 }

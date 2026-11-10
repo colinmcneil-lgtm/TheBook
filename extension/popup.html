@@ -11,6 +11,7 @@
       <span id="workspace-name">The Book</span>
       <button type="button" id="open-settings" class="link" hidden>Change workspace</button>
     </header>
+    <p class="connected" id="connected" hidden></p>
 
     <main id="view-loading" class="view"><p class="muted">Loading…</p></main>
 
@@ -43,7 +44,7 @@
           <label>Location<input id="f-location" maxlength="120" /></label>
           <label><span>Email <span class="muted">(if known)</span></span><input id="f-email" type="email" maxlength="200" /></label>
         </div>
-        <label>Profile link<input id="f-link" maxlength="300" /></label>
+        <label>Profile link<input id="f-link" maxlength="2000" /><span class="hint" id="link-hint" hidden></span></label>
         <label>Job
           <select id="f-job" required></select>
         </label>
@@ -59,6 +60,7 @@
           </label>
         </div>
         <label><span>Note <span class="muted">(optional, agency only)</span></span><textarea id="f-note" rows="2" maxlength="4000" placeholder="Why they fit, how you found them"></textarea></label>
+        <div class="notice" id="conflict" hidden></div>
         <p class="error" id="form-error" hidden></p>
         <button type="submit" class="primary" id="submit">Add to pipeline</button>
       </form>
