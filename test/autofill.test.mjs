@@ -41,6 +41,17 @@ test('money that is not the salary is passed over', () => {
   for (const text of ['AED 25,000 - 30,000 per month', '$8,500 - $10,500 per month', 'Sign-on bonus of $10,000. Hourly rate $38-$44', 'We have 50,000 users and 85k-105k downloads']) assert.equal(findSalary(text), null, text);
 });
 
+test('a salary followed by an extra on top is still the salary', () => {
+  const cases = {
+    'Salary: £55,000 - £65,000 plus commission': [55000, 65000], 'Salary £60,000 + bonus': [60000, 60000],
+    'Base salary of $95,000 and commission': [95000, 95000], 'Salary: £48,000, bonus up to 10%': [48000, 48000],
+    'Salary £60,000 plus £10,000 bonus': [60000, 60000],
+  };
+  for (const [text, [min, max]] of Object.entries(cases)) { const s = findSalary(text); assert.deepEqual([s?.min, s?.max], [min, max], text); }
+  // the extra itself is still not a salary
+  for (const text of ['£90k OTE', 'A £10,000 sign-on bonus', '£25,000 commission last year']) assert.equal(findSalary(text), null, text);
+});
+
 test('several different salaries in one text leave the boxes empty', () => {
   assert.equal(findSalary('Account Executive: £45,000 - £55,000\nAccount Manager: £50,000 - £60,000\nSDR: £28,000'), null);
   // The same range said twice is one salary, and a line that is there to state it wins over a passing mention.

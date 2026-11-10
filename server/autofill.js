@@ -159,7 +159,7 @@ const FIGURES = new RegExp(`(?<![\\d.,])(?:${SIGN}\\s?)?(?:(\\d{2,3})(?=${SEP}(?
 const NOT_PAY_BEFORE = /\b(?:rais(?:ed|ing)|funding|funded|series [a-e]|revenues?|turnover|budgets?|valuation|valued|arr|customers|bonus|ote|on[- ]target|commission|allowance|sign[- ]on|equity|fees?|charg(?:ed|es?)|invoic\w+|quota|targets?|portfolio|assets|grant|p&l)\b[^.;\n]*$/i;
 const NOT_PAY_AFTER = /^\+?\s*(?:\w+\s){0,2}(?:budget|bonus|ote|on[- ]target|commission|allowance|(?:in\s)?funding|series [a-e]|revenue|turnover|sign[- ]on|quota|target|fee|arr)\b/i;
 // A rate for anything shorter than a year.
-const RATE_AFTER = /^\+?\s*(?:(?:per|an?|each|\/|p\/?)\s?(?:hour|hr|h|day|d|week|wk|month|mo|mth)\b|hourly|daily|weekly|monthly|pcm\b|p\.?m\.?(?![\w.])|p\.?w\.?(?![\w.]))/i;
+const RATE_AFTER = /^\+?\s*(?:(?:(?:per|an?|each)\s+|\/\s?|p\/?)(?:hour|hr|h|day|d|week|wk|month|mo|mth)\b|hourly|daily|weekly|monthly|pcm\b|p\.?m\.?(?![\w.])|p\.?w\.?(?![\w.]))/i;
 const RATE_BEFORE = /\b(?:hourly|daily|day|weekly|monthly) (?:rate|pay|wage)s?\W*(?:(?:of|is|from)\s)?$/i;
 const PAY_WORD = /\b(?:salary|salaries|pay(?:ing|s)?|compensation|remuneration|base|basic|package|earn(?:ing)?s?|wages?)\b/i;
 // A line (or the heading above the figure) that is there to state the salary: "Salary: …", "Compensation" then the range.
@@ -191,7 +191,10 @@ export function findSalary(text) {
     if (max < min && max < 1000 && min >= 1000) max *= 1000;         // "£85,000 - 105k" style mixes
     if (min < 1000 && max >= 1000 && /k/i.test(m[0])) min *= 1000;   // "85-105k"
     if (min < 10000 || RATE_AFTER.test(after) || RATE_BEFORE.test(before)) continue; // yearly salaries only
-    if (NOT_PAY_BEFORE.test(before.slice(-45)) || NOT_PAY_AFTER.test(after)) continue;
+    // "£55,000 - £65,000 plus commission" and "£60,000 + bonus" state the salary and then an extra on top of it;
+    // "£90k OTE" and "£10,000 sign-on bonus" are the extra itself.
+    const extraOnTop = /^\s*(?:\+|&|,|plus\b|and\b|with\b|incl)/i.test(after);
+    if (NOT_PAY_BEFORE.test(before.slice(-45)) || (!extraOnTop && NOT_PAY_AFTER.test(after))) continue;
     const label = PAY_LABEL.test(before), stated = label || PAY_WORD.test(before.split(/[.;]\s/).pop());
     // A currency written beside the figure, or just outside it: "CAD $95,000", "$95,000 - $110,000 CAD", "(Canadian dollars)".
     const near = `${before.slice(-6)}${m[0]}`, said = /^\s*(?:(?:per|a)\s(?:year|annum)|annually|p\.?a\.?|gross)?\s*\(?\s*([A-Za-z. ]{2,12}?)\s?(?:\$|dollars)|^\s*(?:(?:per|a)\s(?:year|annum)|annually|p\.?a\.?|gross)?\s*\(?\s*([A-Z]{3})\b/.exec(after);
