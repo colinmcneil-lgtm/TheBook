@@ -49,12 +49,12 @@ function Agency() {
           {mailConfigured ? (
             <>
               <p>Emails to candidates are sent through your mail server and recorded on each candidate.</p>
-              <p>Admins are emailed when someone requests an account, and people are emailed when their account is approved.</p>
+              <p>Admins are emailed when someone requests an account, and people are emailed a link to set their password when their request is approved.</p>
             </>
           ) : (
             <>
               <p>Emails to candidates (application confirmations, interview invitations, rejections) are being saved on each candidate’s record but <b className="font-medium text-stone-900">not sent</b>.</p>
-              <p>For the same reason, nobody is emailed when someone requests an account or when you approve one. Requests still appear here in Settings and on your dashboard.</p>
+              <p>For the same reason, nobody is emailed when someone requests an account or when you approve one. Requests still appear here in Settings and on your dashboard, and approving one gives you a link to send to the person yourself.</p>
               <p>To send them, set <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">RESEND_API_KEY</code> and <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">MAIL_FROM</code> where the app is hosted (a free Resend account works, and this is the option to use on Railway), or <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">SMTP_URL</code> and <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">MAIL_FROM</code> for any other mail server. The README has the steps.</p>
             </>
           )}

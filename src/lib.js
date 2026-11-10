@@ -14,6 +14,7 @@ async function request(method, path, body) {
     if (res.status === 401 && path !== '/me' && !/^\/(login|setup|signup|bootstrap|public|invites\/[a-f0-9]{48})\b/.test(path)) window.dispatchEvent(new Event('auth:expired'));
     const err = new Error(data?.error || 'Something went wrong. Please try again.');
     err.status = res.status;
+    err.data = data; // some refusals carry details to act on, such as the records a link is already on
     throw err;
   }
   return data;
@@ -26,6 +27,18 @@ export const api = {
   patch: (p, b = {}) => request('PATCH', p, b),
   del: (p) => request('DELETE', p),
 };
+
+// Parts of the app that load on first use (the résumé reader, the PDF viewer) live in files whose names change with
+// every release, so a tab left open across an update asks for files that are no longer there. The build announces each
+// such failed load on the window; counting them lets a screen tell "the app was updated" from "this file is broken".
+let missedLoads = 0;
+const online = () => typeof navigator === 'undefined' || navigator.onLine !== false; // offline is a connection problem, not an update
+if (typeof window !== 'undefined') window.addEventListener('vite:preloadError', () => { if (online()) missedLoads++; });
+/** Call before using a part that loads on first use. The function it returns says afterwards whether that part was missing. */
+export function watchForUpdate() {
+  const before = missedLoads;
+  return (err) => missedLoads > before || (online() && /dynamically imported module|module script failed/i.test(String(err?.message)));
+}
 
 /** Build a path with query parameters, skipping empty values. */
 export function url(path, params = {}) {

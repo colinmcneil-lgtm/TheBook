@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, FileText } from 'lucide-react';
-import { Button, Card, Loading } from '../ui.jsx';
+import { watchForUpdate } from '../lib.js';
+import { Button, Card, Loading, UpdateNotice } from '../ui.jsx';
 
 // Shows a candidate's résumé inside the profile. The file itself is never opened as a document on this site
 // (it was uploaded by someone anonymous): PDF pages are drawn onto canvases, other formats are shown as plain text.
@@ -9,7 +10,7 @@ const MAX_PAGES = 15;
 
 export default function ResumeViewer({ app }) {
   const holder = useRef(null);
-  const [state, setState] = useState({ status: 'loading' }); // loading | pdf | text | none | error
+  const [state, setState] = useState({ status: 'loading' }); // loading | pdf | text | none | error | updated
   const url = `/api/applications/${app.id}/resume`;
   const name = app.resume_name || 'resume';
   const isPdf = /\.pdf$/i.test(name);
@@ -17,6 +18,7 @@ export default function ResumeViewer({ app }) {
   useEffect(() => {
     let cancelled = false;
     let task = null;
+    const updated = watchForUpdate();
     (async () => {
       try {
         const res = await fetch(url, { credentials: 'same-origin' });
@@ -63,7 +65,9 @@ export default function ResumeViewer({ app }) {
       } catch (err) {
         console.warn('The résumé could not be displayed:', err);
         holder.current?.replaceChildren();
-        if (!cancelled) setState({ status: 'error', message: /password/i.test(`${err?.name} ${err?.message}`) ? 'This PDF is password-protected, so it cannot be shown here.' : 'This file could not be shown here.' });
+        if (cancelled) return;
+        if (updated(err)) setState({ status: 'updated' });
+        else setState({ status: 'error', message: /password/i.test(`${err?.name} ${err?.message}`) ? 'This PDF is password-protected, so it cannot be shown here.' : 'This file could not be shown here.' });
       }
     })();
     return () => { cancelled = true; task?.destroy?.(); };
@@ -76,6 +80,7 @@ export default function ResumeViewer({ app }) {
         <a href={url} download><Button size="sm" icon={Download}>Download</Button></a>
       </div>
       {state.status === 'loading' && <Loading />}
+      {state.status === 'updated' && <UpdateNotice />}
       {state.status === 'text' && <Card className="p-5"><p className="text-sm leading-relaxed whitespace-pre-wrap text-stone-800">{state.text}</p></Card>}
       {(state.status === 'none' || state.status === 'error') && (
         <Card className="p-5 text-sm text-stone-600">

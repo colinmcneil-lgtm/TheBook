@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Copy } from 'lucide-react';
-import { api, ENGAGEMENTS, todayLocal } from '../lib.js';
+import { api, firstName, fmtDate, ENGAGEMENTS, todayLocal } from '../lib.js';
 import { useApp } from '../state.jsx';
 import { Button, Field, Input, Modal, Select, Textarea, useAction, useToast } from '../ui.jsx';
 
@@ -72,6 +72,18 @@ export function ClientForm({ client, onClose, onSaved }) {
 }
 
 const copyText = async (text) => { try { await navigator.clipboard.writeText(text); return true; } catch { return false; } };
+const joinLink = (token) => `${window.location.origin}/join/${token}`;
+
+/** A one-time link to pass on, with a button to copy it. */
+function LinkToSend({ link }) {
+  const toast = useToast();
+  return (
+    <div className="flex items-center gap-2">
+      <code className="min-w-0 flex-1 truncate rounded-lg bg-stone-100 px-3 py-2.5 text-xs text-stone-800">{link}</code>
+      <Button icon={Copy} onClick={async () => toast((await copyText(link)) ? 'Copied' : 'Select the link and copy it', 'ok')}>Copy</Button>
+    </div>
+  );
+}
 
 /**
  * Create a one-time invitation link. With `client`, the person joins that company's hiring team;
@@ -84,7 +96,7 @@ export function InviteForm({ client, onClose }) {
   const [link, setLink] = useState(null);
   const [create, busy] = useAction(async () => {
     const { token } = await api.post('/invites', { ...form, client_id: client?.id });
-    const url = `${window.location.origin}/join/${token}`;
+    const url = joinLink(token);
     setLink(url);
     bump();
     if (await copyText(url)) toast('Invitation link copied');
@@ -95,10 +107,7 @@ export function InviteForm({ client, onClose }) {
     return (
       <Modal title="Invitation link ready" subtitle={`Send this to the person joining ${audience}.`} onClose={onClose}
         footer={<Button variant="primary" onClick={onClose}>Done</Button>}>
-        <div className="flex items-center gap-2">
-          <code className="min-w-0 flex-1 truncate rounded-lg bg-stone-100 px-3 py-2.5 text-xs text-stone-800">{link}</code>
-          <Button icon={Copy} onClick={async () => toast((await copyText(link)) ? 'Copied' : 'Select the link and copy it', 'ok')}>Copy</Button>
-        </div>
+        <LinkToSend link={link} />
         <ul className="list-disc space-y-1 pl-5 text-[13px] leading-relaxed text-stone-600">
           <li>They open it, choose their own password, and are signed in straight away.</li>
           <li>It works once and expires in 7 days. You can revoke it under Settings, Team.</li>
@@ -126,23 +135,43 @@ export function InviteForm({ client, onClose }) {
   );
 }
 
-/** Approve a self-registered account: decide which client's hiring team (or, for admins, which agency role) it gets. */
+/**
+ * Approve a self-registered account: decide which client's hiring team (or, for admins, which agency role) it gets.
+ * Approving turns the request into a one-time link for that email address, where the person sets their password.
+ */
 export function ApproveForm({ person, onClose }) {
   const { bump, isAdmin, clients } = useApp();
   const toast = useToast();
   const guess = clients.find((c) => person.requested_company && c.name.toLowerCase() === person.requested_company.toLowerCase());
   const [form, setForm] = useState({ role: 'client', client_id: guess?.id ?? '' });
+  const [approved, setApproved] = useState(null); // { link, notified, expires_at }
   const [approve, busy] = useAction(async () => {
-    const { notified } = await api.post(`/users/${person.id}/approve`, form);
-    toast(notified ? `${person.name} can now sign in and has been emailed` : `${person.name} can now sign in. Let them know, as no email was sent.`);
+    const { notified, token, expires_at } = await api.post(`/users/${person.id}/approve`, form);
+    const link = joinLink(token);
+    setApproved({ link, notified, expires_at });
     bump();
-    onClose();
+    if (!notified && (await copyText(link))) toast('Link copied');
   });
+
+  if (approved) {
+    return (
+      <Modal title={`${person.name} is approved`} subtitle={approved.notified ? `This link has been emailed to ${person.email}.` : `No email was sent, so send ${firstName(person.name)} this link yourself.`} onClose={onClose}
+        footer={<Button variant="primary" onClick={onClose}>Done</Button>}>
+        <LinkToSend link={approved.link} />
+        <ul className="list-disc space-y-1 pl-5 text-[13px] leading-relaxed text-stone-600">
+          <li>They open it, choose their own password, and are signed in straight away.</li>
+          <li>It only works for {person.email}, works once, and expires {approved.expires_at ? `on ${fmtDate(approved.expires_at)}` : 'in 7 days'}. You can revoke it under Open invitations on this page.</li>
+          <li>This is the only time the link is shown, so copy it now{approved.notified ? ' if you want to send it yourself as well' : ''}.</li>
+        </ul>
+      </Modal>
+    );
+  }
   return (
     <Modal title={`Approve ${person.name}`} subtitle={[person.email, person.requested_company && `says they are from ${person.requested_company}`].filter(Boolean).join(' · ')} size="sm" onClose={onClose} onSubmit={approve}
       footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Approve account</Button></>}>
       <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
         Anyone can request an account, and the email address has not been verified. Only approve people you recognise.
+        They set their password through a one-time link that works for this address only.
       </p>
       <Field label="Give access as">
         <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
