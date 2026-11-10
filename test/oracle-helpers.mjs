@@ -17,14 +17,15 @@ export const FIXTURES = path.join(HERE, 'fixtures');
 /** A real nine-second recording made by Chromium's MediaRecorder: WebM with Opus sound and, as browsers write it, no length in its header. */
 export const RECORDING = fs.readFileSync(path.join(FIXTURES, 'call.webm'));
 export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-canned.json'), 'utf8'));
-/** What the service answers for a phone call sent with each person on a channel of their own: two channels, no speaker numbers. */
-export const PHONE_CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-phone-canned.json'), 'utf8'));
 
-// Ports: five in a row from ORACLE_TEST_PORT (3610 unless set): three for servers, then one for each stand-in.
+// Ports: every test file's ports are counted from ORACLE_TEST_PORT (3610 unless set), thirty in a row in all.
+//   +0 to +4    the Oracle tests: three for servers, then one for each stand-in
+//   +12, +13    the workspace tests: a server and a stand-in
+//   +20 to +29  the Metaview tests (see metaview-helpers.mjs)
 // Node refuses to fetch from a few ports whatever is listening there, and the tests then fail with nothing but
-// "Connection error" in the server's log. Keep all five clear of 3659, 4045, 5060, 5061, 6000 and 6665 to 6669.
+// "Connection error" in the server's log. Keep all thirty clear of 3659, 4045, 5060, 5061, 6000 and 6665 to 6669.
 const BASE_PORT = Number(process.env.ORACLE_TEST_PORT) || 3610;
-export const PORTS = { main: BASE_PORT, bare: BASE_PORT + 1, restart: BASE_PORT + 2, deepgram: BASE_PORT + 3, anthropic: BASE_PORT + 4 };
+export const PORTS = { main: BASE_PORT, bare: BASE_PORT + 1, restart: BASE_PORT + 2, deepgram: BASE_PORT + 3, anthropic: BASE_PORT + 4, workspace: BASE_PORT + 12, workspaceAi: BASE_PORT + 13, metaview: BASE_PORT + 20 };
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const tempDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `the-book-${name}-`));
@@ -64,14 +65,6 @@ const close = (server) => new Promise((resolve) => { server.closeAllConnections?
  *   nodiarize   200 with no speaker numbers    newshape 400 in the newer error shape      text  500 as plain text
  *   olddiarize  400 naming diarize_model whenever it is sent, good with the older "diarize=true"
  * Setting `delay` (milliseconds) makes every answer take that long, as the real service does.
- *
- * A phone call arrives as a WAV file with two channels and is asked for with multichannel=true. The stand-in reads
- * the channel count from the file, as the real service does, and answers with one transcript per channel. For such
- * a request these modes also exist:
- *   one-sided      nobody spoke on the second channel          no-utterances  two channels but no list of utterances
- *   mixed          answers for one channel although two were sent (the file was not what it claimed)
- * A mono file sent with multichannel=true, or a two-channel file sent without it, gets a one-channel answer, as
- * the real service gives, and is noted in `problems`.
  */
 export async function deepgramStandIn(port = PORTS.deepgram) {
   const state = { requests: [], mode: null, delay: 0, hanging: [] };
@@ -88,30 +81,15 @@ export async function deepgramStandIn(port = PORTS.deepgram) {
       const key = auth.startsWith('Token ') ? auth.slice(6) : null;
       const mode = state.mode || key;
       const problems = [];
-      // How many channels the file holds, read from a WAV file's own header.
-      let channels = null;
-      if (body.subarray(0, 4).toString('latin1') === 'RIFF' && body.subarray(8, 12).toString('latin1') === 'WAVE') {
-        for (let at = 12; at + 8 <= body.length;) {
-          const id = body.subarray(at, at + 4).toString('latin1'), size = body.readUInt32LE(at + 4);
-          if (id === 'fmt ' && at + 12 <= body.length) { channels = body.readUInt16LE(at + 10); break; }
-          at += 8 + size + (size % 2);
-        }
-      }
-      const multi = query.multichannel === 'true';
       if (query.model !== 'nova-3') problems.push('model is not nova-3: the real service would quietly use an old model');
       for (const name of ['utterances', 'punctuate', 'smart_format', 'paragraphs']) if (query[name] !== 'true') problems.push(`${name} is not true: the real answer would lack that part`);
       if (query.mip_opt_out !== 'true') problems.push('mip_opt_out is not true: the call would be kept and used for training');
-      if (multi) {
-        if ('diarize' in query || 'diarize_model' in query) problems.push('diarization sent with multichannel=true: each channel is one person, so every speaker would be 0');
-        if (channels !== 2) problems.push('multichannel=true on audio that does not have two channels');
-      } else {
-        if (channels === 2) problems.push('two-channel audio without multichannel=true: the two people would be mixed into one transcript, or one of them dropped');
-        if (!('diarize_model' in query) && query.diarize !== 'true') problems.push('diarize_model and diarize are both missing: no speaker numbers would come back');
-      }
+      if (query.multichannel === 'true') problems.push('multichannel=true was sent: speakers would be numbered by channel, not told apart by voice');
+      if (!('diarize_model' in query) && query.diarize !== 'true') problems.push('diarize_model and diarize are both missing: no speaker numbers would come back');
       if (Number(req.headers['content-length']) !== body.length) problems.push('Content-Length does not match the body');
       state.requests.push({
         method: req.method, path: url.pathname, query, authorization: auth, contentType: req.headers['content-type'],
-        contentLength: Number(req.headers['content-length']), bytes: body.length, head: body.subarray(0, 4).toString('hex'), mode, problems, channels,
+        contentLength: Number(req.headers['content-length']), bytes: body.length, head: body.subarray(0, 4).toString('hex'), mode, problems,
       });
       const send = (status, value) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); };
       const err = (status, code, message) => send(status, { err_code: code, err_msg: message, request_id: 'req_stub' });
@@ -131,13 +109,6 @@ export async function deepgramStandIn(port = PORTS.deepgram) {
       const envelope = /multipart\/form-data|x-www-form-urlencoded/.test(req.headers['content-type'] || '');
       if (mode === 'corrupt' || envelope || !body.length || !audio) return err(400, 'Bad Request', 'Bad Request: failed to process audio: corrupt or unsupported data');
       const quiet = () => ({ alternatives: [{ transcript: '', confidence: 0, words: [] }] });
-      if (multi && channels === 2 && mode !== 'mixed') {
-        // The phone path: one entry per channel, and each utterance says which channel it came from.
-        if (mode === 'silent') return send(200, { ...PHONE_CANNED, results: { channels: [quiet(), quiet()], utterances: [] } });
-        if (mode === 'one-sided') return send(200, { ...PHONE_CANNED, results: { channels: [PHONE_CANNED.results.channels[0], quiet()], utterances: PHONE_CANNED.results.utterances.filter((u) => u.channel === 0) } });
-        if (mode === 'no-utterances') return send(200, { ...PHONE_CANNED, results: { channels: PHONE_CANNED.results.channels } });
-        return send(200, PHONE_CANNED);
-      }
       if (mode === 'silent') return send(200, { ...CANNED, results: { channels: [quiet()], utterances: [] } });
       if (mode === 'nodiarize') {
         const { diarize_info, ...metadata } = CANNED.metadata;
@@ -234,6 +205,8 @@ export function session(base) {
     del: (p) => call('DELETE', p),
     /** Send bytes as they are (a piece of a recording). */
     put: (p, bytes) => call('PUT', p, { body: bytes, headers: { 'Content-Type': 'application/octet-stream' } }),
+    /** PUT with a JSON body (a setting). */
+    putJson: (p, json = {}) => call('PUT', p, { json }),
     /** A form with files: { field: 'text', audio: { name: 'call.webm', bytes } }. */
     upload: (p, fields) => call('POST', p, { body: form(fields) }),
   };

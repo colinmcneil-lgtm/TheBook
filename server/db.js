@@ -212,22 +212,23 @@ CREATE TABLE IF NOT EXISTS email_templates (
   body TEXT NOT NULL
 );
 
--- The Oracle: calls with candidates that a recruiter recorded or uploaded, with the transcript, the notes summary
--- and the draft write-up for the hiring team. Agency only: client users never see any of it.
+-- The Oracle: calls with candidates that a recruiter recorded or uploaded, or that were brought in from Metaview,
+-- with the transcript, the notes summary and the draft write-up for the hiring team. Agency only: client users
+-- never see any of it.
 CREATE TABLE IF NOT EXISTS calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused, so an old link cannot open a different call
   recording_id TEXT NOT NULL UNIQUE,                 -- 32 hex characters; names the folder the pieces of a recording arrive in
   title TEXT NOT NULL,
   status TEXT NOT NULL,                              -- recording | uploaded | transcribing | ready | failed
   error TEXT,                                        -- why transcription failed, in plain English
-  source TEXT NOT NULL,                              -- recorded | uploaded
+  source TEXT NOT NULL,                              -- recorded | uploaded | metaview (and phone, on calls from before phone calls were taken out)
   mime_type TEXT,                                    -- the format the browser said it was recording in
   audio_file TEXT, audio_type TEXT, audio_size INTEGER, -- the finished audio: a file in the uploads folder
   duration_ms INTEGER,
   interrupted INTEGER NOT NULL DEFAULT 0,            -- 1 = finished from what had arrived after the recording was cut short
   joined_parts INTEGER,                              -- how many pieces of the recording the audio file was made from
   transcript TEXT,                                   -- JSON: [{ speaker, start, end, text }]
-  transcript_source TEXT,                            -- deepgram | pasted
+  transcript_source TEXT,                            -- deepgram | pasted | metaview
   speakers TEXT NOT NULL DEFAULT '{}',               -- JSON: speaker number -> name
   notes TEXT, notes_at TEXT,
   notes_auto INTEGER NOT NULL DEFAULT 0,             -- 1 = the notes are as the AI wrote them; 0 once somebody has typed or changed them
@@ -369,164 +370,30 @@ CREATE INDEX IF NOT EXISTS idx_calls_candidate ON calls(candidate_id);
 CREATE INDEX IF NOT EXISTS idx_calls_application ON calls(application_id);
 CREATE INDEX IF NOT EXISTS idx_calls_created_by ON calls(created_by);`);
 
-// ---------- phone calls ----------
-// Calls placed and received through The Book's own phone number (see phone.js). Agency only, like the Oracle.
-db.exec(`
--- One row for each phone call, from the moment it is placed or arrives. This is what the screen follows while the
--- call is live, and what ties the phone service's webhooks and its recording to the call in the Oracle.
-CREATE TABLE IF NOT EXISTS phone_calls (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,   -- the recruiter on the call
-  direction TEXT NOT NULL,                                   -- outbound (clicked in the app) | switchboard (dialled in from their own phone) | inbound
-  status TEXT NOT NULL,                                      -- ringing_you | waiting_for_you | calling_them | in_call | ended | failed
-  outcome TEXT,                                              -- completed | busy | no_answer | failed | you_did_not_answer | cancelled
-  reason TEXT,                                               -- which sentence explains the outcome, when the outcome alone does not say
-  to_number TEXT,                                            -- the other person's number, in the stored form (+1...)
-  user_number TEXT,                                          -- the recruiter's own phone that was rung, or that rang in
-  -- Erasing a person erases the record of the calls with them. Removing an application leaves it with the person.
-  candidate_id INTEGER REFERENCES candidates(id) ON DELETE CASCADE,
-  application_id INTEGER REFERENCES applications(id) ON DELETE SET NULL,
-  record INTEGER NOT NULL DEFAULT 1,                         -- 0 = placed with no recording and no notice
-  event_key TEXT,                                            -- the calendar event this call was made from, if any
-  call_sid TEXT, child_sid TEXT,                             -- the phone service's names for the two halves of the call
-  pin_ok INTEGER NOT NULL DEFAULT 0,                         -- switchboard: the right PIN has been keyed in on this call
-  tries INTEGER NOT NULL DEFAULT 0,                          -- how many times this call has been asked for a key or a number
-  notice_at TEXT,                                            -- when the recorded-call notice was played to the other person
-  answered_at TEXT, ended_at TEXT, hangup_at TEXT,           -- when the two were joined, when it ended, when the app asked to hang up
-  talk_sec INTEGER,                                          -- how long the two spoke
-  voicemail INTEGER NOT NULL DEFAULT 0,                      -- 1 = nobody answered and the caller left a message
-  -- The recording: waiting (for the phone service to say it is ready) | pending (ready, to be fetched) | fetching |
-  -- stored (the audio is on our disk) | absent (none was made) | discarded (the call was deleted first) | failed
-  recording_state TEXT, recording_sid TEXT, recording_channels INTEGER, recording_sec INTEGER,
-  recording_tries INTEGER NOT NULL DEFAULT 0, recording_next_at TEXT, recording_since TEXT,
-  recording_deleted_at TEXT,                                 -- when the phone service's own copy was deleted
-  call_id INTEGER REFERENCES calls(id) ON DELETE SET NULL,   -- the call in the Oracle that this one is, or will become
-  call_made INTEGER NOT NULL DEFAULT 0,                      -- 1 = it has had a call in the Oracle; with call_id empty, that call was deleted
-  checked_at TEXT,                                           -- when the phone service was last asked about a call that went quiet
-  started_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
+// ---------- features that have been taken out ----------
+// The Book once had phone calls of its own and a calendar in The Oracle. Both are gone, and a database made today has
+// nothing of theirs. A database that was in use before still holds their tables (phone_calls, phone_webhooks,
+// phone_recordings_owed, phone_calls_erased, calendar_links, calendar_events), their columns on users (phone and the
+// PIN columns) and on calls (direction, phone_number, speaker_roles, audio_channels, voicemail, notified_at,
+// event_key and the retry columns), and their triggers and indexes. They are left exactly as they are: nothing here
+// drops, empties or rewrites them, because removing a feature is no reason to touch people's data on a live system.
+// Nothing reads or writes them any more, so the app runs the same on a database that has them and on one that never did.
 
--- What the phone service told us about each call, kept for two weeks so a call that went wrong can be understood.
--- Numbers and keys pressed are masked before a row is written: nothing here can be used to ring anyone.
-CREATE TABLE IF NOT EXISTS phone_webhooks (
-  id INTEGER PRIMARY KEY,
-  phone_call_id INTEGER REFERENCES phone_calls(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL,
-  params TEXT NOT NULL,
-  received_at TEXT NOT NULL
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_phone_calls_sid ON phone_calls(call_sid) WHERE call_sid IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_phone_calls_user ON phone_calls(user_id, started_at);
-CREATE INDEX IF NOT EXISTS idx_phone_calls_candidate ON phone_calls(candidate_id);
-CREATE INDEX IF NOT EXISTS idx_phone_calls_call ON phone_calls(call_id);
-CREATE INDEX IF NOT EXISTS idx_phone_webhooks_call ON phone_webhooks(phone_call_id);`);
-// Each agency user's own mobile (the phone The Book rings for them, and the one they may ring in from) and the PIN
-// that goes with ringing in. Only a hash of the PIN is kept. Three wrong PINs lock that phone out for a while.
-addColumn('users', 'phone', 'TEXT');
-addColumn('users', 'phone_pin_hash', 'TEXT');
-addColumn('users', 'phone_pin_fails', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('users', 'phone_locked_until', 'TEXT');
-db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone) WHERE phone IS NOT NULL'); // a phone says who is ringing in, so no two people share one
-// What a call in the Oracle carries when it was a phone call (calls.source = 'phone').
-addColumn('calls', 'direction', 'TEXT');                       // outbound | inbound
-addColumn('calls', 'phone_number', 'TEXT');                    // the other person's number
-addColumn('calls', 'speaker_roles', 'TEXT');                   // JSON: channel of the audio -> recruiter | candidate
-addColumn('calls', 'audio_channels', 'INTEGER');               // 2 = each person is on a channel of their own
-addColumn('calls', 'voicemail', 'INTEGER NOT NULL DEFAULT 0'); // 1 = a message a caller left when nobody answered
-addColumn('calls', 'notified_at', 'TEXT');                     // when the recruiter was e-mailed that the notes are ready
-addColumn('calls', 'event_key', 'TEXT');                       // the calendar event the call was made from, if any
-// A phone call is written out with nobody at a screen, so what would be a button for a browser recording is tried
-// again by itself: how often the transcription and the e-mail to the recruiter have been tried, and when each is next due.
-addColumn('calls', 'transcribe_tries', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('calls', 'transcribe_next_at', 'TEXT');
-addColumn('calls', 'notify_tries', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('calls', 'notify_next_at', 'TEXT');
-// Wrong PINs on the switchboard: how many locks in a row this phone has earned (each longer than the last), and how
-// many wrong PINs were keyed in since `phone_pin_wrong_since` (ten in a day switches the PIN off).
-addColumn('phone_calls', 'title', 'TEXT');                     // what the call is called in the Oracle when it is with nobody on file (the calendar event's name)
-addColumn('users', 'phone_lock_level', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('users', 'phone_pin_wrong', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('users', 'phone_pin_wrong_since', 'TEXT');
-db.exec(`
--- What is still owed to the phone service after a phone call's own row has gone. Erasing a person erases the rows
--- of their calls, and the row was the only memory of a recording still sitting at the phone service; these two
--- tables outlive it. They hold the phone service's own names for things and nothing about any person.
--- A recording to delete at the phone service, tried until it is gone.
-CREATE TABLE IF NOT EXISTS phone_recordings_owed (
-  recording_sid TEXT PRIMARY KEY,
-  noted_at TEXT NOT NULL,
-  tries INTEGER NOT NULL DEFAULT 0,
-  next_at TEXT
-);
--- A recorded call that was erased before its recording was known: the phone service is asked what it recorded for
--- the call, and whatever it names is deleted.
-CREATE TABLE IF NOT EXISTS phone_calls_erased (
-  call_sid TEXT PRIMARY KEY,
-  noted_at TEXT NOT NULL,
-  next_at TEXT
-);
--- Written by the database itself, so every way a call's row can go (a candidate deleted, two records merged, a
--- clean-up nobody has written yet) leaves the note behind.
-CREATE TRIGGER IF NOT EXISTS phone_calls_owed_recording BEFORE DELETE ON phone_calls
-WHEN OLD.recording_sid IS NOT NULL AND OLD.recording_deleted_at IS NULL
-BEGIN
-  INSERT OR IGNORE INTO phone_recordings_owed (recording_sid, noted_at) VALUES (OLD.recording_sid, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-END;
-CREATE TRIGGER IF NOT EXISTS phone_calls_erased_unrecorded BEFORE DELETE ON phone_calls
-WHEN OLD.record = 1 AND OLD.call_sid IS NOT NULL AND OLD.recording_sid IS NULL
-  AND (OLD.recording_state = 'waiting' OR (OLD.recording_state IS NULL AND OLD.status NOT IN ('ended', 'failed')))
-BEGIN
-  INSERT OR IGNORE INTO phone_calls_erased (call_sid, noted_at) VALUES (OLD.call_sid, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-END;`);
-// ---------- end of phone calls ----------
-// ---------- your calendar in The Oracle ----------
-// Kept together and after everything above: the tables below point at users, applications and calls, and the indexes
-// and triggers on candidates have to be made again whenever that table has been rebuilt by a migration.
+// ---------- finding the candidate a conversation was with ----------
+// Kept together and after everything above: the indexes and triggers on candidates have to be made again whenever
+// that table has been rebuilt by a migration. They are what lets match.js look people up by e-mail address, by phone
+// number and by name without reading every candidate.
 /**
- * A candidate's phone number with the usual punctuation taken out, cut to its last ten characters. A number found in
- * a calendar event is looked up by this, using the index on the same expression, so the look-up does not read every
- * candidate. Numbers are stored as they were typed, which is why the tidying happens here.
+ * A candidate's phone number with the usual punctuation taken out, cut to its last ten characters. A number that
+ * came from somewhere else is looked up by this, using the index on the same expression, so the look-up does not
+ * read every candidate. Numbers are stored as they were typed, which is why the tidying happens here.
  */
 export const PHONE_TAIL = `substr(replace(replace(replace(replace(replace(replace(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), '+', ''), -10)`;
 db.exec(`
--- The private calendar link each agency user may save. The link is a password to that person's whole calendar, so
--- it is stored sealed (see secret.js), never returned by any route and never written to a log.
-CREATE TABLE IF NOT EXISTS calendar_links (
-  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,                            -- google | outlook | icloud | other, going by the link's host
-  link_sealed TEXT NOT NULL,
-  tz TEXT,                                           -- the time zone the person last looked at their day in
-  created_at TEXT NOT NULL,
-  last_read_at TEXT,                                 -- when the calendar was last read successfully
-  last_error TEXT                                    -- why the last read failed, in plain English; null when it worked
-);
-
--- What a person has done with the events of their day: marked one to be recorded ("+ Add"), chosen the candidate it
--- is with, recorded a call for it. One row per event a person has been shown, so that an event can be found again
--- from its key alone. Nothing from the calendar itself is kept here: no titles, guests or times, only the key (a
--- keyed hash that is different for every person) and a fingerprint of the title and start time.
-CREATE TABLE IF NOT EXISTS calendar_events (
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  event_key TEXT NOT NULL,
-  source TEXT NOT NULL,                              -- calendar | interview
-  day TEXT NOT NULL, tz TEXT NOT NULL,               -- the day (YYYY-MM-DD, in that time zone) it was last seen on
-  fingerprint TEXT,                                  -- finds a marked event again when the calendar gives it a new identity
-  added INTEGER NOT NULL DEFAULT 0,                  -- 1 = marked to be recorded
-  application_id INTEGER REFERENCES applications(id) ON DELETE SET NULL, -- the candidate the person chose themselves
-  call_id INTEGER REFERENCES calls(id) ON DELETE SET NULL,               -- the call recorded for this event
-  seen_at TEXT NOT NULL,
-  PRIMARY KEY (user_id, event_key)
-);
-CREATE INDEX IF NOT EXISTS idx_calendar_events_print ON calendar_events(user_id, fingerprint);
-CREATE INDEX IF NOT EXISTS idx_calendar_events_seen ON calendar_events(seen_at);
-
 -- The first and last word of each candidate's name with accents and capitals removed ("kevin" and "tremblay" for
--- "Kévin Tremblay"), so the candidates an event's title might be naming are found through an index however many
--- candidates are on file. SQLite cannot remove accents by itself, so the words are worked out by the server
--- (calendar.js): the two triggers note which candidates are new or renamed, and the server catches up on those
--- before it matches anything.
+-- "Kévin Tremblay"), so the candidates a name might belong to are found through an index however many candidates
+-- are on file. SQLite cannot remove accents by itself, so the words are worked out by the server (match.js): the
+-- two triggers note which candidates are new or renamed, and the server catches up on those before it matches anything.
 CREATE TABLE IF NOT EXISTS candidate_name_keys (
   candidate_id INTEGER PRIMARY KEY REFERENCES candidates(id) ON DELETE CASCADE,
   first TEXT NOT NULL,
@@ -541,12 +408,56 @@ CREATE TRIGGER IF NOT EXISTS candidate_name_changed AFTER UPDATE OF name ON cand
 INSERT OR IGNORE INTO candidate_name_dirty (candidate_id)
   SELECT id FROM candidates WHERE id NOT IN (SELECT candidate_id FROM candidate_name_keys);
 
--- Guests' e-mail addresses and phone numbers in events are looked up through these.
+-- E-mail addresses and phone numbers are looked up through these.
 CREATE INDEX IF NOT EXISTS idx_candidates_email_lower ON candidates(lower(email));
-CREATE INDEX IF NOT EXISTS idx_candidates_phone_tail ON candidates(${PHONE_TAIL}) WHERE phone IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_interviews_starts ON interviews(starts_at);`);
-addColumn('calendar_events', 'series', 'TEXT'); // finds a marked date of a repeating event again when the whole series is moved (a keyed fingerprint, not the calendar's own identifier)
-// ---------- end of the calendar's part ----------
+CREATE INDEX IF NOT EXISTS idx_candidates_phone_tail ON candidates(${PHONE_TAIL}) WHERE phone IS NOT NULL;`);
+
+// ---------- Metaview in The Oracle ----------
+// What The Book remembers about the conversations recorded in Metaview (see metaview.js). Agency only.
+db.exec(`
+-- One row for each conversation Metaview has told The Book about: enough to list it and to work out which candidate
+-- it was with, and nothing more. The transcript and the notes are only fetched when a conversation is brought into
+-- The Oracle, and they are kept on the call there (calls), not here.
+CREATE TABLE IF NOT EXISTS metaview_calls (
+  id INTEGER PRIMARY KEY,                            -- Metaview's own number for the conversation
+  url TEXT,                                          -- its page in Metaview, where the recording can be listened to
+  started_at TEXT NOT NULL,                          -- when the conversation took place
+  title TEXT,                                        -- the calendar event's name; most phone calls have none
+  kind TEXT, channel TEXT,                           -- "Job Interview"...; "Phone", "Zoom"...
+  minutes INTEGER, language TEXT,
+  has_transcript INTEGER NOT NULL DEFAULT 0,
+  people TEXT NOT NULL DEFAULT '[]',                 -- JSON: [{ name, role, emails, phones }], role candidate | interviewer | other
+  search TEXT NOT NULL DEFAULT '',                   -- names, addresses, phone digits and the title in lower case: what the search box looks through
+  call_id INTEGER REFERENCES calls(id) ON DELETE SET NULL, -- the call in The Oracle, once it has been brought in
+  -- When it was first brought in. It stays when the call in The Oracle is deleted, so a call somebody removed is
+  -- never brought back by itself (a person can still open it again).
+  brought_in_at TEXT,
+  auto_at TEXT,                                      -- when it was brought in with nobody clicking, for the daily limit
+  -- Something is still owed to the call in The Oracle (notes Metaview had not finished writing, a transcript that
+  -- arrived later): how often it has been asked for, and when it is next due. Empty when nothing is owed.
+  fetch_tries INTEGER NOT NULL DEFAULT 0, fetch_next_at TEXT,
+  seen_at TEXT NOT NULL                              -- when Metaview last told The Book about it
+);
+CREATE INDEX IF NOT EXISTS idx_metaview_calls_started ON metaview_calls(started_at);
+CREATE INDEX IF NOT EXISTS idx_metaview_calls_call ON metaview_calls(call_id);
+CREATE INDEX IF NOT EXISTS idx_metaview_calls_owed ON metaview_calls(fetch_next_at) WHERE fetch_next_at IS NOT NULL;
+
+-- What each conversation can be matched or found by, one row per fact, so that the look-ups run through indexes:
+--   email        an address of somebody on the call who is not an interviewer
+--   phone        the last ten digits of such a person's number
+--   name         such a person's name as plain words ("dana whitlock"), with its first and last word
+--   interviewer  an interviewer's address (for "calls I took part in")
+CREATE TABLE IF NOT EXISTS metaview_people (
+  call_id INTEGER NOT NULL REFERENCES metaview_calls(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  value TEXT NOT NULL,
+  first TEXT, last TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_metaview_people_call ON metaview_people(call_id);
+CREATE INDEX IF NOT EXISTS idx_metaview_people_value ON metaview_people(kind, value);`);
+// What a call in the Oracle carries when it came from Metaview (calls.source = 'metaview').
+addColumn('calls', 'external_url', 'TEXT');    // the conversation's page in Metaview
+addColumn('calls', 'took_place_at', 'TEXT');   // when the conversation happened (created_at is when it was brought in)
 
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),

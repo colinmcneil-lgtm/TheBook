@@ -23,12 +23,12 @@ function serverSecret() {
     if (err.code !== 'EEXIST') throw err;
   }
   secret = read();
-  if (secret.length !== 32) throw new Error(`The file ${FILE} is damaged. Remove it and restart; saved calendar links will have to be pasted in again.`);
+  if (secret.length !== 32) throw new Error(`The file ${FILE} is damaged. Remove it and restart; the Metaview key will have to be entered again.`);
   return secret;
 }
 
 const keys = new Map();
-/** A 32-byte key for one purpose ("calendar-link", "calendar-event-key"...). The same purpose always gives the same key. */
+/** A 32-byte key for one purpose ("metaview-key"...). The same purpose always gives the same key. */
 export function keyFor(purpose) {
   if (!keys.has(purpose)) keys.set(purpose, Buffer.from(crypto.hkdfSync('sha256', serverSecret(), Buffer.alloc(0), purpose, 32)));
   return keys.get(purpose);
