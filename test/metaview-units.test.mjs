@@ -77,6 +77,9 @@ test('a conversation from the list: the fields are lists that may be empty or mi
       { name: 'Priya Nair', role: 'interviewer', emails: ['priya@agency.example'], phones: ['+16475550142'] },
     ],
   });
+  // An interviewer listed again among "everybody", under another identity, is still only an interviewer.
+  const repeated = readConversation({ ...raw, fields: { ...raw.fields, 'default:contact': [who('other-id-1', 'Somebody Else', ['priya@agency.example']), who('other-id-2', 'Dana Whitlock')] } });
+  assert.deepEqual(repeated.people.map((p) => [p.name, p.role]), [['Dana Whitlock', 'candidate'], ['Priya Nair', 'interviewer']]);
   // Almost everything can be missing.
   assert.deepEqual(readConversation({ id: 5, fields: { 'default:start_time': [{ value: '2026-11-09 22:00:00+00:00' }] } }),
     { id: 5, url: null, startedAt: '2026-11-09T22:00:00.000Z', title: '', kind: '', channel: '', minutes: null, language: '', hasTranscript: false, people: [] });

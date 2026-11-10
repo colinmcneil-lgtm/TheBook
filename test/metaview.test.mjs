@@ -455,6 +455,18 @@ test('a call with no transcript is brought in saying so, and its transcript foll
   assert.ok(call.transcript.length > 5);
   assert.equal(call.speakers[0], 'Jordan Reyes');
   assert.equal((await row(conv.id)).has_transcript, true);
+
+  // Metaview says a conversation has a transcript but sends none (it is still being put together). That is asked
+  // for again by itself, like notes are.
+  const halfDone = standIn.at(8);
+  halfDone.transcript = '';
+  const second = (await open(w.sam, halfDone.id)).body.call_id;
+  const empty = (await callOf(w.sam, second)).call;
+  assert.deepEqual([empty.status, empty.transcript, empty.notes_pending], ['uploaded', null, true]);
+  delete halfDone.transcript;
+  const filled = (await until(() => callOf(w.sam, second), (d) => d.call.notes)).call;
+  assert.equal(filled.status, 'ready');
+  assert.ok(filled.transcript.length > 5);
 });
 
 test('notes Metaview never writes are given up on after a few tries, and can then be written here', async () => {

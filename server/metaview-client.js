@@ -202,7 +202,11 @@ export function readConversation(raw) {
     if (seen.has(key) || people.length >= 30) return;
     seen.add(key);
     const who = person(entry, role);
-    if (who.name || who.emails.length || who.phones.length) people.push(who);
+    if (!who.name && !who.emails.length && !who.phones.length) return;
+    // "Everybody on the call" repeats the candidates and the interviewers. Should it ever name one of them under
+    // another identity, they are still the same person: an interviewer must never turn up a second time as somebody else.
+    if (role === 'other' && people.some((p) => (who.name && p.name === who.name) || p.emails.some((e) => who.emails.includes(e)))) return;
+    people.push(who);
   };
   for (const entry of valuesOf(raw, 'default:candidate')) add(entry, 'candidate');
   for (const entry of valuesOf(raw, 'default:interviewer')) add(entry, 'interviewer');

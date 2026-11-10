@@ -178,8 +178,9 @@ async function fetchAndKeep(id, key, { applicationId = null, userId = null, unas
   const { turns, speakers } = transcriptTurns(got.transcript);
   const lengthMs = row.minutes > 0 ? row.minutes * MINUTE : turns.length ? Math.round(Math.max(...turns.map((turn) => turn.end)) * 1000) : null;
   const owner = ownerOf(people, userId);
-  // Notes Metaview has not finished writing are asked for again shortly (see fetchOwed). With no transcript there is nothing for it to write them from.
-  const owed = turns.length && !got.notes ? new Date(Date.now() + NOTES_WAITS[0]).toISOString() : null;
+  // Notes Metaview has not finished writing are asked for again shortly (see fetchOwed), and so is a transcript it
+  // says it has but did not send. With no transcript at all there is nothing for it to write notes from.
+  const owed = (turns.length ? !got.notes : row.has_transcript) ? new Date(Date.now() + NOTES_WAITS[0]).toISOString() : null;
   const callId = addOutsideCall({
     source: 'metaview', where: 'Metaview', title: row.title, withName: nameOfOther(people), turns, speakers, notes: got.notes, noTranscript: NO_TRANSCRIPT,
     durationMs: lengthMs, externalUrl: row.url, tookPlaceAt: row.started_at, wording: RECORDED_IN_METAVIEW, createdBy: owner, addedBy: userId ?? owner, applicationId: onto,
@@ -281,25 +282,29 @@ async function fetchOwed(key) {
     const state = () => (row.call_id ? q.get('SELECT transcript IS NOT NULL AS has_transcript, notes IS NOT NULL AS has_notes FROM calls WHERE id = ?', row.call_id) : null);
     const settle = (nextAt, tries) => q.run('UPDATE metaview_calls SET fetch_next_at = ?, fetch_tries = ? WHERE id = ?', nextAt, tries, row.id);
     const tries = row.fetch_tries + 1;
-    const later = () => (tries < NOTES_WAITS.length ? settle(new Date(Date.now() + NOTES_WAITS[tries]).toISOString(), tries)
-      : (fillOutsideCall(row.call_id, { where: 'Metaview', notesProblem: NO_NOTES }), settle(null, 0)));
+    /** Ask again after the next pause. After the last one, stop, and say on the call why it has no notes (when it has a transcript they could have been written from). */
+    const later = (hasTranscript) => {
+      if (tries < NOTES_WAITS.length) return settle(new Date(Date.now() + NOTES_WAITS[tries]).toISOString(), tries);
+      if (hasTranscript) fillOutsideCall(row.call_id, { where: 'Metaview', notesProblem: NO_NOTES });
+      settle(null, 0);
+    };
     const before = state();
     if (!before || (before.has_transcript && before.has_notes)) { settle(null, 0); continue; }   // the call is gone, or somebody has written what was missing
     let got;
     try {
       got = await oneConversation(key, row.id);
     } catch (err) {
-      later();
+      later(before.has_transcript);
       throw err;
     }
-    if (!got) { fillOutsideCall(row.call_id, { where: 'Metaview', notesProblem: NO_NOTES }); settle(null, 0); continue; }
+    if (!got) { later(before.has_transcript); continue; }   // Metaview does not have it just now, or any more
     remember([got.conversation]);
     const { turns, speakers } = transcriptTurns(got.transcript);
     fillOutsideCall(row.call_id, { where: 'Metaview', turns, speakers, notes: got.notes });
     const after = state();
-    // Done; or there is still no transcript, and the day one arrives is noticed when the list is next read.
-    if (!after || after.has_notes || !after.has_transcript) settle(null, 0);
-    else later();
+    if (!after || after.has_notes) settle(null, 0);
+    else if (after.has_transcript || got.conversation.hasTranscript) later(after.has_transcript);   // notes still being written, or a transcript Metaview says it has and did not send
+    else settle(null, 0);   // still no transcript: the day one arrives is noticed when the list is next read
   }
 }
 /** When the next thing owed falls due, in milliseconds from now; null when nothing is owed. */
