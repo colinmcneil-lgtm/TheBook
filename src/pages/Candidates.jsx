@@ -20,8 +20,8 @@ export default function Candidates() {
 
   const { data: jobs } = useApi(url('/jobs', { client_id: scope }));
   const { data: rows, error } = useApi(url('/applications', { client_id: scope, status, job_id: jobId, q: query, owner }));
-  const { data: people } = useApi(url('/users', { client_id: scope }));
-  const recruiters = (people || []).filter((p) => p.role !== 'client' && p.active && !p.pending);
+  // Everyone who can own candidates, plus anyone who has left but still owns some here.
+  const { data: owners } = useApi(url('/owners', { client_id: scope }));
 
   return (
     <Page
@@ -41,7 +41,7 @@ export default function Candidates() {
         <Select value={owner} onChange={(e) => setOwner(e.target.value)} aria-label="Filter by owner" className="!w-auto max-w-56">
           <option value="">Any owner</option>
           {isAgency && <option value="me">Mine</option>}
-          {recruiters.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {(owners || []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (deactivated)'}</option>)}
           <option value="none">Unassigned</option>
         </Select>
       </div>

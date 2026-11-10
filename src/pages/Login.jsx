@@ -52,7 +52,8 @@ export default function Login({ onDone }) {
 
   const [submit, busy] = useAction(async () => {
     if (mode === 'signup') {
-      await api.post('/signup', form);
+      // No password here: it is chosen through the one-time link sent once the request is approved.
+      await api.post('/signup', { name: form.name, email: form.email, company: form.company, title: form.title });
       setMode('requested');
       return;
     }
@@ -69,8 +70,8 @@ export default function Login({ onDone }) {
         <CircleCheck className="size-10 text-brand-600" />
         <h1 className="mt-4 text-2xl font-semibold tracking-tight">Request sent</h1>
         <p className="mt-2 text-sm leading-relaxed text-stone-600">
-          Thanks, {form.name.split(' ')[0]}. If you do not already have an account, your request is now with {agency}. You will be able to sign in with
-          <span className="font-medium text-stone-900"> {form.email} </span>and the password you chose as soon as it is approved.
+          Thanks, {form.name.split(' ')[0]}. If you do not already have an account, your request is now with {agency}. Once it is approved you will get a link
+          to set your password and sign in as<span className="font-medium text-stone-900"> {form.email}</span>.
         </p>
         <p className="mt-6 text-sm text-stone-600">Already have an account? <button type="button" className={switchLink} onClick={() => setMode('signin')}>Sign in</button></p>
       </AuthFrame>
@@ -83,7 +84,7 @@ export default function Login({ onDone }) {
       <h1 className="text-2xl font-semibold tracking-tight">{setup ? 'Set up your workspace' : signup ? 'Create your account' : 'Sign in'}</h1>
       <p className="mt-1.5 text-sm text-stone-500">
         {setup ? 'Create the owner account for your agency. You can invite your team and your clients afterwards.'
-          : signup ? `Tell us who you are. ${boot.agencyName || 'The agency'} will confirm your account and connect it to your company's hiring.`
+          : signup ? `Tell us who you are. ${boot.agencyName || 'The agency'} will confirm your account, connect it to your company's hiring and send you a link to set your password.`
           : 'Welcome back. Enter your details to open your hiring workspace.'}
       </p>
       <form className="mt-8 space-y-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
@@ -96,9 +97,11 @@ export default function Login({ onDone }) {
             <Field label="Job title"><Input {...bind('title')} autoComplete="organization-title" /></Field>
           </div>
         )}
-        <Field label="Password" hint={setup || signup ? 'At least 8 characters.' : undefined}>
-          <Input type="password" {...bind('password')} required minLength={setup || signup ? 8 : undefined} autoComplete={setup || signup ? 'new-password' : 'current-password'} />
-        </Field>
+        {!signup && (
+          <Field label="Password" hint={setup ? 'At least 8 characters.' : undefined}>
+            <Input type="password" {...bind('password')} required minLength={setup ? 8 : undefined} autoComplete={setup ? 'new-password' : 'current-password'} />
+          </Field>
+        )}
         <Button type="submit" variant="primary" busy={busy} className="w-full">{setup ? 'Create workspace' : signup ? 'Request account' : 'Sign in'}</Button>
       </form>
       {!setup && (

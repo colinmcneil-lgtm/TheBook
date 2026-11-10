@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { FileUp, LoaderCircle } from 'lucide-react';
-import { api, url, firstName, renderTemplate, toLocalInput, fmtDateTime, INTERVIEW_KINDS, RECOMMENDATIONS, REJECT_REASONS, SOURCES } from '../lib.js';
+import { api, url, firstName, watchForUpdate, renderTemplate, toLocalInput, fmtDateTime, INTERVIEW_KINDS, RECOMMENDATIONS, REJECT_REASONS, SOURCES } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
-import { Button, Checkbox, Field, Input, Modal, Select, Textarea, Avatar, useAction, useToast, cx } from '../ui.jsx';
+import { Button, Checkbox, Field, Input, Modal, Select, Textarea, Avatar, UpdateNotice, useAction, useToast, cx } from '../ui.jsx';
 
 const useForm = (initial) => {
   const [form, setForm] = useState(initial);
@@ -293,6 +293,7 @@ function resumeNote({ labels, status, nameFromFile }) {
     unreadable: 'This type of file cannot be read automatically. PDF and .docx files can.',
     protected: 'This PDF is password-protected, so it could not be read.',
     error: 'This file could not be opened for reading.',
+    updated: 'It could not be read this time.',
   }[status];
   if (why) return `Attached. ${why}${fromName} Fill in the ${nameFromFile ? 'rest' : 'details'} below.`;
   if (!labels.length) return 'Attached. No contact details were recognised in it, so fill in the details below.';
@@ -309,43 +310,87 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
   const [reading, setReading] = useState(false);
   const [filled, setFilled] = useState(null); // what was taken from the résumé: { labels, status, nameFromFile }
   const [over, setOver] = useState(false);
+  const [conflict, setConflict] = useState(null); // the LinkedIn link belongs to someone else's record: { message, matches }
   const { data: jobData } = useApi(form.job_id ? `/jobs/${form.job_id}` : null);
   useEffect(() => setForm((f) => ({ ...f, stage_id: '' })), [form.job_id]);
+  useEffect(() => setConflict(null), [form.linkedin]);
+  const conflictBox = useRef(null);
+  useEffect(() => { conflictBox.current?.scrollIntoView({ block: 'nearest' }); }, [conflict]);
+
+  const latest = useRef(form);
+  latest.current = form;
+  const fromResume = useRef({}); // what the last résumé put into each field, to tell it apart from what was typed
+  const reads = useRef(0);
+
+  // A file dropped just beside the dashed box would otherwise be opened by the browser, in place of or next to the app.
+  useEffect(() => {
+    const ignore = (e) => {
+      if (e.defaultPrevented || !Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'none';
+    };
+    window.addEventListener('dragover', ignore);
+    window.addEventListener('drop', ignore);
+    return () => {
+      window.removeEventListener('dragover', ignore);
+      window.removeEventListener('drop', ignore);
+    };
+  }, []);
 
   const takeFile = async (picked) => {
     if (!picked) return;
     if (!/\.(pdf|docx?|rtf|txt)$/i.test(picked.name)) return toast('Résumés need to be PDF, Word, RTF or text files.', 'error');
+    const turn = ++reads.current;
     setFile(picked);
     setFilled(null);
     setReading(true);
+    const updated = watchForUpdate();
+    let result = { fields: {}, status: 'error' };
     try {
       const { readResume } = await import('../resume.js');
-      const { fields: found, status, nameFromFile } = await readResume(picked);
-      const labels = [];
-      // Only fill what is still empty, so nothing already typed is replaced.
-      setForm((f) => {
-        const next = { ...f };
-        for (const [key, label] of CANDIDATE_FIELDS) if (found[key] && !String(f[key] || '').trim()) { next[key] = found[key]; labels.push(key === 'linkedin' ? 'LinkedIn link' : label.toLowerCase()); }
-        return next;
-      });
-      setFilled({ labels, status, nameFromFile });
+      result = await readResume(picked);
+      if (result.status === 'error' && updated()) result = { ...result, status: 'updated' };
     } catch (err) {
       console.warn('The résumé could not be read automatically:', err);
-      setFilled({ labels: [], status: 'error' });
-    } finally {
-      setReading(false);
+      if (updated(err)) result.status = 'updated';
     }
+    if (turn !== reads.current) return; // another file was chosen while this one was being read
+
+    // The new file replaces whatever the previous one filled in (and empties what it has no value for),
+    // but anything typed or corrected by hand stays as it is.
+    const found = result.fields || {};
+    const changes = {}, kept = {}, labels = [];
+    for (const [key, label] of CANDIDATE_FIELDS) {
+      const current = String(latest.current[key] || '').trim();
+      if (current && current !== fromResume.current[key]) continue;
+      const value = String(found[key] || '').trim();
+      if (value) {
+        changes[key] = kept[key] = value;
+        labels.push(key === 'linkedin' ? 'LinkedIn link' : label.toLowerCase());
+      } else if (current) changes[key] = '';
+    }
+    fromResume.current = kept;
+    setForm((f) => ({ ...f, ...changes }));
+    setFilled({ labels, status: result.status, nameFromFile: result.nameFromFile && 'name' in kept });
+    setReading(false);
   };
 
   const [save, busy] = useAction(async () => {
+    setConflict(null);
     const fd = new FormData();
     for (const [k, v] of Object.entries(form)) if (v) fd.append(k, v);
     if (file) fd.append('resume', file);
-    const { id } = await api.post('/applications', fd);
-    toast(`${firstName(form.name)} added to the pipeline`);
+    let added;
+    try {
+      added = await api.post('/applications', fd);
+    } catch (err) {
+      if (err.status !== 409 || err.data?.code !== 'link_conflict') throw err;
+      return setConflict({ message: err.message, matches: err.data.matches || [] });
+    }
+    toast(added.known ? `Added to ${added.name || form.name}'s existing record` : `${firstName(form.name)} added to the pipeline`);
     bump();
     onClose();
-    onAdded?.(id);
+    onAdded?.(added.id);
   });
   return (
     <Modal title="Add candidate" subtitle="For people you have sourced, referrals, or applicants who came in another way." onClose={onClose} onSubmit={save}
@@ -365,6 +410,7 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
         </span>
         <input type="file" accept=".pdf,.doc,.docx,.rtf,.txt" className="sr-only" aria-label="Résumé" onChange={(e) => takeFile(e.target.files[0])} />
       </label>
+      {filled?.status === 'updated' && <UpdateNotice>Refreshing clears this form. To carry on without refreshing, fill in the details by hand; the file stays attached.</UpdateNotice>}
       <div className="grid gap-4 sm:grid-cols-2">
         {!jobId && (
           <Field label="Job" className="sm:col-span-2">
@@ -384,7 +430,20 @@ export function AddCandidateModal({ jobId, onClose, onAdded }) {
           </Select>
         </Field>
       </div>
-      <p className="text-xs text-stone-500">An email address or a LinkedIn link is needed, so the same person is recognised if they are added again.</p>
+      {conflict ? (
+        <div role="alert" ref={conflictBox} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-900">
+          <p className="font-medium">{conflict.message}</p>
+          <ul className="mt-1.5 space-y-1 text-[13px]">
+            {conflict.matches.map((m) => (
+              <li key={m.application_id}>
+                {/* In a new tab, so what has been typed here is not lost. */}
+                <a href={`/jobs/${m.job_id}?c=${m.application_id}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">Open {m.name}</a>
+                <span className="text-red-800"> · {[m.job_title, m.client_name].filter(Boolean).join(' · ')}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : <p className="text-xs text-stone-500">An email address or a LinkedIn link is needed, so the same person is recognised if they are added again.</p>}
     </Modal>
   );
 }

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck,
+  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge,
 } from 'lucide-react';
 import { api, url, ago, since, extUrl, fmtDate, fmtDateTime, money, firstName, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
@@ -54,6 +54,15 @@ function CandidateView({ data, onClose }) {
     await api.del(`/applications/${app.id}`);
     toast(`Removed from ${job.title}`);
     onClose();
+    bump();
+  });
+
+  // Other people at this client with the same LinkedIn link, one entry each however many jobs they are in.
+  const duplicates = (data.duplicates || []).filter((d, i, all) => all.findIndex((x) => x.candidate_id === d.candidate_id) === i);
+  const [merge, merging] = useAction(async (other) => {
+    if (!window.confirm(`Merge the other record for ${other.name} into this one? Its applications, with their notes and interviews, move to ${candidate.name}; contact details missing here are filled in from it; and the other record is then removed. This cannot be undone.`)) return;
+    await api.post(`/candidates/${other.candidate_id}/merge`, { into: candidate.id });
+    toast('Records merged');
     bump();
   });
 
@@ -151,6 +160,18 @@ function CandidateView({ data, onClose }) {
             <Button size="sm" variant="primary" icon={ClipboardCheck} onClick={() => setModal({ scorecard: i })}>Add scorecard</Button>
           </div>
         ))}
+        {duplicates.map((d) => (
+          <div key={d.candidate_id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            <span className="min-w-0 flex-1 basis-56">
+              <span className="font-medium">Possible duplicate of {d.name}</span>
+              {d.job_title ? `, who is in ${d.job_title}${d.status === 'active' && d.stage_name ? ` (${d.stage_name})` : ''}` : ''}. Both records have the same LinkedIn link.
+            </span>
+            <span className="flex gap-2">
+              <Link to={`?c=${d.application_id}`} className="inline-flex h-8 items-center rounded-lg border border-line bg-white px-2.5 text-[13px] font-medium text-stone-800 shadow-sm hover:bg-stone-50">Open</Link>
+              {isAgency && <Button size="sm" icon={Merge} busy={merging} onClick={() => merge(d)}>Merge into this record</Button>}
+            </span>
+          </div>
+        ))}
         <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
 
         {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onResume={() => setTab('resume')} />}
@@ -222,7 +243,7 @@ function Overview({ data, onOffer, onResume }) {
   });
   const [rate] = useAction(async (rating) => { await api.patch(`/applications/${app.id}`, { rating }); bump(); });
   const [removeNote] = useAction(async (id) => { await api.del(`/notes/${id}`); bump(); });
-  const { data: team } = useApi(isAgency ? url('/users', { client_id: client.id }) : null);
+  const { data: owners } = useApi(isAgency ? url('/owners', { client_id: client.id }) : null);
   const [assign] = useAction(async (ownerId) => { await api.patch(`/applications/${app.id}`, { owner_id: ownerId || null }); bump(); });
   const stage = data.stages.find((s) => s.id === app.stage_id);
   const row = (label, value) => (
@@ -295,8 +316,9 @@ function Overview({ data, onOffer, onResume }) {
             {row('Owner', isAgency ? (
               <select aria-label="Owner" value={app.owner_id ?? ''} onChange={(e) => assign(e.target.value)} className="max-w-36 cursor-pointer rounded-md border border-line bg-white py-0.5 pr-6 pl-1.5 text-right text-sm font-medium">
                 <option value="">Unassigned</option>
-                {(team || []).filter((u) => u.role !== 'client' || u.id === app.owner_id).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-                {app.owner_id && team && !team.some((u) => u.id === app.owner_id) && <option value={app.owner_id}>{app.owner_name}</option>}
+                {/* Someone who has left can stay the owner, but cannot be given anyone new. */}
+                {(owners || []).filter((o) => o.active || o.id === app.owner_id).map((o) => <option key={o.id} value={o.id}>{o.name}{o.active ? '' : ' (deactivated)'}</option>)}
+                {app.owner_id && !(owners || []).some((o) => o.id === app.owner_id) && <option value={app.owner_id}>{app.owner_name}</option>}
               </select>
             ) : app.owner_name || 'Unassigned')}
           </dl>

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { X, Star, LoaderCircle } from 'lucide-react';
+import { X, Star, LoaderCircle, RefreshCw } from 'lucide-react';
 
 const cx = (...parts) => parts.filter(Boolean).join(' ');
 export { cx };
@@ -175,6 +175,19 @@ export function Loading({ className }) {
   return (
     <div className={cx('flex items-center justify-center py-16 text-stone-400', className)}>
       <LoaderCircle className="size-5 animate-spin" />
+    </div>
+  );
+}
+
+/** Shown in place of a part of the app that could not be loaded because a newer version has replaced this one. */
+export function UpdateNotice({ children, className }) {
+  return (
+    <div role="alert" className={cx('flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950', className)}>
+      <span className="min-w-0 flex-1 basis-56">
+        <span className="font-medium">The Book has been updated.</span> Refresh the page to continue.
+        {children && <span className="mt-0.5 block text-[13px] text-amber-900">{children}</span>}
+      </span>
+      <Button size="sm" variant="primary" icon={RefreshCw} onClick={() => window.location.reload()}>Refresh</Button>
     </div>
   );
 }
