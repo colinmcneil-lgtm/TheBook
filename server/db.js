@@ -81,7 +81,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   openings INTEGER NOT NULL DEFAULT 1,
   questions TEXT NOT NULL DEFAULT '[]',
   criteria TEXT NOT NULL DEFAULT '[]',
-  created_by INTEGER,
+  created_by INTEGER,                                -- who created the job; never changed afterwards
+  account_executive_id INTEGER REFERENCES users(id) ON DELETE SET NULL, -- the agency user the job belongs to: its creator, until it is handed to somebody else
   created_at TEXT NOT NULL,
   opened_at TEXT, closed_at TEXT
 );
@@ -311,6 +312,24 @@ if (!db.prepare('PRAGMA table_info(applications)').all().some((c) => c.name === 
   db.exec(`UPDATE applications SET owner_id = (
     SELECT ac.user_id FROM activities ac JOIN users u ON u.id = ac.user_id AND u.role != 'client'
     WHERE ac.application_id = applications.id AND ac.type = 'added' ORDER BY ac.id LIMIT 1)`);
+}
+// Every job has an account executive: the agency user it belongs to. That is whoever created it, until an admin or
+// the account executive hands it to somebody else. Jobs that were there before the column are given their creator,
+// once, when the column arrives: only when that person is still on file and is on the agency's team (a job nobody
+// is recorded as creating, or whose creator has been removed or is a client's user, has no account executive until
+// an admin names one). Nothing else on the job is touched, and who created it stays as it was.
+// The column is added and filled as one step. If the server is stopped part-way, neither has happened and the next
+// start does both: a column that was there but never filled would leave every job with nobody for good.
+db.exec('BEGIN');
+try {
+  if (addColumn('jobs', 'account_executive_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL')) {
+    db.exec(`UPDATE jobs SET account_executive_id = created_by
+             WHERE created_by IN (SELECT id FROM users WHERE role != 'client')`);
+  }
+  db.exec('COMMIT');
+} catch (err) {
+  db.exec('ROLLBACK');
+  throw err;
 }
 // Notes are in this list because a recorded call remembers the note its summary was saved as: a number handed out
 // twice would let it write over somebody else's note.

@@ -15,6 +15,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Careers pages** | Every client gets a public, branded careers page at `/careers/<client>` listing open roles, each with an application form (résumé upload, custom screening questions, consent). Link to it from the client's website. Add `?src=linkedin`, `?src=job_board` or `?src=referral` to an apply link to track where applicants came from. |
 | **Jobs on our website** | Your agency's own public job board, in your name, for the jobs you choose to advertise yourselves without saying who the employer is. Each post is written for the purpose and checked for anything that would give the client away before it can go public. Link to the board, show it inside a page of your own website, or read it as data. See [Jobs on our website (confidential posts)](#jobs-on-our-website-confidential-posts). |
 | **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
+| **Job board** | Every job has an account executive: the person on your team who created it. The dashboard has a board with a column for each account executive and their jobs under their name, each with how long it has been open, how many openings are filled and how many people are in its pipeline, at interview and at offer. Agency only. See [Account executives and the job board](#account-executives-and-the-job-board). |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **Otterview** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [Otterview](#otterview) and [Metaview in Otterview](#metaview-in-otterview). |
 | **To do** | Each person on your team has their own list: the jobs they have picked to work on, the people to prep before an interview and the people to debrief after one. Jobs and people are dragged across from a picker, or added with a button; The Book adds people by itself from the interviews scheduled in it. Agency only. See [To do](#to-do). |
@@ -60,6 +61,36 @@ GitHub page, a personal site, a company's team page, a LinkedIn Recruiter or Sal
   link there. If the link matches someone already on file, both records are kept, each profile shows
   "Possible duplicate", and an agency user can merge them. Merging moves every application, note, interview and
   email onto the record you keep.
+
+## Account executives and the job board
+
+Every job has an **account executive**: the person on the agency team the job belongs to. Whoever creates a job is
+its account executive. The job's own pages say who it is ("Account executive: Priya Nair"), the Jobs page shows it
+beside each job and can be narrowed to one person's jobs, and the job form has an **Account executive** field.
+
+- **Handing a job on.** The account executive can hand their job to anybody active on the agency team, from the job
+  form, and so can an admin, for any job. Nobody else can change it. An admin creating a job can make it somebody
+  else's from the start; a recruiter's new job is always their own. Who created the job stays on record and is never
+  changed.
+- **What goes with it.** The recruiter brief belongs to the account executive: they and admins edit it, and the rest
+  of the team reads it. Once a job is handed on, the brief is the new account executive's to edit, not its creator's.
+- **The job board.** On the dashboard, for the agency: one column for each account executive, headed with their name,
+  their initials and how many jobs they have, and under it a card for each job with its title, the client, how long
+  it has been open, its openings and how many are filled, and how many people are in its pipeline, at interview and
+  at offer. A click opens the job. Your own column comes first, then the others by name. The board shows open jobs;
+  the switch **Include paused and draft** adds those (closed jobs are never on it), and it follows the client chosen
+  in the menu. Somebody with no jobs in view has no column. In a wide window the columns sit side by side and scroll
+  sideways when there are many, with the scrollbar or the two arrows in the board's heading; a column is never taller
+  than most of the window, and a long one scrolls inside itself, so the rest of the dashboard stays close by. On a
+  phone the columns are stacked and each folds away, with yours open to begin with, and a long column shows its
+  first five jobs until you tap **Show all**.
+- **Jobs with nobody.** A job whose account executive is not known is in a last column, **No account executive**,
+  until an admin gives it to somebody (open the job and choose **Edit**). That is the jobs that were already there when account executives arrived and
+  whose creator was not recorded, was a client's user or has been removed from the database; every other job that
+  was already there was given its creator. Somebody who is deactivated keeps their jobs, and their column says
+  "Deactivated", until the jobs are handed on.
+- **Clients.** The client's hiring team sees no job board and is never told who a job's account executive is, or who
+  created it.
 
 ## To do
 
@@ -832,6 +863,7 @@ Demo sign-ins (password `demo1234` for all):
 | --- | --- | --- |
 | Agency owner | `alex@harbourtalent.example` | Everything |
 | Recruiter | `priya@harbourtalent.example` | All clients, no team admin |
+| Recruiter | `marcus@harbourtalent.example` | The same; there so that the job board has a third column |
 | Client hiring manager | `maya@lumenhealth.example` | Lumen Health only |
 
 Public careers page for the demo: http://localhost:3000/careers/lumen-health

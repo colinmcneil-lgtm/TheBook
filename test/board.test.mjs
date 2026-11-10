@@ -1297,7 +1297,12 @@ test('starting on a database made by the live code adds the board’s tables and
     db = new DatabaseSync(file);
     const after = { objects: objects(), rows: dump() };
     // Every table, index and trigger that was there is still there, exactly as it was written.
-    for (const [name, sql] of Object.entries(before.objects)) assert.equal(after.objects[name], sql, `${name} was changed or dropped`);
+    // (The jobs table gains one column at its end for the job's account executive, a later feature with an upgrade test of its own.)
+    for (const [name, sql] of Object.entries(before.objects)) {
+      if (name !== 'jobs') { assert.equal(after.objects[name], sql, `${name} was changed or dropped`); continue; }
+      const was = /\(([\s\S]*)\)/.exec(sql)[1], now = /\(([\s\S]*)\)/.exec(after.objects.jobs)[1];
+      assert.ok(now.startsWith(was) && /^,\s*account_executive_id INTEGER REFERENCES users\(id\) ON DELETE SET NULL$/.test(now.slice(was.length)), 'jobs was changed by more than its one new column');
+    }
     // What is new: the board's five tables and their indexes, and nothing else.
     const added = Object.keys(after.objects).filter((name) => !(name in before.objects)).sort();
     assert.deepEqual(added, ['idx_board_applications_post', 'idx_board_log_post', ...NEW].sort());
@@ -1308,7 +1313,9 @@ test('starting on a database made by the live code adds the board’s tables and
     const settled = { ...after.rows, email_templates: after.rows.email_templates.filter((t) => t !== template) };
     // The reports and To do note the day they first ran on a workspace; those notes are theirs, not the board's.
     const own = (s) => /^(reports_|todos_)/.test(s.key);
-    assert.deepEqual({ ...settled, settings: settled.settings.filter((s) => !own(s)) }, { ...before.rows, settings: before.rows.settings.filter((s) => !own(s)) });
+    // Each job's account executive is filled in on start from who created it: that column is the later feature's, not the board's.
+    const jobsAsTheyWere = settled.jobs.map(({ account_executive_id, ...job }) => Object.assign(Object.create(null), job)); // rows come without a prototype
+    assert.deepEqual({ ...settled, jobs: jobsAsTheyWere, settings: settled.settings.filter((s) => !own(s)) }, { ...before.rows, settings: before.rows.settings.filter((s) => !own(s)) });
     assert.ok(!after.rows.settings.some((s) => s.key.startsWith('board_')));   // the board's settings are only written when an admin saves them
     db.close();
 

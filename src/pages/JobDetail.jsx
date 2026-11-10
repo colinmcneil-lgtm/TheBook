@@ -118,6 +118,7 @@ function Details({ job, stages }) {
             {fact('Salary', salaryRange(job.salary_min, job.salary_max, job.currency) && `${salaryRange(job.salary_min, job.salary_max, job.currency)}${job.salary_public ? '' : ' (hidden)'}`)}
             {fact('Openings', `${job.hires} of ${job.openings} filled`)}
             {fact('Hiring manager', job.hiring_manager_name)}
+            {isAgency && fact('Account executive', job.account_executive_name || 'Not set')}
             {fact('Opened', job.opened_at && fmtDate(job.opened_at, true))}
           </dl>
         </Card>
@@ -187,7 +188,9 @@ export default function JobDetail() {
     <Page
       wide
       title={<span className="flex flex-wrap items-center gap-2.5">{job.title}<JobStatusBadge status={job.status} /></span>}
-      subtitle={[job.client_name, job.location, WORK_MODES[job.work_mode], salaryRange(job.salary_min, job.salary_max, job.currency)].filter(Boolean).join(' · ')}
+      subtitle={[job.client_name, job.location, WORK_MODES[job.work_mode], salaryRange(job.salary_min, job.salary_max, job.currency),
+        // Whose job it is, for the agency. A client's user is never sent it.
+        isAgency && (job.account_executive_name ? `Account executive: ${job.account_executive_name}` : 'No account executive')].filter(Boolean).join(' · ')}
       actions={
         <>
           {job.status === 'open' && job.careers_page && (

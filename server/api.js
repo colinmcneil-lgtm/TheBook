@@ -379,6 +379,8 @@ api.post('/invites/:token/accept', rateLimit('invite', 40, 10 * 60000), (req, re
       q.run('UPDATE users SET password_hash = ?, name = ?, role = ?, client_id = ?, title = ?, active = 1 WHERE id = ?',
         hashPassword(b.password), name, inv.role, clientId, clean(b.title, 120) ?? existing.title, existing.id);
       q.run('DELETE FROM sessions WHERE user_id = ?', existing.id);
+      // An account executive is somebody on the agency's team. Whoever comes back as a client's user is no longer one.
+      if (inv.role === 'client') q.run('UPDATE jobs SET account_executive_id = NULL WHERE account_executive_id = ?', existing.id);
       return existing.id;
     }
     if (existing) q.run('DELETE FROM users WHERE id = ? AND pending = 1', existing.id); // an unanswered request for the same address is settled by this invitation
@@ -793,6 +795,7 @@ api.put('/clients/:id', agencyOnly, (req, res) => {
 // ---------- jobs ----------
 const jobSelect = `
   SELECT j.*, cl.name AS client_name, cl.brand_color, cl.slug AS client_slug, cl.currency, cl.fee_percent, u.name AS hiring_manager_name, cu.name AS created_by_name,
+    ae.name AS account_executive_name, ae.active AS account_executive_active,
     (SELECT COUNT(*) FROM applications a WHERE a.job_id = j.id) AS total_applicants,
     (SELECT COUNT(*) FROM applications a WHERE a.job_id = j.id AND a.status = 'active') AS active_candidates,
     (SELECT COUNT(*) FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.job_id = j.id AND a.status = 'active' AND s.kind = 'applied') AS new_applicants,
@@ -800,14 +803,21 @@ const jobSelect = `
     (SELECT COUNT(*) FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.job_id = j.id AND a.status = 'active' AND s.kind = 'offer') AS offers,
     (SELECT COUNT(*) FROM applications a WHERE a.job_id = j.id AND a.status = 'hired') AS hires,
     j.id IN (${board.OFF_CAREERS}) AS off_careers
-  FROM jobs j JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = j.hiring_manager_id LEFT JOIN users cu ON cu.id = j.created_by`;
+  FROM jobs j JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = j.hiring_manager_id LEFT JOIN users cu ON cu.id = j.created_by
+    LEFT JOIN users ae ON ae.id = j.account_executive_id`;
+/**
+ * Who a job belongs to inside the agency is the agency's own business: its account executive, and who created it
+ * (the same person until the job is handed on). The client's hiring team is never sent either.
+ */
+const withoutAgencyPeople = ({ created_by, created_by_name, account_executive_id, account_executive_name, account_executive_active, ...job }) => job;
 /** Changes whenever the brief or the ideal profile is saved, so a form opened on an older copy can be refused instead of overwriting the newer one. */
 const briefVersion = (j) => crypto.createHash('sha1').update(`${j.brief ?? ''}\n${j.ideal_profile ?? ''}`).digest('hex').slice(0, 16);
-/** Parse the JSON columns and drop the agency-only internal brief for client users. */
+/** Parse the JSON columns and drop what is the agency's alone for client users: the internal brief, the fee and who the job belongs to. */
 function hydrateJob(j, user) {
   const { ideal_profile, brief, fee_percent, off_careers, ...rest } = j; // agency-only: the brief, and the fee the client pays
+  const shown = isAgency(user) ? { ...rest, ideal_profile, brief: json(brief, {}), brief_version: briefVersion(j), fee_percent } : withoutAgencyPeople(rest);
   // careers_page: whether the job is listed on the client's careers page while it is open. Everybody is told that much, and not why.
-  return { ...rest, careers_page: !off_careers, ...(isAgency(user) ? { ideal_profile, brief: json(brief, {}), brief_version: briefVersion(j), fee_percent } : {}), questions: json(j.questions, []), criteria: json(j.criteria, []) };
+  return { ...shown, careers_page: !off_careers, questions: json(j.questions, []), criteria: json(j.criteria, []) };
 }
 
 // The recruiter brief: free-text sections and one-item-per-line lists. Only these keys are stored.
@@ -848,6 +858,24 @@ function checkHiringManager(userId, clientId) {
   if (!u || (u.role === 'client' && u.client_id !== clientId)) bad('Choose a hiring manager from this client or your own team.');
 }
 
+/** A job's account executive has to be somebody active on the agency's own team. */
+function checkAccountExecutive(userId) {
+  if (userId == null || !q.get(`SELECT 1 AS x FROM users WHERE id = ? AND active = 1 AND role != 'client'`, userId)) {
+    bad('Choose an account executive from the people active on your team.');
+  }
+}
+/**
+ * The person a job form named as account executive: their id, as a whole number or as the digits a form sends.
+ * Anything else (true, a list, a word, half a number) is refused rather than read as somebody it happens to look like.
+ */
+function namedAccountExecutive(value) {
+  const id = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+  if (!Number.isSafeInteger(id)) bad('Choose an account executive from the people active on your team.');
+  return id;
+}
+/** The job's brief, and the job itself to hand on, belong to its account executive. An admin can do both as well. */
+const ownsJob = (user, job) => user.role === 'admin' || (job.account_executive_id != null && job.account_executive_id === user.id);
+
 /** A stage as this person is sent it. Whether it is an interview with the client only matters to the agency's reports, so the client's hiring team is not sent that. */
 const stageFor = ({ with_client, ...stage }, user) => (isAgency(user) ? { ...stage, with_client } : stage);
 /** A job's stages in order. */
@@ -867,6 +895,12 @@ api.get('/jobs', (req, res) => {
   const where = [], p = [];
   if (cid) { where.push('j.client_id = ?'); p.push(cid); }
   if (req.query.status) { where.push('j.status = ?'); p.push(req.query.status); }
+  // The agency can narrow the list to one account executive's jobs, or (with "none") to the jobs that have nobody.
+  // From a client's user the filter is ignored: what it found or did not find would tell them whose job it is.
+  if (isAgency(req.user) && req.query.account_executive) {
+    if (req.query.account_executive === 'none') where.push('j.account_executive_id IS NULL');
+    else { where.push('j.account_executive_id = ?'); p.push(int(req.query.account_executive)); }
+  }
   const rows = q.all(`${jobSelect} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY CASE j.status WHEN 'open' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 ELSE 3 END, j.created_at DESC`, ...p);
   res.json(rows.map((j) => hydrateJob(j, req.user)).map(({ brief, ...j }) => ({ ...j, has_brief: brief ? Object.keys(brief).length > 0 : undefined })));
@@ -890,6 +924,20 @@ function jobFields(b) {
   };
 }
 
+// Who can be a job's account executive, for the picker on the job form and the filter on the Jobs page: everyone
+// active on the agency team, plus anyone who still has a job in view (somebody since deactivated), so their jobs stay
+// reachable until they are handed on. `none` is how many jobs in view have no account executive at all.
+api.get('/account-executives', agencyOnly, (req, res) => {
+  const cid = scopeOf(req);
+  const inView = cid ? 'AND j.client_id = ?' : '', p = cid ? [cid] : [];
+  const people = q.all(
+    `SELECT u.id, u.name, u.active FROM users u
+     WHERE (u.role != 'client' AND u.active = 1)
+        OR u.id IN (SELECT j.account_executive_id FROM jobs j WHERE j.account_executive_id IS NOT NULL ${inView})
+     ORDER BY u.active DESC, u.name`, ...p);
+  res.json({ people, none: q.get(`SELECT COUNT(*) AS n FROM jobs j WHERE j.account_executive_id IS NULL ${inView}`, ...p).n });
+});
+
 api.post('/jobs', agencyOnly, (req, res) => {
   const b = req.body || {};
   const f = jobFields(b);
@@ -897,15 +945,22 @@ api.post('/jobs', agencyOnly, (req, res) => {
   if (!q.get('SELECT 1 AS x FROM clients WHERE id = ?', clientId)) bad('Choose a client for this role.');
   if (!f.title) bad('Job title is required.');
   checkHiringManager(f.hiring_manager_id, clientId);
+  // The job's account executive is whoever creates it. An admin can create a job for somebody else on the team; a
+  // recruiter cannot.
+  const named = b.account_executive_id == null || b.account_executive_id === '' ? req.user.id : namedAccountExecutive(b.account_executive_id);
+  if (named !== req.user.id) {
+    if (req.user.role !== 'admin') bad('Only an admin can make somebody else the account executive of a new job. You are the account executive of the jobs you create.', 403);
+    checkAccountExecutive(named);
+  }
   const interviewStages = stagesFrom(b.interview_stages);
   const id = tx(() => {
     const t = now();
     const jobId = q.insert(
       `INSERT INTO jobs (client_id, title, department, location, work_mode, employment_type, salary_min, salary_max, salary_public, description, ideal_profile,
-         status, hiring_manager_id, openings, questions, criteria, created_by, created_at, opened_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         status, hiring_manager_id, openings, questions, criteria, created_by, account_executive_id, created_at, opened_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       clientId, f.title, f.department, f.location, f.work_mode, f.employment_type, f.salary_min, f.salary_max, f.salary_public, f.description, f.ideal_profile,
-      f.status, f.hiring_manager_id, f.openings, f.questions, f.criteria, req.user.id, t, f.status === 'open' ? t : null);
+      f.status, f.hiring_manager_id, f.openings, f.questions, f.criteria, req.user.id, named, t, f.status === 'open' ? t : null);
     createStages(jobId, interviewStages.length ? interviewStages : DEFAULT_INTERVIEW_STAGES);
     reporting.searchOpened(jobId, f.status);
     // A brief drafted while filling in the form (from an intake call or job description) is saved with the new job.
@@ -926,17 +981,29 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
   const f = jobFields(b);
   if (!f.title) bad('Job title is required.');
   if (f.hiring_manager_id !== job.hiring_manager_id) checkHiringManager(f.hiring_manager_id, job.client_id);
+  // Handing the job to another account executive: only looked at when the form names somebody other than the one it
+  // has, so saving a job leaves it with whoever has it (a person since deactivated included). It is for the account
+  // executive, or an admin, to do, and a job cannot be left with nobody.
+  let accountExecutive = job.account_executive_id;
+  if (b.account_executive_id !== undefined) {
+    const named = b.account_executive_id === null || b.account_executive_id === '' ? null : namedAccountExecutive(b.account_executive_id);
+    if (named !== job.account_executive_id) {
+      if (!ownsJob(req.user, job)) bad('Only this job’s account executive, or an admin, can hand it to somebody else.', 403);
+      checkAccountExecutive(named);
+      accountExecutive = named;
+    }
+  }
   tx(() => {
     const t = now();
     q.run(
       `UPDATE jobs SET title = ?, department = ?, location = ?, work_mode = ?, employment_type = ?, salary_min = ?, salary_max = ?, salary_public = ?,
          description = ?, ideal_profile = ?, status = ?, hiring_manager_id = ?, openings = ?, questions = ?, criteria = ?,
-         opened_at = ?, closed_at = ? WHERE id = ?`,
+         account_executive_id = ?, opened_at = ?, closed_at = ? WHERE id = ?`,
       f.title, f.department, f.location, f.work_mode, f.employment_type, f.salary_min, f.salary_max, f.salary_public, f.description,
-      // Part of the brief, which is edited on its own page and belongs to whoever created the job: left alone
+      // Part of the brief, which is edited on its own page and belongs to the job's account executive: left alone
       // unless it is sent by them or by an admin.
-      b.ideal_profile !== undefined && (req.user.role === 'admin' || job.created_by === req.user.id) ? f.ideal_profile : job.ideal_profile,
-      f.status, f.hiring_manager_id, f.openings, f.questions, f.criteria,
+      b.ideal_profile !== undefined && ownsJob(req.user, job) ? f.ideal_profile : job.ideal_profile,
+      f.status, f.hiring_manager_id, f.openings, f.questions, f.criteria, accountExecutive,
       job.opened_at ?? (f.status === 'open' ? t : null), f.status === 'closed' ? job.closed_at ?? t : null, job.id);
     reporting.searchOpened(job.id, f.status, job);
 
@@ -969,11 +1036,12 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
   res.json({ ok: true, ...board.jobChanged(job.id) });
 });
 
-// The recruiter brief is saved on its own, from the job's Brief page. It belongs to whoever created the job:
-// they (or an admin) can change it; the rest of the team reads it.
+// The recruiter brief is saved on its own, from the job's Brief page. It belongs to the job's account executive
+// (whoever created the job, until it is handed to somebody else): they or an admin can change it; the rest of the
+// team reads it.
 api.put('/jobs/:id/brief', agencyOnly, (req, res) => {
   const job = loadJob(req.params.id, req.user);
-  if (req.user.role !== 'admin' && job.created_by !== req.user.id) bad('Only the person who created this job, or an admin, can edit its brief.', 403);
+  if (!ownsJob(req.user, job)) bad('Only this job’s account executive, or an admin, can edit its brief.', 403);
   const b = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
   // The form sends the version of the brief it was opened on. If the brief has been saved since, this save would
   // undo that one without either person knowing.
@@ -1692,6 +1760,31 @@ api.post('/interviews/:id/scorecard', (req, res) => {
 });
 
 // ---------- dashboard ----------
+/**
+ * The job board on the agency's dashboard: one column for each account executive, with their jobs in it. Open jobs,
+ * and paused and draft ones as well when asked for; a closed job is never on it. The signed-in person's own column
+ * comes first, then the others by name, and jobs with no account executive are in a last column of their own. Nobody
+ * has a column without a job in view. Somebody who has been deactivated keeps theirs, marked, until their jobs are
+ * handed on. In a column: open jobs first, the one open longest at the top, then paused ones, then drafts.
+ */
+function jobBoard(user, clientId, withPausedAndDraft) {
+  const statuses = withPausedAndDraft ? ['open', 'paused', 'draft'] : ['open'];
+  const rows = q.all(
+    `${jobSelect} WHERE j.status IN (${statuses.map(() => '?').join(', ')}) ${clientId ? 'AND j.client_id = ?' : ''}
+     ORDER BY CASE j.status WHEN 'open' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END, j.opened_at IS NULL, j.opened_at, j.id`, ...statuses, ...(clientId ? [clientId] : []));
+  const columns = new Map();
+  for (const j of rows) {
+    const key = j.account_executive_id ?? 'none';
+    if (!columns.has(key)) columns.set(key, { id: j.account_executive_id, name: j.account_executive_name, active: j.account_executive_active, you: j.account_executive_id === user.id, jobs: [] });
+    columns.get(key).jobs.push({
+      id: j.id, title: j.title, status: j.status, client_id: j.client_id, client_name: j.client_name, brand_color: j.brand_color, opened_at: j.opened_at,
+      openings: j.openings, hires: j.hires, in_pipeline: j.active_candidates, interviewing: j.interviewing, offers: j.offers,
+    });
+  }
+  const place = (c) => (c.you ? 0 : c.id == null ? 2 : 1);
+  return [...columns.values()].sort((a, b) => place(a) - place(b) || String(a.name).localeCompare(String(b.name), 'en', { sensitivity: 'base' }) || a.id - b.id);
+}
+
 api.get('/dashboard', (req, res) => {
   const cid = scopeOf(req);
   const w = cid ? 'AND j.client_id = ?' : '';
@@ -1712,7 +1805,7 @@ api.get('/dashboard', (req, res) => {
     `${interviewSelect} WHERE i.status = 'scheduled' AND i.starts_at >= ? AND a.status IN ('active', 'hired') ${cid ? 'AND cl.id = ?' : ''} ORDER BY i.starts_at LIMIT 6`,
     new Date(Date.now() - 3600000).toISOString(), ...p));
   const jobs = q.all(`${jobSelect} WHERE j.status = 'open' ${w} ORDER BY new_applicants DESC, j.opened_at LIMIT 8`, ...p)
-    .map(({ description, ideal_profile, brief, fee_percent, questions, criteria, off_careers, ...j }) => j);
+    .map(({ description, ideal_profile, brief, fee_percent, questions, criteria, off_careers, ...j }) => (isAgency(req.user) ? j : withoutAgencyPeople(j)));
   const recent = q.all(
     `SELECT ac.id, ac.type, ac.detail, ac.created_at, ac.application_id, u.name AS user_name, c.name AS candidate_name, j.title AS job_title, cl.name AS client_name,
        -- The moments worth shouting about: into an interview stage, an interview booked, approved by the hiring team,
@@ -1733,7 +1826,9 @@ api.get('/dashboard', (req, res) => {
     `${appSelect} WHERE a.status = 'active' AND s.kind IN ('interview', 'offer') AND a.stage_entered_at < ? ${w}
      AND NOT EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = a.id AND i.status = 'scheduled' AND i.starts_at >= ?)
      ORDER BY a.stage_entered_at LIMIT 5`, now(), daysAgo(7), ...p, now());
-  res.json({ stats, upcoming, jobs, recent, stale: hidePhotos(stale, req.user) });
+  // The job board is the agency's: a client's user is sent nothing of it. `board=all` adds paused and draft jobs.
+  const board = isAgency(req.user) ? { board: jobBoard(req.user, cid, req.query.board === 'all') } : {};
+  res.json({ stats, upcoming, jobs, recent, stale: hidePhotos(stale, req.user), ...board });
 });
 
 // ---------- reports ----------
