@@ -16,7 +16,7 @@ import { look } from './metaview-helpers.mjs';
 
 const PORT = PORTS.accountExecutive, OLD_PORT = PORTS.accountExecutiveOld;
 
-let server, dataDir, oldDir;
+let server, dataDir, oldDir, stoppedDir;
 let alex, priya, marcus, dana, maya; // the admin, three recruiters, and somebody on Kestrel's hiring team
 let id;                              // each person's user id, by first name
 let kestrel, lumen;                  // the two clients
@@ -88,7 +88,7 @@ before(async () => {
 
 after(async () => {
   await server?.stop();
-  for (const dir of [dataDir, oldDir]) if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of [dataDir, oldDir, stoppedDir]) if (dir) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // ---------- the job board ----------
@@ -206,6 +206,16 @@ test('only somebody active on the agency team can be an account executive', asyn
     const handed = await put(alex, `/jobs/${job.depot}`, { title: 'Depot Operations Lead', status: 'open', account_executive_id: named });
     assert.equal(handed.status, 400, JSON.stringify(named));
   }
+  // Only a whole number, or the digits a form sends, names a person. Things that could be read as somebody's number
+  // (true as 1, a list holding one number, a number with a fraction) are refused as well, whoever they would have meant.
+  for (const named of [true, false, [id.priya], [id.alex], [String(id.priya)], { id: id.priya }, id.priya + 0.4, `${id.priya}.0`, ` ${id.priya}`, '1e0', '0x1']) {
+    const made = await alex.post('/jobs', { client_id: kestrel, title: 'For nobody real', account_executive_id: named });
+    assert.equal(made.status, 400, JSON.stringify(named));
+    assert.match(made.body.error, /Choose an account executive from the people active on your team/);
+    const handed = await put(alex, `/jobs/${job.depot}`, { title: 'Depot Operations Lead', status: 'open', account_executive_id: named });
+    assert.equal(handed.status, 400, JSON.stringify(named));
+    assert.match(handed.body.error, /Choose an account executive from the people active on your team/);
+  }
   // A job cannot be left with nobody either.
   for (const named of ['', null]) assert.equal((await put(alex, `/jobs/${job.depot}`, { title: 'Depot Operations Lead', status: 'open', account_executive_id: named })).status, 400, JSON.stringify(named));
   assert.equal((await alex.get('/jobs')).body.length, before, 'nothing was created');
@@ -232,6 +242,10 @@ test('a job is handed on by its account executive or an admin, and by nobody els
   let now = await jobOf(alex, job.designer);
   assert.deepEqual([now.account_executive_id, now.account_executive_name, now.created_by, now.created_by_name], [id.priya, 'Priya Nair', id.marcus, 'Marcus Bell']);
   assert.equal((await put(marcus, `/jobs/${job.designer}`, { ...fields, account_executive_id: id.marcus })).status, 403);
+  // A form he had open from before the hand-over still saves, as the form leaves out an account executive nobody
+  // changed in it: his edit goes in and the job stays Priya's.
+  assert.equal((await put(marcus, `/jobs/${job.designer}`, { ...fields, department: 'Design' })).status, 200);
+  assert.deepEqual([(await jobOf(alex, job.designer)).account_executive_id, (await jobOf(alex, job.designer)).department], [id.priya, 'Design']);
   assert.deepEqual(shape(await board(priya, `?client_id=${lumen}`))[0], ['Priya Nair', ['Product Designer']]);
 
   // An admin can give any job to anybody on the team.
@@ -430,4 +444,21 @@ test('starting on a database from before fills in each job’s account executive
   assert.deepEqual(third.rows.jobs, second.rows.jobs, 'a job handed on, and a job with nobody, are left as they are');
   assert.deepEqual(third.objects, second.objects);
   for (const [table, rows] of Object.entries(second.rows)) assert.deepEqual(third.rows[table], rows, `starting again changed rows in ${table}`);
+});
+
+test('a start that is stopped between adding the column and filling it leaves neither done, and the next start does both', async () => {
+  const dir = stoppedDir = tempDir('before-account-executive-stopped');
+  oldDatabase(dir);
+  // The server cannot be stopped at an exact moment from outside, so the database is made to stop it there: any
+  // change to a job fails, which is what filling in the account executives is. Adding the column is not a change to a job.
+  const change = (sql) => { const db = new DatabaseSync(path.join(dir, 'app.db')); try { db.exec(sql); } finally { db.close(); } };
+  change(`CREATE TRIGGER stopped_here BEFORE UPDATE ON jobs BEGIN SELECT RAISE(ABORT, 'stopped here'); END`);
+  await assert.rejects(startServer({ port: OLD_PORT, dataDir: dir }), /stopped here/);
+  const stopped = everything(dir);
+  assert.equal(stopped.objects.jobs.includes('account_executive'), false, 'the column was left behind without being filled');
+
+  change('DROP TRIGGER stopped_here');
+  const again = await startServer({ port: OLD_PORT, dataDir: dir });
+  await again.stop();
+  assert.deepEqual(everything(dir).rows.jobs.map((j) => [j.id, j.created_by, j.account_executive_id]), [[1, 1, 1], [2, 2, 2], [3, null, null], [4, 3, null], [5, 9, null], [6, 4, 4], [7, 2, 2]]);
 });

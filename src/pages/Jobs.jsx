@@ -73,7 +73,8 @@ export default function Jobs() {
           <Select value={executive} onChange={(e) => setExecutive(e.target.value)} aria-label="Filter by account executive" className="!w-auto max-w-64">
             <option value="">Any account executive</option>
             <option value="me">Mine</option>
-            {(executives?.people || []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (deactivated)'}</option>)}
+            {/* The signed-in person is "Mine", so they are not listed a second time by name. */}
+            {(executives?.people || []).filter((p) => p.id !== user.id).map((p) => <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (deactivated)'}</option>)}
             {(executives?.none > 0 || executive === 'none') && <option value="none">No account executive</option>}
           </Select>
         </div>

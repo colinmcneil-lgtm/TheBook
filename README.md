@@ -79,9 +79,12 @@ beside each job and can be narrowed to one person's jobs, and the job form has a
   at offer. A click opens the job. Your own column comes first, then the others by name. The board shows open jobs;
   the switch **Include paused and draft** adds those (closed jobs are never on it), and it follows the client chosen
   in the menu. Somebody with no jobs in view has no column. In a wide window the columns sit side by side and scroll
-  sideways when there are many; on a phone they are stacked and each folds away, with yours open to begin with.
+  sideways when there are many, with the scrollbar or the two arrows in the board's heading; a column is never taller
+  than most of the window, and a long one scrolls inside itself, so the rest of the dashboard stays close by. On a
+  phone the columns are stacked and each folds away, with yours open to begin with, and a long column shows its
+  first five jobs until you tap **Show all**.
 - **Jobs with nobody.** A job whose account executive is not known is in a last column, **No account executive**,
-  until an admin gives it to somebody. That is the jobs that were already there when account executives arrived and
+  until an admin gives it to somebody (open the job and choose **Edit**). That is the jobs that were already there when account executives arrived and
   whose creator was not recorded, was a client's user or has been removed from the database; every other job that
   was already there was given its creator. Somebody who is deactivated keeps their jobs, and their column says
   "Deactivated", until the jobs are handed on.

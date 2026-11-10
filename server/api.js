@@ -820,6 +820,15 @@ function checkAccountExecutive(userId) {
     bad('Choose an account executive from the people active on your team.');
   }
 }
+/**
+ * The person a job form named as account executive: their id, as a whole number or as the digits a form sends.
+ * Anything else (true, a list, a word, half a number) is refused rather than read as somebody it happens to look like.
+ */
+function namedAccountExecutive(value) {
+  const id = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+  if (!Number.isSafeInteger(id)) bad('Choose an account executive from the people active on your team.');
+  return id;
+}
 /** The job's brief, and the job itself to hand on, belong to its account executive. An admin can do both as well. */
 const ownsJob = (user, job) => user.role === 'admin' || (job.account_executive_id != null && job.account_executive_id === user.id);
 
@@ -894,7 +903,7 @@ api.post('/jobs', agencyOnly, (req, res) => {
   checkHiringManager(f.hiring_manager_id, clientId);
   // The job's account executive is whoever creates it. An admin can create a job for somebody else on the team; a
   // recruiter cannot.
-  const named = b.account_executive_id == null || b.account_executive_id === '' ? req.user.id : int(b.account_executive_id);
+  const named = b.account_executive_id == null || b.account_executive_id === '' ? req.user.id : namedAccountExecutive(b.account_executive_id);
   if (named !== req.user.id) {
     if (req.user.role !== 'admin') bad('Only an admin can make somebody else the account executive of a new job. You are the account executive of the jobs you create.', 403);
     checkAccountExecutive(named);
@@ -932,10 +941,13 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
   // has, so saving a job leaves it with whoever has it (a person since deactivated included). It is for the account
   // executive, or an admin, to do, and a job cannot be left with nobody.
   let accountExecutive = job.account_executive_id;
-  if (b.account_executive_id !== undefined && int(b.account_executive_id) !== job.account_executive_id) {
-    if (!ownsJob(req.user, job)) bad('Only this job’s account executive, or an admin, can hand it to somebody else.', 403);
-    accountExecutive = int(b.account_executive_id);
-    checkAccountExecutive(accountExecutive);
+  if (b.account_executive_id !== undefined) {
+    const named = b.account_executive_id === null || b.account_executive_id === '' ? null : namedAccountExecutive(b.account_executive_id);
+    if (named !== job.account_executive_id) {
+      if (!ownsJob(req.user, job)) bad('Only this job’s account executive, or an admin, can hand it to somebody else.', 403);
+      checkAccountExecutive(named);
+      accountExecutive = named;
+    }
   }
   tx(() => {
     const t = now();

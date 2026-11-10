@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Briefcase, ChevronDown, UserRoundX } from 'lucide-react';
+import { Briefcase, ChevronDown, ChevronLeft, ChevronRight, UserRoundX } from 'lucide-react';
 import { daysSince, plural } from '../lib.js';
 import { useApp } from '../state.jsx';
-import { Avatar, Badge, Card, CardHeader, ClientDot, Empty, Switch, cx } from '../ui.jsx';
+import { Avatar, Badge, Button, Card, CardHeader, ClientDot, Empty, Switch, cx } from '../ui.jsx';
 import { JobStatusBadge } from './bits.jsx';
 
 // The job board on the agency's dashboard: one column for each account executive (the person a job belongs to),
@@ -21,6 +21,41 @@ function useSideBySide() {
     return () => media.removeEventListener('change', changed);
   }, []);
   return wide;
+}
+
+// Stacked on a phone, a long column shows this many jobs until "Show all" is tapped, so one busy person does not
+// push everybody below them, and the rest of the dashboard, a long way down.
+const FIRST_FEW = 5;
+
+/**
+ * The strip of columns when they sit side by side. It scrolls sideways when there are more people than fit; this
+ * says whether there is more of it off to the left or right, and steps along it, for the arrows in the board's
+ * heading: an ordinary mouse wheel only scrolls up and down, and the strip's own scrollbar is at the bottom of it.
+ * `watch` is what the strip is drawn from, so it is measured again when that changes.
+ */
+function useSideways(watch) {
+  const strip = useRef(null);
+  const [more, setMore] = useState({ left: false, right: false });
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) { setMore({ left: false, right: false }); return undefined; }
+    const measure = () => {
+      const left = el.scrollLeft > 1, right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setMore((m) => (m.left === left && m.right === right ? m : { left, right }));
+    };
+    measure();
+    el.addEventListener('scroll', measure, { passive: true });
+    const resized = new ResizeObserver(measure);
+    resized.observe(el);
+    return () => { el.removeEventListener('scroll', measure); resized.disconnect(); };
+  }, watch);
+  // One step is most of what is on screen, so the last column in view is still in view afterwards.
+  const step = (direction) => {
+    const el = strip.current;
+    const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    el?.scrollBy({ left: direction * Math.max(220, el.clientWidth - 220), behavior: calm ? 'auto' : 'smooth' });
+  };
+  return { strip, more, step };
 }
 
 /** How long a job has been open, or where it stands when it is not open. */
@@ -52,9 +87,16 @@ function JobCard({ job: j }) {
   );
 }
 
-/** One person's jobs. On a phone the heading is a button that folds the jobs away. */
+/**
+ * One person's jobs. Side by side, a column is never taller than most of the window: a long one scrolls inside
+ * itself, under its heading, so the others, the strip's scrollbar and the rest of the dashboard stay within reach.
+ * On a phone the heading is a button that folds the jobs away, and a long column shows its first few until asked.
+ */
 function Column({ column: c, wide, open, onToggle }) {
+  const { isAdmin } = useApp();
+  const [all, setAll] = useState(false);
   const name = c.id == null ? 'No account executive' : c.name;
+  const jobs = wide || all ? c.jobs : c.jobs.slice(0, FIRST_FEW);
   const heading = (
     <>
       {c.id == null
@@ -62,18 +104,19 @@ function Column({ column: c, wide, open, onToggle }) {
         : <Avatar name={c.name} size={32} />}
       <span className="min-w-0 flex-1 text-left">
         <span className="flex items-center gap-1.5">
-          <span className="truncate text-sm font-semibold text-stone-900" title={name}>{name}</span>
+          {/* A person's name is cut short when it is too long for the column; "No account executive" wraps instead, so it can always be read. */}
+          <span className={cx('text-sm font-semibold text-stone-900', c.id == null ? 'leading-tight' : 'truncate')} title={name}>{name}</span>
           {c.you && <Badge tone="green">You</Badge>}
-          {c.id != null && !c.active && <Badge>Deactivated</Badge>}
         </span>
-        <span className="block text-xs text-stone-500">{plural(c.jobs.length, 'job')}</span>
+        {/* Said in the small line, in words: beside the name it would leave a long name no room in a narrow column. */}
+        <span className="block truncate text-xs font-normal text-stone-500">{plural(c.jobs.length, 'job')}{c.id != null && !c.active && ' · Deactivated'}</span>
       </span>
     </>
   );
   return (
     <section aria-label={`${name}: ${plural(c.jobs.length, 'job')}`} data-board-column={c.id ?? 'none'}
-      className={cx('rounded-xl bg-stone-100 p-2', wide && 'max-w-[22rem] min-w-60 flex-1 basis-0')}>
-      {wide ? <h3 className="flex items-center gap-2.5 px-1.5 pt-1 pb-2.5">{heading}</h3> : (
+      className={cx('rounded-xl bg-stone-100 p-2', wide && 'flex max-h-[clamp(20rem,70vh,36rem)] max-w-[22rem] min-w-[13.5rem] flex-1 basis-0 flex-col')}>
+      {wide ? <h3 className="flex shrink-0 items-center gap-2.5 px-1.5 pt-1 pb-2.5">{heading}</h3> : (
         <h3>
           <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1">
             {heading}
@@ -81,7 +124,25 @@ function Column({ column: c, wide, open, onToggle }) {
           </button>
         </h3>
       )}
-      {(wide || open) && <div className={cx('flex flex-col gap-2', !wide && 'mt-2')}>{c.jobs.map((j) => <JobCard key={j.id} job={j} />)}</div>}
+      {(wide || open) && (
+        <>
+          {/* Where these jobs came from is not obvious, and neither is how one leaves this column. */}
+          {c.id == null && (
+            <p className={cx('shrink-0 px-1.5 pb-2.5 text-xs leading-snug text-stone-600', !wide && 'pt-2')}>
+              {isAdmin ? 'Nobody has these yet. To give one to somebody, open it and choose Edit.' : 'Nobody has these yet. An admin can give each one to somebody.'}
+            </p>
+          )}
+          {/* The small margin and padding leave room for the cards' shadows, which a scrolling box would otherwise cut off. */}
+          <div className={cx('flex flex-col gap-2', wide ? '-mx-1 -mb-1 min-h-0 flex-1 overflow-y-auto px-1 pb-1 [scrollbar-width:thin]' : c.id != null && 'mt-2')}>
+            {jobs.map((j) => <JobCard key={j.id} job={j} />)}
+            {!wide && c.jobs.length > FIRST_FEW && (
+              <Button variant="ghost" size="sm" aria-expanded={all} onClick={() => setAll(!all)}>
+                {all ? `Show the first ${FIRST_FEW} only` : `Show all ${plural(c.jobs.length, 'job')}`}
+              </Button>
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -96,15 +157,32 @@ export default function JobBoard({ columns, all, onAll }) {
   // On a phone one column starts unfolded: the signed-in person's own, which comes first, or else whichever is first.
   const [folded, setFolded] = useState({}); // the columns somebody has folded or unfolded by hand
   const isOpen = (c, i) => folded[key(c)] ?? i === 0;
+  const { strip, more, step } = useSideways([wide, columns]);
   return (
     <Card>
-      <CardHeader title="Job board" action={<Switch checked={all} onChange={onAll} label="Include paused and draft" />} />
+      <CardHeader title="Job board" action={(
+        <span className="flex items-center gap-3">
+          {/* Only there when the columns do not all fit. Left of the switch, so the switch does not move when they come and go. */}
+          {wide && (more.left || more.right) && (
+            <span className="flex items-center">
+              <Button variant="ghost" size="sm" icon={ChevronLeft} className="!px-1.5" aria-label="Scroll the board left" title="Scroll the board left" disabled={!more.left} onClick={() => step(-1)} />
+              <Button variant="ghost" size="sm" icon={ChevronRight} className="!px-1.5" aria-label="Scroll the board right" title="Scroll the board right" disabled={!more.right} onClick={() => step(1)} />
+            </span>
+          )}
+          <Switch checked={all} onChange={onAll} label="Include paused and draft" />
+        </span>
+      )} />
       {columns.length ? (
-        <div className={cx('p-3', wide ? 'flex items-start gap-3 overflow-x-auto' : 'space-y-2')}>
-          {columns.map((c, i) => (
-            <Column key={key(c)} column={c} wide={wide} open={isOpen(c, i)} onToggle={() => setFolded((f) => ({ ...f, [key(c)]: !isOpen(c, i) }))} />
-          ))}
-        </div>
+        <>
+          <div ref={strip} className={cx('p-3', wide ? 'flex items-start gap-3 overflow-x-auto' : 'space-y-2')}>
+            {columns.map((c, i) => (
+              <Column key={key(c)} column={c} wide={wide} open={isOpen(c, i)} onToggle={() => setFolded((f) => ({ ...f, [key(c)]: !isOpen(c, i) }))} />
+            ))}
+          </div>
+          <p className="border-t border-line px-4 py-2.5 text-xs text-stone-500">
+            A job is under its account executive: the person who created it. They, or an admin, can hand it to somebody else: open the job and choose Edit.
+          </p>
+        </>
       ) : (
         <Empty icon={Briefcase} title={all ? 'No open, paused or draft jobs' : 'No open jobs'}>
           Each job appears here under its account executive: the person on your team who created it.

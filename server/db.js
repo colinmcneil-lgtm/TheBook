@@ -318,9 +318,18 @@ if (!db.prepare('PRAGMA table_info(applications)').all().some((c) => c.name === 
 // once, when the column arrives: only when that person is still on file and is on the agency's team (a job nobody
 // is recorded as creating, or whose creator has been removed or is a client's user, has no account executive until
 // an admin names one). Nothing else on the job is touched, and who created it stays as it was.
-if (addColumn('jobs', 'account_executive_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL')) {
-  db.exec(`UPDATE jobs SET account_executive_id = created_by
-           WHERE created_by IN (SELECT id FROM users WHERE role != 'client')`);
+// The column is added and filled as one step. If the server is stopped part-way, neither has happened and the next
+// start does both: a column that was there but never filled would leave every job with nobody for good.
+db.exec('BEGIN');
+try {
+  if (addColumn('jobs', 'account_executive_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL')) {
+    db.exec(`UPDATE jobs SET account_executive_id = created_by
+             WHERE created_by IN (SELECT id FROM users WHERE role != 'client')`);
+  }
+  db.exec('COMMIT');
+} catch (err) {
+  db.exec('ROLLBACK');
+  throw err;
 }
 // Notes are in this list because a recorded call remembers the note its summary was saved as: a number handed out
 // twice would let it write over somebody else's note.

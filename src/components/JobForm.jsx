@@ -99,6 +99,7 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
     criteria: job?.criteria ?? DEFAULT_CRITERIA,
   }));
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const [executiveAtOpen] = useState(form.account_executive_id); // who the form showed as account executive when it was opened
   const [draft, setDraft] = useState(null); // the last autofill result, for the notes shown about it
   const latest = useRef(form);
   latest.current = form;
@@ -143,7 +144,10 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
 
   const [save, busy] = useAction(async () => {
     const body = { ...form, interview_stages: form.interview_stages.map((s) => ({ ...s, with_client: withClient(s) })) };
-    if (!canHand) delete body.account_executive_id; // not theirs to say, so it is not sent
+    // The account executive is only sent when it was changed in this form. Left as it was, it says nothing: the job
+    // may have been handed to somebody else while the form was open, and saving a new title must neither be refused
+    // for that nor quietly hand the job back. It is not sent either by somebody whose say it is not.
+    if (!canHand || String(form.account_executive_id) === String(executiveAtOpen)) delete body.account_executive_id;
     // The plain reader's one "job title to search" is the title it read. If the title was corrected here, the brief follows it.
     const title = form.title.trim().replace(/\s*\(.*\)$/, '');
     if (draft?.source === 'basic' && form.brief?.search_titles?.length === 1 && title) body.brief = { ...form.brief, search_titles: [title] };
