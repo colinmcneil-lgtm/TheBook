@@ -391,6 +391,9 @@ api.post('/invites/:token/accept', rateLimit('invite', 40, 10 * 60000), (req, re
 });
 
 // ---------- unauthenticated: public careers site ----------
+// A job is on its client's careers page while it is open, unless the agency advertises it on its own job board only
+// (see board.js). Such a job is left out here exactly as a job that is not open is, with nothing to say why.
+const ON_CAREERS = `status = 'open' AND id NOT IN (${board.OFF_CAREERS})`;
 const publicJobCols = `id, title, department, location, work_mode, employment_type,
   CASE WHEN salary_public = 1 THEN salary_min END AS salary_min, CASE WHEN salary_public = 1 THEN salary_max END AS salary_max`;
 function careersClient(slug) {
@@ -401,13 +404,13 @@ function careersClient(slug) {
 
 api.get('/public/careers/:slug', (req, res) => {
   const client = careersClient(req.params.slug);
-  const jobs = q.all(`SELECT ${publicJobCols} FROM jobs WHERE client_id = ? AND status = 'open' ORDER BY department, title`, client.id);
+  const jobs = q.all(`SELECT ${publicJobCols} FROM jobs WHERE client_id = ? AND ${ON_CAREERS} ORDER BY department, title`, client.id);
   res.json({ client, jobs });
 });
 
 api.get('/public/careers/:slug/jobs/:id', (req, res) => {
   const client = careersClient(req.params.slug);
-  const job = q.get(`SELECT ${publicJobCols}, description, questions FROM jobs WHERE id = ? AND client_id = ? AND status = 'open'`, int(req.params.id), client.id);
+  const job = q.get(`SELECT ${publicJobCols}, description, questions FROM jobs WHERE id = ? AND client_id = ? AND ${ON_CAREERS}`, int(req.params.id), client.id);
   if (!job) bad('This role is no longer open.', 404);
   job.questions = json(job.questions, []);
   res.json({ client, job, agencyName: getSetting('agency_name', '') });
@@ -464,7 +467,7 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
   let stored = false; // true once the uploaded résumé belongs to a saved application
   try {
     const client = q.get(`SELECT * FROM clients WHERE slug = ? AND status != 'ended'`, req.params.slug);
-    const job = client && q.get(`SELECT * FROM jobs WHERE id = ? AND client_id = ? AND status = 'open'`, int(req.params.id), client.id);
+    const job = client && q.get(`SELECT * FROM jobs WHERE id = ? AND client_id = ? AND ${ON_CAREERS}`, int(req.params.id), client.id);
     if (!job) bad('This role is no longer open.', 404);
     const b = req.body || {};
     if (b.company_website) return res.json({ ok: true }); // honeypot field, filled only by bots
@@ -491,8 +494,9 @@ api.post('/public/careers/:slug/jobs/:id/apply', rateLimit('apply', 10, 10 * 600
     stored = Boolean(result.appId);
 
     // Somebody already in this job is not written to again, with one exception: a person who came through the
-    // agency's confidential post has not been told that it is this job, so this form answers them exactly as it
-    // would a new applicant. Otherwise the missing confirmation would tell them which employer the post was for.
+    // agency's confidential post has not been told that it is this job, so the first time they apply here this form
+    // answers them exactly as it would a new applicant. Otherwise the missing confirmation would tell them which
+    // employer the post was for. After that first time they are a repeat applicant here like any other.
     const confirm = result.appId ?? board.appliedAgainDirectly(result.duplicate, logActivity);
     // The address is unverified, so cap how many confirmations any one address can be sent.
     if (confirm && recentlyMailed(email) < 3) {
@@ -585,6 +589,8 @@ api.get('/nav', (req, res) => {
       AND NOT EXISTS (SELECT 1 FROM scorecards sc WHERE sc.interview_id = i.id AND sc.user_id = p.user_id) ${where}`, req.user.id, now(), ...p),
     // What is still on this person's own to-do list, whichever client the workspace is showing. The agency's only.
     ...(isAgency(req.user) ? { todo: todos.openCount(req.user.id) } : {}),
+    // Confidential posts that are switched on but not public: the check, or a change to the job, stands in their way. The agency's only.
+    ...(isAgency(req.user) ? { board_down: board.postsDown() } : {}),
   });
 });
 
@@ -708,8 +714,8 @@ api.patch('/users/:id', agencyOnly, (req, res) => {
   if (b.password !== undefined || b.active === false) q.run('DELETE FROM sessions WHERE user_id = ?', target.id);
   // Links this person handed out stop working with them, so nobody can be let in on their say-so after they have left.
   if (b.active === false) q.run('DELETE FROM invites WHERE created_by = ? AND used_at IS NULL', target.id);
-  if (target.client_id) board.clientChanged(target.client_id); // a changed name is checked for in that client's confidential posts
-  res.json({ ok: true });
+  // A changed name is checked for in that client's confidential posts, and whoever changed it is told if one came down.
+  res.json({ ok: true, ...(target.client_id ? board.clientChanged(target.client_id) : {}) });
 });
 
 // ---------- clients ----------
@@ -792,14 +798,16 @@ const jobSelect = `
     (SELECT COUNT(*) FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.job_id = j.id AND a.status = 'active' AND s.kind = 'applied') AS new_applicants,
     (SELECT COUNT(*) FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.job_id = j.id AND a.status = 'active' AND s.kind = 'interview') AS interviewing,
     (SELECT COUNT(*) FROM applications a JOIN stages s ON s.id = a.stage_id WHERE a.job_id = j.id AND a.status = 'active' AND s.kind = 'offer') AS offers,
-    (SELECT COUNT(*) FROM applications a WHERE a.job_id = j.id AND a.status = 'hired') AS hires
+    (SELECT COUNT(*) FROM applications a WHERE a.job_id = j.id AND a.status = 'hired') AS hires,
+    j.id IN (${board.OFF_CAREERS}) AS off_careers
   FROM jobs j JOIN clients cl ON cl.id = j.client_id LEFT JOIN users u ON u.id = j.hiring_manager_id LEFT JOIN users cu ON cu.id = j.created_by`;
 /** Changes whenever the brief or the ideal profile is saved, so a form opened on an older copy can be refused instead of overwriting the newer one. */
 const briefVersion = (j) => crypto.createHash('sha1').update(`${j.brief ?? ''}\n${j.ideal_profile ?? ''}`).digest('hex').slice(0, 16);
 /** Parse the JSON columns and drop the agency-only internal brief for client users. */
 function hydrateJob(j, user) {
-  const { ideal_profile, brief, fee_percent, ...rest } = j; // agency-only: the brief, and the fee the client pays
-  return { ...rest, ...(isAgency(user) ? { ideal_profile, brief: json(brief, {}), brief_version: briefVersion(j), fee_percent } : {}), questions: json(j.questions, []), criteria: json(j.criteria, []) };
+  const { ideal_profile, brief, fee_percent, off_careers, ...rest } = j; // agency-only: the brief, and the fee the client pays
+  // careers_page: whether the job is listed on the client's careers page while it is open. Everybody is told that much, and not why.
+  return { ...rest, careers_page: !off_careers, ...(isAgency(user) ? { ideal_profile, brief: json(brief, {}), brief_version: briefVersion(j), fee_percent } : {}), questions: json(j.questions, []), criteria: json(j.criteria, []) };
 }
 
 // The recruiter brief: free-text sections and one-item-per-line lists. Only these keys are stored.
@@ -1305,7 +1313,7 @@ api.post('/applications/:id/reject', async (req, res) => {
     reporting.leftPipeline(a.id);
   });
   const sent = req.body?.send_email === true && a.candidate_email
-    ? await sendTemplate('rejection', { applicationId: a.id, to: a.candidate_email, vars: mailVars(a, req.user), userId: req.user.id, allow: board.mayBeSent(a) }) : null;
+    ? await sendTemplate('rejection', { applicationId: a.id, to: a.candidate_email, vars: mailVars(a, req.user), userId: req.user.id, allow: board.mayBeSent(a), reword: board.reword(a) }) : null;
   res.json({ ok: true, ...board.heldNotice(sent, req.user) });
 });
 
@@ -1607,7 +1615,7 @@ api.post('/interviews', async (req, res) => {
     return iid;
   });
   const sent = b.notify && a.candidate_email ? await sendTemplate('interview_invite', {
-    applicationId: a.id, to: a.candidate_email, userId: req.user.id, allow: board.mayBeSent(a),
+    applicationId: a.id, to: a.candidate_email, userId: req.user.id, allow: board.mayBeSent(a), reword: board.reword(a),
     vars: { ...mailVars(a, req.user), interview_time: clean(b.time_label, 120) || starts.toUTCString(), interview_format: KIND_LABELS[kind], interview_location: clean(b.location, 300) || 'Details to follow' },
   }) : null;
   res.json({ id, ...board.heldNotice(sent, req.user) });
@@ -1642,7 +1650,7 @@ api.patch('/interviews/:id', async (req, res) => {
   if (changed && b.notify) {
     const a = loadApp(i.application_id, req.user);
     if (a.candidate_email) sent = await sendTemplate('interview_invite', {
-      applicationId: a.id, to: a.candidate_email, userId: req.user.id, allow: board.mayBeSent(a),
+      applicationId: a.id, to: a.candidate_email, userId: req.user.id, allow: board.mayBeSent(a), reword: board.reword(a),
       vars: { ...mailVars(a, req.user), interview_time: clean(b.time_label, 120) || new Date(changed.starts_at).toUTCString(), interview_format: KIND_LABELS[changed.kind], interview_location: changed.location || 'Details to follow' },
     });
   }
@@ -1704,7 +1712,7 @@ api.get('/dashboard', (req, res) => {
     `${interviewSelect} WHERE i.status = 'scheduled' AND i.starts_at >= ? AND a.status IN ('active', 'hired') ${cid ? 'AND cl.id = ?' : ''} ORDER BY i.starts_at LIMIT 6`,
     new Date(Date.now() - 3600000).toISOString(), ...p));
   const jobs = q.all(`${jobSelect} WHERE j.status = 'open' ${w} ORDER BY new_applicants DESC, j.opened_at LIMIT 8`, ...p)
-    .map(({ description, ideal_profile, brief, fee_percent, questions, criteria, ...j }) => j);
+    .map(({ description, ideal_profile, brief, fee_percent, questions, criteria, off_careers, ...j }) => j);
   const recent = q.all(
     `SELECT ac.id, ac.type, ac.detail, ac.created_at, ac.application_id, u.name AS user_name, c.name AS candidate_name, j.title AS job_title, cl.name AS client_name,
        -- The moments worth shouting about: into an interview stage, an interview booked, approved by the hiring team,

@@ -621,7 +621,27 @@ CREATE TABLE IF NOT EXISTS board_applications (
   client_known_at TEXT,                              -- when somebody ticked "Knows who the client is"
   client_known_by INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
-CREATE INDEX IF NOT EXISTS idx_board_applications_post ON board_applications(post_id);`);
+CREATE INDEX IF NOT EXISTS idx_board_applications_post ON board_applications(post_id);
+-- Other names a client goes by, which the check looks for as it looks for the client's own name: a brand, a
+-- product, a short name ("TD" for the Toronto-Dominion Bank). The agency lists them; the public never sees them.
+CREATE TABLE IF NOT EXISTS board_names (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (client_id, name)
+);`);
+// Added after the board's tables were first made. A database that already has those tables gets the columns; its rows are left as they are.
+// 1 = while the post is switched on, the job is left off the client's own careers page, so the two adverts cannot be compared.
+addColumn('board_posts', 'hide_from_careers', 'INTEGER NOT NULL DEFAULT 0');
+// 1 = the salary range is shown rounded outwards, not to the job's exact figures.
+addColumn('board_posts', 'round_salary', 'INTEGER NOT NULL DEFAULT 0');
+// 1 = the check took the post down while it was public. It gets a new address when it next goes public, so the
+// address that copies of the old text are filed under leads nowhere.
+addColumn('board_posts', 'renew', 'INTEGER NOT NULL DEFAULT 0');
+// When somebody who came through the post first applied for the same job on the client's careers page (see board.js).
+addColumn('board_applications', 'direct_applied_at', 'TEXT');
 // ---------- end of our job board ----------
 
 export const q = {

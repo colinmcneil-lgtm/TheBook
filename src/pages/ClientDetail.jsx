@@ -17,7 +17,7 @@ export default function ClientDetail() {
   const [modal, setModal] = useState(null);
   const { data, error } = useApi(`/clients/${id}`);
   const { data: jobs, error: jobsError } = useApi(url('/jobs', { client_id: id }));
-  const [setActive] = useAction(async (user, active) => { await api.patch(`/users/${user.id}`, { active }); toast(active ? `${user.name} can sign in again` : `${user.name} can no longer sign in`); bump(); });
+  const [setActive] = useAction(async (user, active) => { const answer = await api.patch(`/users/${user.id}`, { active }); toast(active ? `${user.name} can sign in again` : `${user.name} can no longer sign in`); if (answer.board_notice) toast(answer.board_notice, 'error'); bump(); });
 
   if (error) return <Page title="This client could not be opened"><Pending error={error === 'Not found' ? 'It does not exist, or you do not have access to it.' : error} /><Link to="/clients" className="mt-4 inline-block text-sm font-medium text-brand-700 hover:underline">Back to clients</Link></Page>;
   if (!data || !jobs) return <Pending error={jobsError} />;

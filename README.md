@@ -158,16 +158,27 @@ about it). On it you switch on **Post on our website (confidential)** and fill i
 - a **location as it should be shown**, such as "Greater Toronto Area". It starts empty and is never copied from
   the client;
 - the **working pattern and contract**, which are the job's own;
-- whether to **show the salary range**;
-- the **advert text**, written for the purpose.
+- whether to **show the salary range**, and whether to **round it** (85,000 to 105,000 is shown as 80,000 to
+  110,000), which is how a new post starts;
+- the **advert text**, written for the purpose;
+- whether to **keep the job off the client's careers page** while the post is switched on. A new post starts with
+  this ticked: the job is then advertised on your board only, and there is no second advert to compare it with.
 
 That is everything the public is ever given about the job. The tab shows a preview drawn by the same code as the
 public page, the post's public link, how many people have applied through it, and a history of when it went public
 or came down and why. **Jobs, Our job board** lists every post with whether it is public.
 
 A post is public while three things are true: it is switched on, its job is open, and the check below finds
-nothing. Switching it off, pausing or closing the job, or ending the work with the client takes it down. Its address
-stays the same if it comes back.
+nothing. Switching it off, pausing or closing the job, or ending the work with the client takes it down, and its
+address stays the same if it comes back. A post that **the check** took down comes back at a **new address**: what
+was public at the old one had something in it that should not have been, and the old address then answers like one
+that was never a post, so a copy kept by a search engine or a link preview no longer leads to the post. A recruiter
+can also give a post a new address by hand ("Give it a new address"), for when a person spotted what the check
+could not.
+
+When the check takes a public post down, the admins and whoever last saved the post are **told by e-mail**, the
+Dashboard shows how many posts are switched on but not public, and whoever made the change is told on the spot. A
+client's own users are told nothing.
 
 ### Drafting the advert
 
@@ -175,7 +186,10 @@ With an AI key connected (the same `ANTHROPIC_API_KEY` as job autofill), **Draft
 advert to the AI service and asks for it to be written again with everything that could identify the employer taken
 out: the name and anything made from it, products and brand names, founders and other named people, addresses and
 neighbourhoods, exact headcount or funding figures, awards, slogans, links, and unusual phrases that could be
-searched for. The employer is described only in general terms ("a Series B health-tech company"). The client's name,
+searched for. The employer is described only in general terms ("a Series B health-tech company"), a step more
+generally than the client's advert does; how big the employer is (customers, sites, staff, revenue) is left out, not
+rounded; and an unusual title is replaced by the common one for the same job. A title you have already changed
+from the job's own is kept. The client's name,
 website and the names of its people are sent too, so that the service knows what to keep out. The draft lands in the
 form, with a list of what was taken out; nothing is saved until you save it. A draft that has not come back after two
 and a half minutes is given up on (`BOARD_AI_TIMEOUT_MS` changes how long). Without a key, you write the advert
@@ -189,19 +203,28 @@ Before a post can go public, and again whenever the post, the job or the client 
 and the text are searched for:
 
 - the client's **name**, and each **distinctive word** of it. Words that say what kind of company it is ("Health",
-  "Logistics", "Group", "Inc") are not looked for on their own; the whole name always is;
+  "Logistics", "Group", "Inc") are not looked for on their own; the whole name always is. A word of two letters
+  ("TD", "GM", "3M") is found where it is written in capitals or as the name has it. Also found: the name **without
+  its last words** ("Royal Bank" for Royal Bank of Canada, "Canada Health" for Canada Health Group), its
+  **initials** in capitals ("RBC", "TTC", "EY", and "TD" for Toronto-Dominion Bank), and a name without its final s
+  ("Loblaw" for Loblaws);
+- **other names you list for the client** on the tab (brands, products, short names). The list belongs to the
+  client: every post for that client is checked against it, at once;
 - the client's **careers address** (the part after `/careers/`), its **website** and the name in the website's
   address;
 - the names of **everybody with a login at the client**, whether or not they still work there. The job's hiring
   manager is among them, unless the hiring manager is one of your own team, whose name gives no client away. A full name is found however it is written; a first name or surname on its own is found where it
   is written with a capital, because "may", "will" and "grace" are also ordinary words;
 - the **domains of their e-mail addresses** (not the public ones such as gmail.com);
-- **any link, e-mail address or phone number at all**, whoever it belongs to.
+- **any link, e-mail address, phone number, hashtag or social-media handle at all**, whoever it belongs to.
 
 Capitals and accents make no difference ("LUMEN", "Lümen"), a name broken up with punctuation or spaces is still
-found ("L.u.m.e.n", "Lumen-Health", "L u m e n"), and so is a word of the name at the start of a longer one
-("Lumens", "TeamLumen"). Each thing found is shown in a sentence that says what it is and where, and the check also
-lists what it looked for.
+found ("L.u.m.e.n", "Lumen-Health", "L u m e n"), and so is a word of the name at the start or the end of a longer
+one ("Lumens", "TeamLumen", "teamlumen") and, when it is six letters or more, anywhere inside one
+("#lifeatbrambleworth"). Characters that cannot be seen (joiners, soft hyphens) are taken out of a post before it is
+stored, so what is checked is what is shown. Look-alike letters from the Cyrillic and Greek alphabets and small
+capitals are read as the letters they look like, and a word that mixes two alphabets is refused outright. Each
+thing found is shown in a sentence that says what it is and where, and the check also lists what it looked for.
 
 **A post that fails cannot go public, and a public post that starts to fail comes down** until it is fixed: a
 client is renamed to a word that is in the advert, somebody whose name is in it joins the client's hiring team. This
@@ -209,18 +232,28 @@ does not depend on every screen remembering to ask: before anything is shown to 
 switched on are checked again if anything at all has been saved since the last look.
 
 **Overruling a false alarm.** A client called North will be found in "North America". An admin can overrule a
-single word of a name that is plainly a false alarm. It is recorded with their name and the date, shown on the tab,
+word of a name, a short form of it or its initials where that is plainly a false alarm. It is recorded with their name and the date, shown on the tab,
 and holds for that word with the same words either side of it only: "North" anywhere else in the post is found
 again. A whole name spelt out, a link or an address can never be overruled.
 
 **What the check cannot do.** It finds names and addresses. It cannot tell that "the company behind the city's
 blue rental bikes" gives a client away, or that a street name does. Read each advert as a stranger would.
 
-**Matching the two adverts.** While a job is open, the client's own advert is public on the client's careers
-page. The tab says so, and warns when the post shares a sentence word for word with that page (anybody who searches
-for the sentence finds both), or when the title and the salary range shown are the same on both. These are
-warnings; they do not stop the post. A post is only public while its job is open, and an open job is on the
-client's careers page: there is not yet a way to advertise a job on your board alone.
+**Matching the two adverts.** A client's careers page and your board are at the same web address, so anybody who
+suspects a client can put its careers page beside your board. A new post therefore keeps its job **off the
+client's careers page** for as long as the post is switched on: the job is not listed there, and its address and
+form there answer as they do for a job that is not open. The job page in the workspace says "Not listed on the
+careers page", to your team and to the client's alike, and nothing more. Untick the box only when the client needs
+the job on its own page too. The check then compares the two adverts, and **stops the post** when the title is the
+same or when both show a salary range (the same figures, or yours rounded: the client's range sits inside it). It
+**warns** when a sentence is shared word for word, and always that both are public: working pattern and contract
+are the job's own on both, and both come down at the same moment when the job closes.
+
+**Clients' careers pages and search engines.** While any post is switched on, clients' careers pages are sent
+with a request to search engines not to list them, so that a search of your workspace's address does not set your
+clients out beside the board. The pages work as ever for anybody given their link. An admin can switch this off in
+Settings, Agency, Our job board. `/robots.txt` lets search engines read the pages and the board's own data, and
+nothing else under `/api`.
 
 ### The public board
 
@@ -229,7 +262,8 @@ client's careers page: there is not yet a way to advertise a job on your board a
 - A post's address is a **random token**. It is not the job's number and cannot be turned into it; no public route
   takes a job's number and returns a post, or the other way round.
 - The pages and the feed are built from a **list of allowed fields**: the token, title, location, working pattern,
-  contract, the salary range if you chose to show it, the day it was posted, and the text. Never the client, its
+  contract, the salary range if you chose to show it (rounded, if you chose that), the day it was posted, and the
+  text. Never the client, its
   colour or careers address, the job's number, who wrote the post, how many applied, or any other date.
 - An address that was never a post, a post that is switched off, one that came down and one whose job was deleted
   all answer the same: "This role is no longer open."
@@ -258,9 +292,13 @@ is linked beside it. The client's own screening questions and privacy notice are
   - an e-mail a recruiter writes by hand shows a warning beside the send button when it names the client ("This
     candidate applied through your confidential post. This message names ..."), and the button becomes "Send
     anyway". Sent that way and delivered, the tick is made for you.
-- Somebody already in the job who applies again on the board, and somebody who came through the board and then
-  applies on the client's careers page, is answered exactly as a new applicant would be, confirmation included.
-  A different answer would tell them which employer the post was for.
+- Somebody already in the job who applies again on the board is answered exactly as a new applicant would be,
+  confirmation included. Somebody who came through the board and then applies for the same job on the client's
+  careers page (when it is on both) is answered there as a new applicant the first time, and as somebody who has
+  already applied after that, exactly as for any other job. A different answer, or a different number of e-mails,
+  would tell them which employer the post was for.
+- Where a template says "The {{company}} hiring team" or starts a sentence with the company, the e-mail reads "Our
+  client’s hiring team" and "Our client ...", in what The Book sends and in the e-mail window alike.
 
 ### Getting it onto your own website
 
@@ -269,11 +307,21 @@ The Book cannot put a page on a website it does not run, so the board is offered
 
 1. **Link to it.** The board's own address, `https://<your workspace>/board`.
 2. **Show it inside a page of your website.** A snippet to paste where the jobs should appear: a frame that shows
-   the board, and a few lines of script that size the frame to its contents, so the page scrolls as one. Visitors
-   search, open a post and apply without leaving your page. No cookies are involved.
+   the board, and a short script that sizes the frame to its contents, so the page scrolls as one. Visitors
+   search, open a post and apply without leaving your page. No cookies are involved. The script also gives **each
+   role an address on your own website**: your page's address with `?role=<token>` on the end opens that role, and
+   the address in the browser follows the visitor from the list to a role and back, so a role can be bookmarked,
+   shared and linked to. It brings the role, or the application form, into view clear of a menu fixed to the top
+   of your page. And if the board has said nothing after eight seconds (your website is not on the list), it puts
+   a plain link, "See our open roles", in place of the blank space.
 3. **Read it as data.** `https://<your workspace>/board/feed.json`: every public post as plain JSON (`id`, `url`,
    `title`, `location`, `working_pattern`, `contract`, `salary`, `posted`, `text`), for a web developer who wants to
-   draw the list themselves. Any website may read it. People still apply on the post's page on the board.
+   draw the list themselves. Any website may read it. People apply at each post's `url`.
+
+Once the board is showing inside a page of your website, paste that page's address into **Address of the jobs page
+on your website** in the same setting. From then on a role's address is on your website: it is what "Copy link" on
+a post gives, what the feed's `url` holds, and what search engines and link previews are told is the address of the
+board and of each role.
 
 The board's pages, and only they, may be shown inside another website's page, and only by the websites listed in
 that setting (`otterbrook.ca` and `www.otterbrook.ca` to begin with). Every other page of The Book still refuses to
@@ -286,32 +334,40 @@ leads.
    agency's candidate privacy notice, and check that the list of websites holds the address of your website as
    visitors see it (with and without `www`). Save.
 2. If the workspace is reached at a domain of your own rather than the host's, set `APP_URL` to it where The Book
-   is hosted, so that the links in the feed and the addresses given to search engines use it. (Railway's own
-   address is detected by itself.)
+   is hosted, so that links use it. (Railway's own address is detected by itself.)
 3. On each job you want to advertise: open its **Confidential post** tab, write the advert or have it drafted,
-   give it a location, deal with whatever the check finds, tick **Post on our website (confidential)** and save.
-   Read the preview as a stranger would.
+   give it a location, list any other names the client goes by, deal with whatever the check finds, tick **Post on
+   our website (confidential)** and save. Leave **Keep this job off the client's careers page** ticked unless the
+   client needs the job on its own page as well. Read the preview as a stranger would.
 4. On your website, add a page (or open your careers page) and either link to the board or paste the snippet:
    in Squarespace into a **Code** block, in Webflow into an **Embed** element, in WordPress into a **Custom HTML**
-   block, in plain HTML anywhere in the page. Publish the page and look at it: the board should appear, and grow
-   and shrink as you search and open a post.
-5. Send one application through it yourself and check that it arrives in the Inbox with the source "Our website"
+   block, in plain HTML anywhere in the page. Publish the page and look at the published page, not the editor's
+   preview: the board should appear, and grow and shrink as you search and open a post.
+5. Paste the address of that page into **Address of the jobs page on your website** and save, so that each role
+   has an address on your website.
+6. Send one application through it yourself and check that it arrives in the Inbox with the source "Our website"
    and that the confirmation e-mail reads as you want.
 
-If the board does not appear inside your page, the browser's console says which website was refused: add that
-address to the list. **Wix** is the likely case: it shows pasted code (Embed Code, Embed HTML) inside a frame of its
-own, served from an address of Wix's rather than yours, and that address has to be in the list too. Wix's "Embed a
-site" with the board's address followed by `?embed=1` needs only your own address in the list, but has a fixed
-height.
+**A blank space, or only a link saying "See our open roles", where the jobs should be?** The page's website is not
+in the list, so the board refused to show there. Open the published page, look at the address bar, and add the
+first part of that address (for example `www.otterbrook.ca`) to the list. Site builders show a page from an address
+of their own while it is being edited, so the board may not show in the editor. **Wix** shows pasted code from an
+address of Wix's own at all times: on Wix, link to the board (way 1) instead.
 
 ### Before you rely on it
 
-- The snippet was tried in Chromium, at computer and phone widths, pasted into a plain page served from another
-  address standing in for otterbrook.ca: the board showed, sized itself, listed, opened a post and took an
-  application inside the frame; the same page at an address that was not on the list was refused; and a page of The
-  Book that is not the board was refused even from the listed address. **It has not been tried on Squarespace, Wix,
+- The snippet was tried in Chromium, at computer and phone widths, pasted into a plain page with a menu fixed to
+  its top, served from another address standing in for otterbrook.ca: the board showed, sized itself, listed,
+  opened a role with its top in view, gave the role an address on that page which opened the role again when the
+  page was reloaded, brought the form into view below the menu, and took an application inside the frame; the same
+  page at an address that was not on the list showed the link in place of the board after eight seconds. **It has not been tried on Squarespace, Wix,
   Webflow or WordPress, on the real otterbrook.ca, or in Safari or Firefox.**
 - "Draft it for me" was only run against a stand-in for the AI service, so read the first real drafts closely.
+- A job on your board and on its client's careers page at once can still be compared by anybody who has both pages
+  open: the working pattern, the contract and what the job is are the same. Keeping the job off the careers page,
+  which is how a post starts, is the only thing that rules it out.
+- Your board and your clients' careers pages share one web address. Somebody who knows a client's careers address
+  there can see that it is a client of yours, as they could before the board existed.
 - Whether search engines list the posts, and how link previews look in a given app, was not checked: the details
   are in the pages, in the form those services document.
 

@@ -10,7 +10,8 @@ import { Button, Checkbox, Field, Input, Loading, Select, Textarea, useAction } 
 //
 // The same pages are shown inside the agency's website (the snippet in Settings puts them in a frame, with ?embed=1
 // in the address). Shown that way they leave out their own header and footer, since the website has its own, and
-// tell the page around them how tall they are so the frame can be sized to fit.
+// tell the page around them how tall they are so the frame can be sized to fit, which role is open so the website's
+// own address can say so, and when to bring the board back into view.
 
 function usePublic(path) {
   const [state, setState] = useState({ data: null, error: null });
@@ -23,7 +24,7 @@ function usePublic(path) {
 }
 
 /** Pick white or near-black text for a given background colour. */
-function inkOn(hex) {
+export function inkOn(hex) {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4 ? '#1c1917' : '#ffffff';
 }
@@ -45,24 +46,52 @@ function useHead(title, description) {
 }
 
 /**
- * Tell the page around the frame how tall the board is, whenever that changes, and ask it to bring the top of the
- * board into view when the visitor moves from the list to a post or back. The message says nothing but that.
+ * Say something to the page around the frame. It is told how tall the board is, which role is open, and when and
+ * where to bring the board into view. Every message is one of those and carries nothing else.
  */
-function useFrameSize(box, embedded, at) {
+const tellPage = (message) => { if (window.parent !== window) window.parent.postMessage({ board: 'the-book', ...message }, '*'); };
+
+// Which of the board's pages was on show last. It is kept here, outside the pages: while the next one is loading
+// nothing of the last one is left on screen to remember it by.
+let lastShown = null;
+
+/**
+ * What every page of the board is drawn in, found or not. Shown inside another website's page it tells that page
+ * how tall it is whenever that changes, which role is open, and to bring the top of the board into view when the
+ * visitor has moved from one of the board's pages to another. On its own address it goes to the top of the page itself.
+ */
+function Frame({ embedded, at, role = null, className, children }) {
+  const box = useRef(null);
   useLayoutEffect(() => {
-    if (!embedded || !box.current || window.parent === window) return undefined;
-    const tell = () => window.parent.postMessage({ board: 'the-book', height: Math.ceil(box.current.getBoundingClientRect().height) }, '*');
+    if (!embedded || !box.current) return undefined;
+    const tell = () => tellPage({ height: Math.ceil(box.current.getBoundingClientRect().height) });
     tell();
     const watcher = new ResizeObserver(tell);
     watcher.observe(box.current);
     return () => watcher.disconnect();
-  }, [embedded, box]);
-  const first = useRef(true);
+  }, [embedded]);
   useEffect(() => {
-    if (first.current) { first.current = false; return; }
-    if (embedded && window.parent !== window) window.parent.postMessage({ board: 'the-book', top: true }, '*');
-    else window.scrollTo({ top: 0 });
-  }, [at, embedded]);
+    const moved = lastShown !== null && lastShown !== at;
+    lastShown = at;
+    if (embedded) {
+      tellPage({ role });
+      if (moved) tellPage({ top: true });
+    } else if (moved) window.scrollTo({ top: 0 });
+  }, [at, role, embedded]);
+  return <div ref={box} className={className}>{children}</div>;
+}
+
+/**
+ * The workspace's page colour is not the board's: on its own the board is white, and inside another page it shows
+ * that page through. Set by each of the board's pages for as long as it is open, loading included, so the
+ * workspace's grey never shows inside a website.
+ */
+function usePageColour(embedded) {
+  useLayoutEffect(() => {
+    const before = document.body.style.background;
+    document.body.style.background = embedded ? 'transparent' : '#ffffff';
+    return () => { document.body.style.background = before; };
+  }, [embedded]);
 }
 
 function Logo({ board, size = 36 }) {
@@ -70,26 +99,33 @@ function Logo({ board, size = 36 }) {
   return <img src={`/api/public/board/logo?v=${board.logo}`} alt="" width={size} height={size} className="shrink-0 rounded-lg bg-white object-contain" style={{ width: size, height: size }} />;
 }
 
-function Shell({ board, embedded, at, hero, children }) {
-  const box = useRef(null);
-  useFrameSize(box, embedded, at);
-  // The workspace's page colour is not the board's: on its own the board is white, and inside another page it shows that page through.
+/** The browser tab shows the agency's logo, when it has given the board one, in place of The Book's. */
+function useTabIcon(board) {
+  const logo = board?.logo;
   useEffect(() => {
-    const before = document.body.style.background;
-    document.body.style.background = embedded ? 'transparent' : '#ffffff';
-    return () => { document.body.style.background = before; };
-  }, [embedded]);
+    if (!logo) return undefined;
+    const before = [...document.head.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]')];
+    const icon = document.createElement('link');
+    icon.rel = 'icon';
+    icon.href = `/api/public/board/logo?v=${logo}`;
+    before.forEach((link) => link.remove());
+    document.head.append(icon);
+    return () => { icon.remove(); document.head.append(...before); };
+  }, [logo]);
+}
+
+function Shell({ board, embedded, at, role, hero, children }) {
+  useTabIcon(board);
   const ink = inkOn(board.color);
-  if (embedded) return <div ref={box} className="px-1 pt-1 pb-6 text-stone-900">{children}</div>;
+  if (embedded) return <Frame embedded at={at} role={role} className="px-1 pt-1 pb-6 text-stone-900">{children}</Frame>;
   return (
-    <div ref={box} className="flex min-h-full flex-col bg-white">
+    <Frame embedded={false} at={at} className="flex min-h-full flex-col bg-white">
       <header style={{ background: board.color, color: ink }}>
         <div className="mx-auto flex max-w-4xl items-center gap-3 px-5 py-4">
           <Link to="/board" className="flex min-w-0 items-center gap-3">
             <Logo board={board} />
             <span className="truncate text-[17px] font-semibold tracking-tight">{board.name}</span>
           </Link>
-          <span className="ml-auto hidden text-sm opacity-80 sm:block">Careers</span>
         </div>
         {hero}
       </header>
@@ -100,19 +136,21 @@ function Shell({ board, embedded, at, hero, children }) {
           {extUrl(board.privacy_url) && <a href={extUrl(board.privacy_url)} target="_blank" rel="noopener noreferrer" className="underline hover:text-stone-800">Privacy notice</a>}
         </div>
       </footer>
-    </div>
+    </Frame>
   );
 }
 
+/** A page of the board that is not there: an unknown address, or a role that is no longer open. Inside a website's page it is sized and placed like any other page of the board. */
 function Missing({ message }) {
+  const embedded = useEmbedded();
   return (
-    <div className="flex min-h-64 items-center justify-center bg-white px-6 py-16 text-center">
+    <Frame embedded={embedded} at="missing" className={embedded ? 'px-1 py-10 text-center text-stone-900' : 'flex min-h-64 items-center justify-center bg-white px-6 py-16 text-center'}>
       <div>
         <p className="text-lg font-semibold text-stone-900">{message || 'This page could not be found.'}</p>
         <p className="mt-1 text-sm text-stone-500">The link may be out of date.</p>
-        <Link to={boardPath(null, new URLSearchParams(window.location.search).get('embed') === '1')} className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-700 hover:underline"><ArrowLeft className="size-4" />See all open roles</Link>
+        <Link to={boardPath(null, embedded)} className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-700 hover:underline"><ArrowLeft className="size-4" />See all open roles</Link>
       </div>
-    </div>
+    </Frame>
   );
 }
 
@@ -170,6 +208,7 @@ function AdvertText({ text }) {
 
 export function Board() {
   const embedded = useEmbedded();
+  usePageColour(embedded);
   const { data, error } = usePublic('/public/board');
   const [search, setSearch] = useState('');
   const [place, setPlace] = useState('');
@@ -270,6 +309,7 @@ export function PostView({ board, post, apply }) {
 export function BoardPost() {
   const { token } = useParams();
   const embedded = useEmbedded();
+  usePageColour(embedded);
   const { data, error } = usePublic(`/public/board/posts/${token}`);
   const [form, setForm] = useState({ name: '', email: '', phone: '', linkedin: '', cover_note: '', company_website: '' });
   const [file, setFile] = useState(null);
@@ -289,6 +329,15 @@ export function BoardPost() {
     setDone(true);
   });
 
+  // Inside a website's page the frame is as tall as the board, so it is that page that has to scroll: it is told how far down the form is.
+  const toForm = (e) => {
+    e.preventDefault();
+    const form = document.getElementById('apply');
+    if (!form) return;
+    if (embedded) tellPage({ scrollTo: Math.round(form.getBoundingClientRect().top + window.scrollY) });
+    else form.scrollIntoView({ behavior: 'smooth' });
+  };
+
   if (error) return <Missing message={error} />;
   if (!data) return <Loading className="h-full" />;
   const { board, post } = data;
@@ -297,7 +346,7 @@ export function BoardPost() {
 
   if (done) {
     return (
-      <Shell board={board} embedded={embedded} at={`${token}:done`}>
+      <Shell board={board} embedded={embedded} at={`${token}:done`} role={token}>
         <div className="py-14 text-center">
           <CircleCheck className="mx-auto size-12" style={{ color: board.color }} />
           <h1 className="mt-4 text-2xl font-semibold tracking-tight text-stone-900">Thank you, {firstName(form.name)}.</h1>
@@ -309,11 +358,11 @@ export function BoardPost() {
   }
 
   return (
-    <Shell board={board} embedded={embedded} at={token}>
+    <Shell board={board} embedded={embedded} at={token} role={token}>
       {back}
       <div className="mt-4">
         <PostView board={board} post={post}
-          apply={<a href="#apply" onClick={(e) => { e.preventDefault(); document.getElementById('apply')?.scrollIntoView({ behavior: 'smooth' }); }} className="mt-5 inline-flex h-11 items-center rounded-lg px-5 text-[15px] font-semibold" style={accent}>Apply for this role</a>} />
+          apply={<a href="#apply" onClick={toForm} className="mt-5 inline-flex h-11 items-center rounded-lg px-5 text-[15px] font-semibold" style={accent}>Apply for this role</a>} />
       </div>
 
       <form id="apply" className="mt-12 scroll-mt-6 rounded-2xl border border-line bg-stone-50 p-5 sm:p-7" onSubmit={(e) => { e.preventDefault(); submit(); }}>
@@ -324,7 +373,7 @@ export function BoardPost() {
           <Field label="Email"><Input type="email" {...bind('email')} required autoComplete="email" className="!h-10" /></Field>
           <Field label="Phone (optional)"><Input type="tel" {...bind('phone')} autoComplete="tel" className="!h-10" /></Field>
           <Field label="LinkedIn profile (optional)"><Input {...bind('linkedin')} placeholder="https://" className="!h-10" /></Field>
-          <Field label="Résumé / CV" hint="PDF, Word, RTF or text, up to 8 MB." className="sm:col-span-2">
+          <Field label="Résumé / CV (optional)" hint="PDF, Word, RTF or text, up to 8 MB." className="sm:col-span-2">
             <input type="file" accept=".pdf,.doc,.docx,.rtf,.txt" onChange={(e) => setFile(e.target.files[0] || null)}
               className="block w-full rounded-lg border border-line bg-white text-sm text-stone-600 file:mr-3 file:h-10 file:border-0 file:border-r file:border-line file:bg-stone-100 file:px-4 file:text-sm file:font-medium file:text-stone-800" />
           </Field>
@@ -337,7 +386,7 @@ export function BoardPost() {
             label={`I agree that ${board.name} may store and process my details to consider me for this role, and may share my application with the employer it is recruiting for.`} />
           {extUrl(board.privacy_url) && (
             <p className="mt-1.5 pl-[26px] text-xs text-stone-500">
-              See how your information is used in {board.name}’s <a href={extUrl(board.privacy_url)} target="_blank" rel="noopener noreferrer" className="underline hover:text-stone-800">privacy notice</a>.
+              See how your information is used in our <a href={extUrl(board.privacy_url)} target="_blank" rel="noopener noreferrer" className="underline hover:text-stone-800">privacy notice</a>.
             </p>
           )}
         </div>
@@ -349,5 +398,6 @@ export function BoardPost() {
 
 /** Any address under /board that is not the list or a post. */
 export function BoardMissing() {
+  usePageColour(useEmbedded());
   return <Missing />;
 }

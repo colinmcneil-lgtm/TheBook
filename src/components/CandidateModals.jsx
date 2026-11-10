@@ -12,6 +12,14 @@ const useForm = (initial) => {
 
 /** Somebody who applied through the agency's confidential post and has not been told who the client is. Only the agency is sent this. */
 const inTheDark = (data) => Boolean(data.board && !data.board.client_known);
+/**
+ * A template filled in with "our client" where the company's name would be, put right where that reads badly: "The
+ * our client hiring team" becomes "Our client’s hiring team", and a sentence does not start with a small letter.
+ * The server does the same to the e-mails it sends by itself (ourClientWording in server/board.js).
+ */
+const ourClientWording = (text) => String(text)
+  .replace(/\b([Tt])he our client\b/g, (m, t) => (t === 'T' ? 'Our client’s' : 'our client’s'))
+  .replace(/(^|[.!?]\s+|\n\s*)our client/g, (m, lead) => `${lead}Our client`);
 /** Said beside a tick that sends one of the automatic e-mails to such a candidate. */
 function ConfidentialNote({ data }) {
   if (!inTheDark(data)) return null;
@@ -184,12 +192,13 @@ export function EmailModal({ data, onClose }) {
   const vars = { candidate_first_name: firstName(data.candidate.name), candidate_name: data.candidate.name, job_title: dark ? data.board.title : data.job.title,
     company: dark ? 'our client' : data.client.name, sender_name: user.name };
   const [applied, setApplied] = useState(null); // the text a template put in, to tell "this template" from "this message"
+  const fill = (text) => (dark ? ourClientWording(renderTemplate(text, vars)) : renderTemplate(text, vars));
   const apply = (id) => {
     const t = templates?.find((x) => String(x.id) === id);
     if (!t) return;
-    setSubject(renderTemplate(t.subject, vars));
-    setBody(renderTemplate(t.body, vars));
-    setApplied(`${renderTemplate(t.subject, vars)}\n${renderTemplate(t.body, vars)}`);
+    setSubject(fill(t.subject));
+    setBody(fill(t.body));
+    setApplied(`${fill(t.subject)}\n${fill(t.body)}`);
   };
   // Asked a moment after the recruiter stops typing: does this message name the client? The server asks itself again when it is sent.
   const [names, setNames] = useState(false);

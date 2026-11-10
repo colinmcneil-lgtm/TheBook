@@ -120,7 +120,22 @@ What we are looking for
 • Five or more years building backend systems. A B.Sc. or M.Eng. helps, e.g. in computing
 • Node.js and ASP.NET are both welcome. Volume next year will double; 37.5hrs a week
 • Salary 85,000 - 105,000 plus a bonus of 10% in 2026-2027`;
-const GOOD = { enabled: true, title: 'Senior Backend Engineer', location: 'Greater Toronto Area', description: CLEAN, show_salary: true };
+// The post as it is usually saved here: the job's exact salary range, and the job kept off Lumen's own careers page.
+const GOOD = { enabled: true, title: 'Senior Backend Engineer', location: 'Greater Toronto Area', description: CLEAN, show_salary: true, round_salary: false, hide_from_careers: true };
+// The post for North. It stays on North's careers page too, under another title and with no salary, so both are public.
+const NORTH_TEXT = 'Our client sells outdoor clothing across Europe and North America.';
+const NORTH = { enabled: true, title: 'Supply Chain Planner', location: 'West of the city', description: NORTH_TEXT, show_salary: false, hide_from_careers: false };
+/** The posts' addresses as they are now: a post the check took down comes back at a new one. */
+async function addresses() {
+  token = (await post(alex, job)).post.token;
+  northToken = (await post(alex, northJob)).post.token;
+}
+/** Send the client's own careers form for a job. */
+function applyOnCareers(slug, jobId, fields, answers = {}) {
+  const form = new FormData();
+  for (const [name, value] of Object.entries({ consent: 'yes', answers: JSON.stringify(answers), ...fields })) form.append(name, value);
+  return visit(`/api/public/careers/${slug}/jobs/${jobId}/apply`, { method: 'POST', body: form });
+}
 
 before(async () => {
   ai = await aiStandIn(AI_PORT);
@@ -157,8 +172,9 @@ before(async () => {
     hiring_manager_id: mayaId, description: ADVERT, questions: [{ label: 'Do you have the right to work in Canada?', type: 'yesno', required: true }] })).id;
   assert.equal(job, 48211);
   database((db) => db.exec('DELETE FROM jobs WHERE id = 48210; DELETE FROM clients WHERE id = 73900;'));
-  northJob = ok(await alex.post('/jobs', { client_id: north, title: 'Supply Chain Planner', status: 'open', work_mode: 'onsite', employment_type: 'contract', description: 'Plan the stock behind North’s range.' })).id;
-  careersBefore = { page: ok(await visit('/api/public/careers/lumen-health')), job: ok(await visit(`/api/public/careers/lumen-health/jobs/${job}`)) };
+  northJob = ok(await alex.post('/jobs', { client_id: north, title: 'Supply Chain Planner, Outerwear', status: 'open', work_mode: 'onsite', employment_type: 'contract', description: 'Plan the stock behind North’s range.' })).id;
+  careersBefore = { page: ok(await visit('/api/public/careers/lumen-health')), job: ok(await visit(`/api/public/careers/lumen-health/jobs/${job}`)),
+    north: ok(await visit('/api/public/careers/nrth-jobs')), northJob: ok(await visit(`/api/public/careers/nrth-jobs/jobs/${northJob}`)) };
 });
 after(async () => {
   await server?.stop();
@@ -171,12 +187,16 @@ after(async () => {
 
 test('a job with no post yet offers one to fill in: the job’s title, and nothing else from the client', async () => {
   const view = await post(alex, job);
-  assert.deepEqual(view.post, { exists: false, enabled: false, title: 'Senior Backend Engineer, Scheduling', location: '', description: '', show_salary: false, token: null, posted_at: null, updated_at: null, updated_by_name: null });
+  // The two cautious choices are made already: a rounded salary range, and the job kept off the client's careers page.
+  assert.deepEqual(view.post, { exists: false, enabled: false, title: 'Senior Backend Engineer, Scheduling', location: '', description: '', show_salary: false, round_salary: true, hide_from_careers: true,
+    token: null, posted_at: null, updated_at: null, updated_by_name: null });
+  assert.deepEqual(view.salary, { exact: { min: 85000, max: 105000 }, rounded: { min: 80000, max: 110000 } });
+  assert.deepEqual([view.link, view.other_names], [null, []]);
   assert.deepEqual(view.state, { live: false, reason: 'off', says: 'Not public: the post is switched off.' });
   assert.equal(view.applied, 0);
   // What the check will look for is said in plain words.
-  assert.deepEqual(view.check.looked_for, ['the client’s name, Lumen Health', '“lumen”, from the name', 'Maya Okonkwo, who has a login at the client', 'Tom Reilly, who has a login at the client',
-    'the e-mail domain @brightclinicgroup.example', 'any link, e-mail address or phone number']);
+  assert.deepEqual(view.check.looked_for, ['the client’s name, Lumen Health', '“lumen”, from the name', 'the initials LH, written in capitals', 'Maya Okonkwo, who has a login at the client', 'Tom Reilly, who has a login at the client',
+    'the e-mail domain @brightclinicgroup.example', 'any link, e-mail address, phone number, hashtag or handle']);
   assert.deepEqual(await onTheBoard(), []);
 });
 
@@ -286,8 +306,8 @@ test('with the client taken out, the post goes public', async () => {
 });
 
 test('a client whose name is an ordinary word: an admin may overrule the one word, and it is on record', async () => {
-  const text = 'Our client sells outdoor clothing across Europe and North America.';
-  let view = await save(priya, northJob, { enabled: true, title: 'Supply Chain Planner', location: 'West of the city', description: text, show_salary: false });
+  const text = NORTH_TEXT;
+  let view = await save(priya, northJob, NORTH);
   northToken = view.post.token;
   assert.equal(view.state.reason, 'problems');
   assert.deepEqual(view.check.problems.map((p) => [p.kind, p.found, p.phrase, p.can_overrule]), [['name', 'North', 'and North America', true]]);
@@ -308,13 +328,14 @@ test('a client whose name is an ordinary word: an admin may overrule the one wor
   assert.deepEqual((await onTheBoard()).sort(), [token, northToken].sort());
 
   // The overrule holds for that word in those surroundings only. The name anywhere else is found again, and the post comes down.
-  view = await save(priya, northJob, { enabled: true, title: 'Supply Chain Planner', location: 'West of the city', description: `${text} Join North today. Our northern stores are busy.`, show_salary: false });
+  view = await save(priya, northJob, { ...NORTH, description: `${text} Join North today. Our northern stores are busy.` });
   assert.deepEqual(view.check.problems.map((p) => [p.found, p.phrase]), [['North', 'Join North today'], ['northern', 'Our northern stores']]);
   assert.deepEqual(view.check.overruled.map((o) => o.phrase), ['and North America']);
   assert.equal(view.state.live, false);
   assert.deepEqual(await onTheBoard(), [token]);
-  view = await save(priya, northJob, { enabled: true, title: 'Supply Chain Planner', location: 'West of the city', description: text, show_salary: false });
+  view = await save(priya, northJob, NORTH);
   assert.equal(view.state.live, true);
+  northToken = view.post.token;
 
   // Withdrawn, it is a problem again; overruled again, it is public again.
   view = ok(await alex.del(`/jobs/${northJob}/board/overrules/${view.check.overruled[0].id}`));
@@ -322,17 +343,54 @@ test('a client whose name is an ordinary word: an admin may overrule the one wor
   assert.deepEqual(view.check.problems.map((p) => p.phrase), ['and North America']);
   view = ok(await alex.post(`/jobs/${northJob}/board/overrules`, { word: alarm.word, key: alarm.key }));
   assert.equal(view.state.live, true);
+  northToken = view.post.token;
   assert.deepEqual(rows('SELECT word, phrase, shown FROM board_overrules'), [{ word: 'north', phrase: 'and north america', shown: 'and North America' }]);
 });
 
-test('the same text as the client’s public advert is warned about, but does not stop the post', async () => {
-  const copied = await check(job, { ...GOOD, title: 'Senior Backend Engineer, Scheduling', description: `${CLEAN}\nWe are a team of 85 in Toronto.` });
-  assert.equal(copied.ok, true);
-  assert.deepEqual(copied.warnings.map((w) => w.kind), ['same_text', 'same_listing']);
-  assert.match(copied.warnings[0].message, /^One sentence of this advert is word for word the same as on Lumen Health’s own careers page, which is public: “We are a team of 85 in Toronto\.”/);
-  assert.match(copied.warnings[1].message, /^The title and the salary range are the same as on Lumen Health’s own careers page/);
-  assert.equal(copied.client_advert_public, true);
-  assert.deepEqual((await check(job, GOOD)).warnings, []);
+test('while the client’s own advert is public too, the same title or a salary range on both stops the post, and the rest is warned about', async () => {
+  // Lumen's careers page advertises the job as "Senior Backend Engineer, Scheduling" at 85,000 to 105,000. With the
+  // job left on that page, anything the two adverts share can be used to match them.
+  const both = { ...GOOD, hide_from_careers: false };
+  const kinds = (result) => [result.problems.map((p) => p.kind), result.warnings.map((w) => w.kind)];
+  // Another title, the same salary range: stopped, whatever the title.
+  let result = await check(job, both);
+  assert.deepEqual(kinds(result), [['same_salary'], ['both_public']]);
+  assert.equal(result.ok, false);
+  assert.match(result.problems[0].message, /^The salary range shown is the same as on Lumen Health’s own careers page\. .* Leave it out, or tick “Keep this job off Lumen Health’s careers page”\.$/);
+  assert.equal(result.problems[0].can_overrule, false);
+  // The same title with no salary shown, which is how a new post starts: stopped.
+  result = await check(job, { ...both, title: 'Senior Backend Engineer, Scheduling', show_salary: false });
+  assert.deepEqual(kinds(result), [['same_title'], ['both_public']]);
+  assert.match(result.problems[0].message, /^The title is the same as on Lumen Health’s own careers page/);
+  assert.deepEqual(kinds(await check(job, { ...both, title: 'senior backend engineer - scheduling', show_salary: false })), [['same_title'], ['both_public']]);   // however it is punctuated
+  // The salary rounded: not the same figures, but the client's range sits inside it, which picks the job out all the same. Stopped too.
+  result = await check(job, { ...both, round_salary: true });
+  assert.deepEqual(kinds(result), [['similar_salary'], ['both_public']]);
+  assert.match(result.problems[0].message, /^The salary range shown is the one on Lumen Health’s own careers page, rounded\./);
+  // With no salary on the board and a title of its own, the post may go out beside the client's advert, with a warning that both are public.
+  result = await check(job, { ...both, show_salary: false });
+  assert.deepEqual(kinds(result), [[], ['both_public']]);
+  assert.equal(result.ok, true);
+  // A sentence copied from the client's advert is warned about, and both being public always is.
+  result = await check(job, { ...both, show_salary: false, description: `${CLEAN}\nWe are a team of 85 in Toronto.` });
+  assert.deepEqual(kinds(result), [[], ['same_text', 'both_public']]);
+  assert.match(result.warnings[0].message, /^One sentence of this advert is word for word the same as on Lumen Health’s own careers page, which is public: “We are a team of 85 in Toronto\.”/);
+  assert.match(result.warnings[1].message, /^While this job is open it is also advertised in Lumen Health’s name on their careers page, at the same web address as your board/);
+  assert.equal(result.client_advert_public, true);
+  // Saved that way, the post does not go public; the check's sentence is what the recruiter is shown.
+  const stopped = await save(priya, job, both);
+  assert.deepEqual([stopped.state.live, stopped.state.reason, stopped.check.problems.map((p) => p.kind)], [false, 'problems', ['same_salary']]);
+  assert.ok(!(await onTheBoard()).includes(stopped.post.token));
+
+  // With the job kept off the client's careers page there is nothing to compare, even with the job's own title and exact salary.
+  result = await check(job, { ...GOOD, title: 'Senior Backend Engineer, Scheduling' });
+  assert.deepEqual([result.problems, result.warnings, result.client_advert_public], [[], [], false]);
+  const view = await save(priya, job, GOOD);
+  assert.equal(view.state.live, true);
+  token = view.post.token;   // the check had taken it down, so it is back at a new address
+  // A form that does not say (an older page still open in somebody's browser) leaves both choices as they were saved.
+  const { round_salary, hide_from_careers, ...older } = GOOD;
+  assert.deepEqual((({ post: p }) => [p.round_salary, p.hide_from_careers])(await save(priya, job, older)), [false, true]);
 });
 
 // ---------- what the public is given ----------
@@ -358,6 +416,14 @@ test('the public routes give the allowed fields and nothing else', async () => {
   assert.deepEqual(feed.board, { name: 'Harbour Talent', url: 'https://book.harbourtalent.example/board' });
   assert.deepEqual(feed.posts.find((p) => p.id === token), { id: token, url: `https://book.harbourtalent.example/board/${token}`, title: 'Senior Backend Engineer', location: 'Greater Toronto Area',
     working_pattern: 'Hybrid', contract: 'Full-time', salary: { min: 85000, max: 105000, currency: 'CAD' }, posted: today, text: CLEAN });
+  // Rounded, the range is given outwards to the nearest ten thousand, in the list, on the post and in the feed alike: the job's own figures are not sent.
+  await save(priya, job, { ...GOOD, round_salary: true });
+  const rounded = { min: 80000, max: 110000, currency: 'CAD' };
+  assert.deepEqual(ok(await visit('/api/public/board')).posts.find((p) => p.token === token).salary, rounded);
+  assert.deepEqual(ok(await visit(`/api/public/board/posts/${token}`)).post.salary, rounded);
+  assert.deepEqual(ok(await visit('/board/feed.json')).posts.find((p) => p.id === token).salary, rounded);
+  assert.doesNotMatch(JSON.stringify(ok(await visit('/board/feed.json'))), /85000|105000/);
+  await save(priya, job, GOOD);
   // Any website may read the feed, and nothing keeps a copy of it.
   const answer = await visit('/board/feed.json');
   assert.equal(answer.headers.get('access-control-allow-origin'), '*');
@@ -401,15 +467,56 @@ test('a post’s address is chance alone, and no public route knows a job by its
   refused(await visit('/api/board/posts'), 401);
 });
 
-test('the client’s own careers routes are as they were, and say nothing of the post', async () => {
-  const page = ok(await visit('/api/public/careers/lumen-health')), theirs = ok(await visit(`/api/public/careers/lumen-health/jobs/${job}`));
-  assert.deepEqual(page, careersBefore.page);
-  assert.deepEqual(theirs, careersBefore.job);
-  for (const body of [JSON.stringify(page), JSON.stringify(theirs)]) {
-    assert.ok(!body.includes(token));
-    assert.doesNotMatch(body, /board|confidential|our_website|Greater Toronto Area/i);
+test('a client’s careers page says nothing of the post; a job kept off it is simply not there', async () => {
+  // North's job is on both. North's careers routes answer byte for byte what they did before any post existed.
+  const northPage = ok(await visit('/api/public/careers/nrth-jobs')), northTheirs = ok(await visit(`/api/public/careers/nrth-jobs/jobs/${northJob}`));
+  assert.deepEqual(northPage, careersBefore.north);
+  assert.deepEqual(northTheirs, careersBefore.northJob);
+  for (const body of [JSON.stringify(northPage), JSON.stringify(northTheirs)]) {
+    assert.ok(!body.includes(northToken));
+    assert.doesNotMatch(body, /board|confidential|our_website|West of the city/i);
   }
-  assert.equal(theirs.job.questions.length, 1);   // the client's questions are still asked on the client's own form
+  // Lumen's job is kept off Lumen's careers page while its post is switched on: not listed, and its address and
+  // its form answer exactly as a job that is not open does. Nothing else about the page has changed.
+  const page = ok(await visit('/api/public/careers/lumen-health'));
+  assert.deepEqual(page, { ...careersBefore.page, jobs: [] });
+  const closed = ok(await alex.post('/jobs', { client_id: lumen, title: 'A closed job', status: 'closed' })).id;
+  const notOpen = await visit(`/api/public/careers/lumen-health/jobs/${closed}`);
+  assert.deepEqual([notOpen.status, notOpen.body], [404, { error: 'This role is no longer open.' }]);
+  const theirs = await visit(`/api/public/careers/lumen-health/jobs/${job}`);
+  assert.deepEqual([theirs.status, theirs.body], [notOpen.status, notOpen.body]);
+  const sent = await applyOnCareers('lumen-health', job, { name: 'Curious Person', email: 'curious@mail.example' });
+  assert.deepEqual([sent.status, sent.body], [404, { error: 'This role is no longer open.' }]);
+  ok(await alex.del(`/jobs/${closed}`));
+  // The agency is told on the job that it is not on the careers page; the client's hiring team is told that much and no more.
+  assert.equal(ok(await priya.get(`/jobs/${job}`)).job.careers_page, false);
+  assert.equal(ok(await maya.get(`/jobs/${job}`)).job.careers_page, false);
+  assert.equal(ok(await priya.get(`/jobs/${northJob}`)).job.careers_page, true);
+  // Switched off, the post no longer keeps the job off the page: it is there again, exactly as it was.
+  await save(priya, job, { ...GOOD, enabled: false });
+  assert.deepEqual(ok(await visit('/api/public/careers/lumen-health')), careersBefore.page);
+  assert.deepEqual(ok(await visit(`/api/public/careers/lumen-health/jobs/${job}`)), careersBefore.job);
+  await save(priya, job, GOOD);
+  assert.equal((await post(priya, job)).post.token, token);   // switching a post off and on keeps its address
+});
+
+test('search engines are asked not to list clients’ careers pages while the board has posts', async () => {
+  // The board and the careers pages are at one web address. A search of that address would set the clients out beside the board.
+  const robots = async (pathname) => (await visit(pathname)).headers.get('x-robots-tag');
+  assert.equal(await robots('/careers/lumen-health'), 'noindex');
+  assert.equal(await robots(`/careers/nrth-jobs/${northJob}`), 'noindex');
+  assert.equal(await robots('/board'), null);            // the board itself is for listing
+  assert.equal(await robots('/careersfair'), null);
+  // An admin can say otherwise, and it follows at once.
+  const settings = ok(await alex.get('/board/settings'));
+  assert.equal(settings.careers_unlisted, true);
+  ok(await alex.putJson('/board/settings', { ...settings, careers_unlisted: false }));
+  assert.equal(await robots('/careers/lumen-health'), null);
+  ok(await alex.putJson('/board/settings', { ...settings, careers_unlisted: true }));
+  assert.equal(await robots('/careers/lumen-health'), 'noindex');
+  // What search engines may fetch: the pages, and the board's own data, which its pages are drawn from. Nothing else under /api.
+  const rules = await visit('/robots.txt');
+  assert.deepEqual([rules.status, rules.body], [200, 'User-agent: *\nAllow: /api/public/board\nDisallow: /api/\n']);
 });
 
 // ---------- applying ----------
@@ -499,7 +606,7 @@ test('the client’s hiring team sees the applicant like any other, and nothing 
   // The post's title and where it is shown are not in what a client user is sent about the job either.
   const theirJob = JSON.stringify(ok(await maya.get(`/jobs/${job}`)));
   assert.ok(!theirJob.includes(token));
-  assert.doesNotMatch(theirJob, /board|Greater Toronto Area/);
+  assert.doesNotMatch(theirJob, /board|Greater Toronto Area|hide_from|off_careers/);
   // In their reports the source reads as the agency's website, not as theirs.
   assert.deepEqual(ok(await maya.get('/reports')).sources.map((s) => [s.source, s.label]), [['our_website', 'Agency website']]);
   assert.deepEqual(ok(await priya.get(`/reports?client_id=${lumen}`)).sources.map((s) => [s.source, s.label]), [['our_website', 'Our website']]);
@@ -596,20 +703,39 @@ test('if the confirmation template is ever edited to name the client, the wordin
   ok(await alex.putJson(`/templates/${mine.id}`, mine));
 });
 
-test('somebody who came through the post and then applies on the client’s careers page is answered as a new applicant there', async () => {
-  // Grace does not know the two adverts are one job. If the careers page stayed silent, as it does for anybody
-  // else who is already in the job, the missing confirmation would tell her.
+test('applying on a client’s careers page cannot be used to find out which job a post is for', async () => {
+  // For this the Lumen job is on Lumen's careers page as well as on the board (under another title, with no salary).
+  assert.equal((await save(priya, job, { ...GOOD, show_salary: false, hide_from_careers: false })).state.live, true);
+  const answers = { [careersBefore.job.job.questions[0].id]: 'Yes' };
+  // Grace came through the post and does not know the two adverts are one job. The first time she applies on the
+  // careers page she is answered as a new applicant there. If the page stayed silent, as it does for anybody else
+  // who is already in the job, the missing confirmation would tell her.
   mail.sent.length = 0;
-  const form = new FormData();
-  for (const [name, value] of Object.entries({ name: 'Grace Adeyemi', email: 'grace@mail.example', consent: 'yes', answers: JSON.stringify({ [careersBefore.job.job.questions[0].id]: 'Yes' }) })) form.append(name, value);
-  assert.deepEqual((await visit(`/api/public/careers/lumen-health/jobs/${job}/apply`, { method: 'POST', body: form })).body, { ok: true });
+  assert.deepEqual((await applyOnCareers('lumen-health', job, { name: 'Grace Adeyemi', email: 'grace@mail.example' }, answers)).body, { ok: true });
   assert.deepEqual(mail.sent.map((m) => m.subject), ['We received your application for Senior Backend Engineer, Scheduling']);
   assert.equal(rows(`SELECT COUNT(*) AS n FROM applications a JOIN candidates c ON c.id = a.candidate_id WHERE c.email = 'grace@mail.example'`)[0].n, 1);
-  // Somebody the agency added by hand, who applies there again, gets no second confirmation, as before.
-  const again = new FormData();
-  for (const [name, value] of Object.entries({ name: 'Added By Hand', email: 'by.hand@mail.example', consent: 'yes', answers: JSON.stringify({ [careersBefore.job.job.questions[0].id]: 'Yes' }) })) again.append(name, value);
-  assert.deepEqual((await visit(`/api/public/careers/lumen-health/jobs/${job}/apply`, { method: 'POST', body: again })).body, { ok: true });
+  // After that she is somebody who has already applied there, like anybody else: no second confirmation.
+  assert.deepEqual((await applyOnCareers('lumen-health', job, { name: 'Grace Adeyemi', email: 'grace@mail.example' }, answers)).body, { ok: true });
   assert.equal(mail.sent.length, 1);
+  // Somebody the agency added by hand, who applies there again, gets no confirmation at all, as before.
+  assert.deepEqual((await applyOnCareers('lumen-health', job, { name: 'Added By Hand', email: 'by.hand@mail.example' }, answers)).body, { ok: true });
+  assert.equal(mail.sent.length, 1);
+
+  // The test a competitor would run: apply through the post, then apply twice on a careers job, and count the
+  // e-mails. The count is the same whether the careers job is the one behind the post or any other job.
+  const count = async (address, slug, jobId, theirAnswers) => {
+    mail.sent.length = 0;
+    const replies = [await apply(token, { name: 'Pat Guess', email: address })];
+    for (let n = 0; n < 2; n++) replies.push(await applyOnCareers(slug, jobId, { name: 'Pat Guess', email: address }, theirAnswers));
+    for (const reply of replies) assert.deepEqual([reply.status, reply.body], [200, { ok: true }]);
+    return mail.to(address).map((m) => m.subject);
+  };
+  const right = await count('guess.right@mail.example', 'lumen-health', job, answers);
+  const wrong = await count('guess.wrong@mail.example', 'nrth-jobs', northJob, {});
+  assert.deepEqual(right, ['Thanks for applying through Harbour Talent', 'We received your application for Senior Backend Engineer, Scheduling']);
+  assert.deepEqual(wrong, ['Thanks for applying through Harbour Talent', 'We received your application for Supply Chain Planner, Outerwear']);
+  assert.equal(right.length, wrong.length);
+  assert.equal((await save(priya, job, GOOD)).post.token, token);
 });
 
 // ---------- coming down ----------
@@ -622,9 +748,45 @@ test('a later edit to the post that names the client takes it down until it is f
   assert.deepEqual(await onTheBoard(), [northToken]);
   refused(await visit(`/api/public/board/posts/${token}`), 404);
   refused(await apply(token, { name: 'Too Late', email: 'too.late@mail.example' }), 404);
+  // The agency is told by e-mail: the admin, and the recruiter who last saved the post. Nobody at the client is.
+  const told = mail.sent.filter((m) => m.subject === 'A confidential post has come down from your job board');
+  assert.deepEqual(told.at(-1).to.sort(), ['alex@harbourtalent.example', 'priya@harbourtalent.example']);
+  assert.match(told.at(-1).text, /^The confidential post “Senior Backend Engineer” \(the job Senior Backend Engineer, Scheduling at Lumen Health\) is no longer public\./);
+  assert.match(told.at(-1).text, /- “Lumen” reads as part of the client’s name \(Lumen Health\)\. It is in the location: “the Lumen office”\./);
+  assert.match(told.at(-1).text, /Open the post: https:\/\/book\.harbourtalent\.example\/jobs\/48211\?tab=post/);
+  assert.ok(!mail.sent.some((m) => m.to.some((to) => /lumenhealth|brightclinic|getnorthgear|mail\.example/.test(to)) && /come down/.test(m.subject)));
+  // And the dashboard counts it for the agency, and says nothing to the client's hiring team.
+  assert.equal(ok(await priya.get('/nav')).board_down, 1);
+  assert.equal('board_down' in ok(await maya.get('/nav')), false);
+
+  // Fixed, it is public again, at a new address. The address the old text was public under leads nowhere, like any
+  // address that was never a post, so a copy kept by a search engine or a link preview no longer points at this post.
+  const old = token;
   view = await save(priya, job, GOOD);
   assert.equal(view.state.live, true);
+  token = view.post.token;
+  assert.notEqual(token, old);
+  assert.match(token, /^[a-f0-9]{18}$/);
+  assert.deepEqual([view.log[0].kind, view.log[0].detail], ['published', 'At a new address, because the check had taken it down']);
+  refused(await visit(`/api/public/board/posts/${old}`), 404, /^This role is no longer open\.$/);
+  refused(await apply(old, { name: 'Old Link', email: 'old.link@mail.example' }), 404);
   assert.deepEqual((await onTheBoard()).sort(), [token, northToken].sort());
+  assert.equal(ok(await priya.get('/nav')).board_down, 0);
+});
+
+test('a recruiter can give a post a new address, and the old one stops working', async () => {
+  const old = token;
+  refused(await maya.post(`/jobs/${job}/board/address`), 403);
+  const view = ok(await priya.post(`/jobs/${job}/board/address`));
+  token = view.post.token;
+  assert.notEqual(token, old);
+  assert.deepEqual([view.state.live, view.log[0].kind, view.log[0].user_name], [true, 'new_address', 'Priya Nair']);
+  assert.deepEqual((await onTheBoard()).sort(), [token, northToken].sort());
+  refused(await visit(`/api/public/board/posts/${old}`), 404);
+  assert.equal((await visit(`/board/${old}`)).status, (await visit('/board/000000000000000000')).status);
+  // People who applied under the old address are still where they were.
+  assert.equal(view.applied, (await post(priya, job)).applied);
+  assert.ok(view.applied >= 5);
 });
 
 test('a change to the job takes the post down: closed or paused, it is not advertised', async () => {
@@ -632,6 +794,7 @@ test('a change to the job takes the post down: closed or paused, it is not adver
   assert.match(closed.board_notice, /^The confidential post for this job is no longer public/);
   assert.deepEqual(await onTheBoard(), [northToken]);
   assert.deepEqual((await post(alex, job)).state, { live: false, reason: 'job_not_open', says: 'Not public: the job is not open. A post is only public while its job is.' });
+  assert.equal(ok(await alex.get('/nav')).board_down, 0);   // pausing a job is somebody's decision, not something to chase
   refused(await apply(token, { name: 'Too Late', email: 'too.late@mail.example' }), 404);
   assert.equal(ok(await alex.patch(`/jobs/${job}/status`, { status: 'open' })).board_notice, undefined);
   assert.deepEqual((await onTheBoard()).sort(), [token, northToken].sort());
@@ -654,22 +817,36 @@ test('a change to the client takes the post down when the post now gives it away
   assert.deepEqual(view.check.problems.map((p) => [p.kind, p.found]), [['word', 'Postgres']]);
   // Named back, the post is public again with nobody having to touch it: the switch was never turned off.
   assert.equal(ok(await alex.putJson(`/clients/${lumen}`, client)).board_notice, undefined);
+  await addresses();
   assert.deepEqual((await onTheBoard()).sort(), [token, northToken].sort());
   // A new website whose name is in the advert does the same.
   ok(await alex.putJson(`/clients/${lumen}`, { ...client, website: 'https://typescript.example' }));
   assert.deepEqual(await onTheBoard(), [northToken]);
   ok(await alex.putJson(`/clients/${lumen}`, client));
+  await addresses();
   assert.deepEqual((await onTheBoard()).sort(), [token, northToken].sort());
 });
 
 test('somebody new at the client, or a changed name, is looked for at once', async () => {
   // "Mentor" opens a line of the advert. Somebody of that name joins Lumen's hiring team.
   const { token: invite } = ok(await alex.post('/invites', { role: 'client', email: 'avery@lumenhealth.example', client_id: lumen }));
-  ok(await session(server.base).post(`/invites/${invite}/accept`, { name: 'Avery Mentor', password: 'demo1234' }));
+  mail.sent.length = 0;
+  // The person joining is at the client: they are told nothing. The agency is: by e-mail, and on the dashboard.
+  assert.deepEqual(ok(await session(server.base).post(`/invites/${invite}/accept`, { name: 'Avery Mentor', password: 'demo1234' })), { ok: true });
   assert.deepEqual(await onTheBoard(), [northToken]);
   assert.deepEqual((await post(priya, job)).check.problems.map((p) => [p.kind, p.found]), [['person', 'Mentor']]);
+  assert.deepEqual(mail.sent.map((m) => [m.subject, [...m.to].sort()]), [['A confidential post has come down from your job board', ['alex@harbourtalent.example', 'priya@harbourtalent.example']]]);
+  assert.equal(ok(await alex.get('/nav')).board_down, 1);
   const avery = ok(await alex.get(`/users?client_id=${lumen}`)).find((u) => u.name === 'Avery Mentor');
+  assert.deepEqual(ok(await alex.patch(`/users/${avery.id}`, { name: 'Avery Stone' })), { ok: true });
+  await addresses();
+  assert.deepEqual((await onTheBoard()).sort(), [token, northToken].sort());
+  // An agency user who renames somebody at a client into the advert is told there and then that the post came down.
+  const answer = ok(await alex.patch(`/users/${avery.id}`, { name: 'Avery Mentor' }));
+  assert.match(answer.board_notice, /^A confidential post for this client is no longer public\. Open the job’s Confidential post tab to see why\.$/);
+  assert.deepEqual(await onTheBoard(), [northToken]);
   ok(await alex.patch(`/users/${avery.id}`, { name: 'Avery Stone' }));
+  await addresses();
   assert.deepEqual((await onTheBoard()).sort(), [token, northToken].sort());
 });
 
@@ -682,7 +859,9 @@ test('whatever changes the client, the public is never shown a post that would f
   refused(await apply(token, { name: 'Too Late', email: 'too.late@mail.example' }), 404);
   assert.equal((await visit(`/board/${token}`)).status, BUILT ? 404 : (await visit('/board/000000000000000000')).status);
   database((db) => db.prepare(`UPDATE clients SET name = 'Lumen Health' WHERE id = ?`).run(lumen));
-  assert.deepEqual((await onTheBoard()).sort(), [token, northToken].sort());
+  const back = await onTheBoard();
+  await addresses();
+  assert.deepEqual(back.sort(), [token, northToken].sort());
   assert.deepEqual(mail.to('too.late@mail.example'), []);
 });
 
@@ -693,7 +872,7 @@ test('a token that was never a post, one that is switched off, one that came dow
   assert.ok((await onTheBoard()).includes(goneToken));
   ok(await alex.del(`/jobs/${gone}`));
   // The North post is switched off; the Lumen post is taken down by the check.
-  assert.equal((await save(alex, northJob, { enabled: false, title: 'Supply Chain Planner', location: 'West of the city', description: 'Our client sells outdoor clothing across Europe and North America.', show_salary: false })).state.reason, 'off');
+  assert.equal((await save(alex, northJob, { ...NORTH, enabled: false })).state.reason, 'off');
   assert.equal((await save(alex, job, { ...GOOD, title: 'Engineer at Lumen Health' })).state.reason, 'problems');
   assert.deepEqual(await onTheBoard(), []);
 
@@ -715,9 +894,10 @@ test('a token that was never a post, one that is switched off, one that came dow
   if (BUILT) assert.equal(firstPage.status, 404);
   assert.deepEqual(mail.to('someone.else@mail.example'), []);
 
-  // Back on, both are public again at the addresses they always had.
-  await save(alex, northJob, { enabled: true, title: 'Supply Chain Planner', location: 'West of the city', description: 'Our client sells outdoor clothing across Europe and North America.', show_salary: false });
-  await save(alex, job, GOOD);
+  // Back on, both are public again: the one that was switched off at the address it always had, the one the check took down at a new one.
+  assert.equal((await save(alex, northJob, NORTH)).post.token, northToken);
+  assert.notEqual((await save(alex, job, GOOD)).post.token, token);
+  await addresses();
   assert.deepEqual((await onTheBoard()).sort(), [token, northToken].sort());
 });
 
@@ -726,7 +906,7 @@ test('a token that was never a post, one that is switched off, one that came dow
 test('every post is listed for the agency, with what the public sees it as and how many applied', async () => {
   const list = ok(await priya.get('/board/posts'));
   assert.deepEqual(list.map((p) => [p.job_id, p.title, p.client_name, p.live, p.enabled, p.applied, p.token]).sort((a, b) => a[0] - b[0]),
-    [[job, 'Senior Backend Engineer', 'Lumen Health', 1, 1, 5, token], [northJob, 'Supply Chain Planner', 'North', 1, 1, 0, northToken]].sort((a, b) => a[0] - b[0]));
+    [[job, 'Senior Backend Engineer', 'Lumen Health', 1, 1, 7, token], [northJob, 'Supply Chain Planner', 'North', 1, 1, 0, northToken]].sort((a, b) => a[0] - b[0]));
 });
 
 test('a client’s hiring team is refused on every one of the agency’s routes, and a recruiter on the admin’s', async () => {
@@ -735,6 +915,7 @@ test('a client’s hiring team is refused on every one of the agency’s routes,
   const attempts = [
     () => maya.get(`/jobs/${job}/board`), () => maya.putJson(`/jobs/${job}/board`, fields), () => maya.post(`/jobs/${job}/board/check`, fields), () => maya.post(`/jobs/${job}/board/draft`),
     () => maya.post(`/jobs/${job}/board/overrules`, { word: 'x', key: 'x' }), () => maya.del(`/jobs/${job}/board/overrules/1`), () => maya.get('/board/posts'),
+    () => maya.post(`/jobs/${job}/board/address`), () => maya.putJson(`/jobs/${job}/board/names`, { names: 'Mine' }),
     () => maya.get('/board/settings'), () => maya.putJson('/board/settings', { name: 'Mine' }), () => maya.put('/board/logo', Buffer.from('a picture')), () => maya.del('/board/logo'),
     () => maya.putJson(`/applications/${dana.id}/client-known`, { known: true }), () => maya.post(`/applications/${dana.id}/emails/check`, { subject: 'x', body: 'y' }),
   ];
@@ -746,6 +927,145 @@ test('a client’s hiring team is refused on every one of the agency’s routes,
   refused(await priya.post(`/jobs/${northJob}/board/overrules`, { word: 'north', key: 'and north america' }), 403, /admin/);
   // And nobody who is signed out gets anything.
   for (const pathname of [`/api/jobs/${job}/board`, '/api/board/posts', '/api/board/settings']) refused(await visit(pathname), 401);
+});
+
+// ---------- what else gives a client away: short names, hidden letters, hashtags ----------
+
+/** A client and one job for it, for trying the check on names of other shapes. */
+async function clientWithJob(name, extra = {}, status = 'draft') {
+  const id = ok(await alex.post('/clients', { name, currency: 'CAD', ...extra })).id;
+  return ok(await alex.post('/jobs', { client_id: id, title: 'Planner', status })).id;
+}
+const kindsOf = (result) => result.problems.map((p) => p.kind);
+
+test('a name tucked inside a longer word is found, and a hashtag or a handle is never allowed', async () => {
+  const bramble = await clientWithJob('Brambleworth', { website: 'https://brambleworth.example' }, 'open');
+  for (const [description, kinds] of [
+    ['See #lifeatbrambleworth for more', ['name', 'handle']],
+    ['Follow @wearebrambleworth', ['name', 'handle']],
+    ['Ask for mybrambleworth access on day one', ['name']],
+    ['One of the brambleworthy few', ['name']],
+    ['brambleworthcareers has more', ['name']],
+  ]) assert.deepEqual(kindsOf(await check(bramble, { description })), kinds, description);
+  // A shorter name is found at the end of a longer word as well as at the start of one.
+  assert.deepEqual(kindsOf(await check(job, { description: 'Join teamlumen today' })), ['word']);
+  assert.deepEqual(kindsOf(await check(job, { description: 'See #teamlumen' })), ['word', 'handle']);
+  // A hashtag or a handle leads straight to whoever uses it, so none is allowed, whoever it belongs to.
+  const tags = await check(job, { description: 'Follow #hiring and @somebody_else for news' });
+  assert.deepEqual(tags.problems.map((p) => [p.kind, p.found, p.can_overrule]), [['handle', '#hiring', false], ['handle', '@somebody_else', false]]);
+  assert.match(tags.problems[0].message, /^“#hiring” in the advert text is a hashtag or a social-media handle\./);
+  // What only looks like one is left alone.
+  assert.deepEqual(kindsOf(await check(job, { description: 'C# and F# developers welcome. R&D is ranked #1. Shifts start @ 5pm; pay is $30 @ hour.' })), []);
+
+  // Such a post does not go public, and the name is in no public answer.
+  const leaky = await save(priya, bramble, { enabled: true, title: 'Planner', location: 'Ontario', description: 'A planning job. See #lifeatbrambleworth and @wearebrambleworth', show_salary: false });
+  assert.deepEqual([leaky.state.live, leaky.state.reason], [false, 'problems']);
+  assert.ok(!(await onTheBoard()).includes(leaky.post.token));
+  assert.doesNotMatch(JSON.stringify(ok(await visit('/board/feed.json'))), /brambleworth/i);
+  // The same search decides what may be e-mailed to somebody who came through a post and has not been told who the client is.
+  const clean = await save(priya, bramble, { enabled: true, title: 'Planner', location: 'Ontario', description: 'A planning job at a growing company.', show_salary: false });
+  assert.equal(clean.state.live, true);
+  ok(await apply(clean.post.token, { name: 'Noor Haddad', email: 'noor@mail.example' }));
+  const noor = ok(await priya.get('/applications?q=Noor')).find((a) => a.name === 'Noor Haddad');
+  assert.deepEqual(ok(await priya.post(`/applications/${noor.id}/emails/check`, { subject: 'Hello', body: 'Have a look at @wearebrambleworth before we speak.' })), { names_client: true });
+  refused(await priya.post(`/applications/${noor.id}/emails`, { subject: 'Hello', body: 'Have a look at #lifeatbrambleworth before we speak.' }), 409, /This message names Brambleworth/);
+  await save(priya, bramble, { ...clean.post, enabled: false });
+});
+
+test('the names people actually use are found: two-letter names, initials, a name cut short, a name without its last s', async () => {
+  const cases = [
+    ['TD Bank', 'Join TD as an analyst. TD is one of the big five.', 'word', 'TD'],
+    ['GM Canada', 'Our client GM is hiring a planner for its assembly plant.', 'word', 'GM'],
+    ['CN Rail', 'CN is hiring planners.', 'word', 'CN'],
+    ['3M Canada', 'Join 3M today', 'word', '3M'],
+    ['GE Healthcare', 'GE is hiring', 'word', 'GE'],
+    ['Ernst & Young', 'Join EY Canada', 'initials', 'EY'],
+    ['Toronto Transit Commission', 'Join the TTC', 'initials', 'TTC'],
+    ['Royal Bank of Canada', 'Join RBC as an analyst', 'initials', 'RBC'],
+    ['Royal Trust Bank of Canada', 'Royal Trust is hiring', 'short_name', 'Royal Trust'],
+    ['Toronto-Dominion Bank', 'TD is hiring', 'initials', 'TD'],
+    ['Loblaws', 'Join Loblaw as a planner', 'word', 'Loblaw'],
+    ['Canada Health Group', 'Canada Health is hiring', 'short_name', 'Canada Health'],
+  ];
+  const jobs = {};
+  for (const [name, description, kind, found] of cases) {
+    jobs[name] = await clientWithJob(name);
+    const result = await check(jobs[name], { location: 'Ontario', description });
+    assert.equal(result.ok, false, name);
+    assert.ok(result.problems.some((p) => p.kind === kind && p.found === found && p.field === 'description'), `${name}: ${JSON.stringify(result.problems.map((p) => [p.kind, p.found]))}`);
+  }
+  // In the title too, and the recruiter is told what the check knows to look for.
+  const td = await check(jobs['TD Bank'], { title: 'Analyst, TD', location: 'Ontario' });
+  assert.deepEqual(td.problems.map((p) => [p.kind, p.field, p.found, p.can_overrule]), [['word', 'title', 'TD', true]]);
+  assert.deepEqual(td.looked_for.slice(0, 3), ['the client’s name, TD Bank', '“TD”, from the name, written in capitals', 'the initials TB, written in capitals']);
+  assert.match(td.problems[0].message, /^“TD” reads as part of the client’s name \(TD Bank\)\. It is in the title: “Analyst, TD”\.$/);
+  // Two letters and initials are a name only in capitals (or as the name itself is written): the same letters as an ordinary word are left alone.
+  const go = await clientWithJob('Go Transit');
+  assert.deepEqual(kindsOf(await check(go, { location: 'Ontario', description: 'We go to market quickly, and it is a go.' })), []);
+  assert.deepEqual((await check(go, { location: 'Ontario', description: 'GO is hiring. So is Go.' })).problems.map((p) => p.found), ['GO', 'Go']);
+  assert.deepEqual(kindsOf(await check(jobs['Toronto Transit Commission'], { location: 'Ontario', description: 'A total technical commitment (ttc for short).' })), []);
+  // The same search holds an e-mail back: it is what namesClient uses.
+  assert.deepEqual(kindsOf(await check(jobs['GM Canada'], { location: 'Ontario', description: 'A great place to build cars.' })), []);
+});
+
+test('other names the agency lists for a client are looked for in every post for it, at once', async () => {
+  refused(await maya.putJson(`/jobs/${job}/board/names`, { names: 'Mine' }), 403);
+  let view = ok(await priya.putJson(`/jobs/${job}/board/names`, { names: 'Booking Engine\n LBE \nbooking engine\nX\n' }));
+  assert.deepEqual(view.other_names, ['Booking Engine', 'LBE']);     // once each, however spelt; a single letter is not a name
+  assert.equal(view.board_notice, undefined);
+  assert.ok(view.check.looked_for.includes('Booking Engine, from your list of other names for this client'));
+  assert.deepEqual((await check(job, { description: 'Own the services behind the booking-engine.' })).problems.map((p) => [p.kind, p.found, p.can_overrule]), [['other_name', 'booking-engine', false]]);
+  assert.deepEqual((await check(job, { description: 'Join the LBE team.' })).problems.map((p) => [p.kind, p.found, p.can_overrule]), [['other_name', 'LBE', true]]);
+  assert.match((await check(job, { description: 'Join the LBE team.' })).problems[0].message, /^“LBE” is on the list of other names for this client \(LBE\)\./);
+  // A name that is in a public post takes it down there and then, and whoever added it is told.
+  view = ok(await priya.putJson(`/jobs/${job}/board/names`, { names: ['Booking Engine', 'LBE', 'TypeScript'] }));
+  assert.match(view.board_notice, /^A confidential post for this client is no longer public/);
+  assert.deepEqual([view.state.live, view.check.problems.map((p) => [p.kind, p.found])], [false, [['other_name', 'TypeScript']]]);
+  assert.deepEqual(await onTheBoard(), [northToken]);
+  // The list belongs to the client, not to the one job: another job for Lumen is checked against it too.
+  const second = ok(await alex.post('/jobs', { client_id: lumen, title: 'Data Analyst', status: 'draft' })).id;
+  assert.deepEqual(kindsOf(await check(second, { description: 'You will use the Booking Engine every day.' })), ['other_name']);
+  ok(await alex.del(`/jobs/${second}`));
+  view = ok(await priya.putJson(`/jobs/${job}/board/names`, { names: 'Booking Engine' }));
+  assert.equal(view.state.live, true);
+  await addresses();
+  assert.deepEqual(rows('SELECT name FROM board_names WHERE client_id = ?', lumen).map((r) => r.name), ['Booking Engine']);
+});
+
+test('letters that cannot be seen, and look-alike letters from other alphabets, do not carry a name through', async () => {
+  const joiner = '\u200d', softHyphen = '\u00ad';
+  for (const [what, description, kinds] of [
+    ['four joiners that take up no room', `Lu${joiner.repeat(4)}men is growing`, ['word']],
+    ['a soft hyphen and a zero-width space', `Lum${softHyphen}e\u200bn is growing`, ['word']],
+    ['a letter drawn as nothing', 'Lu\u3164men is growing', ['word']],
+    ['a Cyrillic \u0435 for the Latin e', 'Lum\u0435n is growing', ['word', 'mixed_letters']],
+    ['a Greek \u039c for the Latin M', 'LU\u039cEN is growing', ['word', 'mixed_letters']],
+    ['small capitals', 'ʟᴜᴍᴇɴ is growing', ['word']],
+    ['circled letters', 'ⓁⓊⓂⒺⓃ is growing', ['word']],
+    ['the whole name in look-alikes', 'Lum\u0435n H\u0435\u0430lth is growing', ['name', 'mixed_letters', 'mixed_letters']],
+  ]) assert.deepEqual(kindsOf(await check(job, { description })), kinds, what);
+  // A word that mixes two alphabets is refused whatever it spells: nobody types one on purpose, and it can hide anything.
+  const mixed = await check(job, { description: 'A \u0412ackend role.' });
+  assert.deepEqual(mixed.problems.map((p) => [p.kind, p.found, p.can_overrule]), [['mixed_letters', '\u0412ackend', false]]);
+  assert.match(mixed.problems[0].message, /mixes letters from two alphabets that look the same on the page/);
+  assert.deepEqual(kindsOf(await check(job, { description: 'We also work in Ελληνικά and Русский.' })), []);   // a word wholly in another alphabet is just a word
+  // What cannot be seen is not kept: the post that is stored, checked and shown is the one a reader sees.
+  const view = await save(priya, job, { ...GOOD, title: `Senior Back${joiner}end Engineer`, description: `${CLEAN}\nNo${softHyphen}thing hidden.` });
+  assert.deepEqual([view.post.title, view.post.description, view.state.live], ['Senior Backend Engineer', `${CLEAN}\nNothing hidden.`, true]);
+  assert.equal(ok(await visit(`/api/public/board/posts/${token}`)).post.description, `${CLEAN}\nNothing hidden.`);
+  await save(priya, job, GOOD);
+});
+
+test('an automatic e-mail that says “our client” reads properly', async () => {
+  // Dana came through the post and has not been told who the client is. The templates were written for a company's name.
+  const dana = ok(await priya.get('/applications?q=Dana')).find((a) => a.name === 'Dana Whitlock');
+  const template = ok(await alex.get('/templates')).find((t) => t.key === 'rejection');
+  ok(await alex.putJson(`/templates/${template.id}`, { name: template.name, subject: '{{company}} and your application', body: 'Hi {{candidate_first_name}},\n\n{{company}} has decided not to go further. Thank you for your interest in {{company}}.\n\nBest,\nThe {{company}} hiring team' }));
+  mail.sent.length = 0;
+  ok(await priya.post(`/applications/${dana.id}/reject`, { reason: 'Other', send_email: true }));
+  assert.deepEqual(mail.sent.map((m) => [m.subject, m.text]), [['Our client and your application', 'Hi Dana,\n\nOur client has decided not to go further. Thank you for your interest in our client.\n\nBest,\nOur client’s hiring team']]);
+  ok(await priya.post(`/applications/${dana.id}/restore`));
+  ok(await alex.putJson(`/templates/${template.id}`, template));
 });
 
 // ---------- drafting ----------
@@ -762,6 +1082,11 @@ test('“Draft it for me” asks the AI service for a rewrite, and what comes ba
   assert.equal(body.output_config.effort, 'medium');
   assert.deepEqual(Object.keys(body.output_config.format.schema.properties), ['title', 'description', 'removed']);
   assert.match(body.system, /The employer must stay confidential/);
+  // What narrows an employer down in a small market is left out, not rounded, and an unusual title is not kept.
+  assert.match(body.system, /Leave out how big the employer is/);
+  assert.match(body.system, /one step more generally than the advert does/);
+  assert.match(body.system, /give the common title for the same job instead/);
+  assert.doesNotMatch(body.system, /several hundred/);
   // The job's own advert goes, and what identifies the employer, so that it can be kept out.
   const [{ content }] = body.messages;
   assert.match(content, /<job_advert>\nSenior Backend Engineer, Scheduling\n\nLumen Health builds scheduling software/);
@@ -778,6 +1103,7 @@ test('“Draft it for me” asks the AI service for a rewrite, and what comes ba
   assert.deepEqual(view.check.problems.map((p) => p.found), ['Lumen Health']);
   assert.deepEqual(await onTheBoard(), [northToken]);
   await save(priya, job, GOOD);
+  await addresses();
 
   // When the service does not help, the recruiter is told in a sentence and nothing is changed.
   ai.mode = 'key';
@@ -814,7 +1140,7 @@ test('the board’s pages, and only they, may be shown inside the websites the a
 test('an admin chooses the name, the look and the websites; what is not a website’s address is refused', async () => {
   const start = ok(await priya.get('/board/settings'));
   assert.deepEqual(start, { name: 'Harbour Talent', intro: 'Roles we are recruiting for on behalf of our clients. The employer’s name is kept confidential until we have spoken.', color: '#0c505d', logo: null, privacy_url: null,
-    sites: ['https://otterbrook.ca', 'https://www.otterbrook.ca'], address: 'https://book.harbourtalent.example', live: 2 });
+    sites: ['https://otterbrook.ca', 'https://www.otterbrook.ca'], page_url: null, careers_unlisted: true, address: 'https://book.harbourtalent.example', live: 2, down: 0 });
   const fields = { name: 'Harbour Talent Careers', intro: 'Roles we are filling now.', color: '#7C3AED', privacy_url: 'harbourtalent.example/privacy', sites: 'otterbrook.ca\nhttps://www.otterbrook.ca/jobs\nhttp://127.0.0.1:5650' };
   for (const [sites, what] of [['http://evil.example', 'plain http'], ['*', 'everything'], ['https://*.example.com', 'a pattern'], ['javascript:alert(1)', 'not a website'], ["otterbrook.ca; script-src 'unsafe-inline'", 'a second rule'], ['nonsense', 'a word']]) {
     refused(await alex.putJson('/board/settings', { ...fields, sites }), 400, /is not a website’s address/);
@@ -832,9 +1158,23 @@ test('an admin chooses the name, the look and the websites; what is not a websit
   assert.deepEqual(frameRule(await visit('/api/me')), { ancestors: "'none'", denied: 'DENY' });
   ok(await apply(token, { name: 'Imani Okafor', email: 'imani@mail.example' }));
   assert.equal(mail.to('imani@mail.example')[0].subject, 'Thanks for applying through Harbour Talent Careers');
+  // The page of the agency's own website that shows the board. Once it is given, a role's address is on that
+  // website: in the feed, on the job's tab for the recruiter to copy, and for search engines (see the pages test).
+  refused(await alex.putJson('/board/settings', { ...fields, page_url: 'javascript:alert(1)' }), 400, /address of your jobs page/);
+  refused(await alex.putJson('/board/settings', { ...fields, page_url: 'http://plain.example/jobs' }), 400, /has to start with https/);
+  const withPage = ok(await alex.putJson('/board/settings', { ...fields, page_url: 'https://jobs.otterbrook.ca/careers?lang=en#top' }));
+  assert.equal(withPage.page_url, 'https://jobs.otterbrook.ca/careers?lang=en');
+  assert.deepEqual(withPage.sites, ['https://otterbrook.ca', 'https://www.otterbrook.ca', 'http://127.0.0.1:5650', 'https://jobs.otterbrook.ca']);   // its website joins the list of those that may show the board
+  const onSite = ok(await visit('/board/feed.json'));
+  assert.equal(onSite.board.url, 'https://jobs.otterbrook.ca/careers?lang=en');
+  assert.equal(onSite.posts.find((p) => p.id === token).url, `https://jobs.otterbrook.ca/careers?lang=en&role=${token}`);
+  assert.equal((await post(priya, job)).link, `https://jobs.otterbrook.ca/careers?lang=en&role=${token}`);
+  ok(await alex.putJson('/board/settings', { ...fields, page_url: 'https://otterbrook.ca/jobs' }));
+  assert.equal((await post(priya, job)).link, `https://otterbrook.ca/jobs?role=${token}`);
   // With no website listed, the board can still be linked to, and is shown inside nobody's page but its own.
   ok(await alex.putJson('/board/settings', { ...fields, sites: '' }));
   assert.deepEqual(frameRule(await visit('/board/feed.json')), { ancestors: "'self'", denied: null });
+  assert.equal((await post(priya, job)).link, `https://book.harbourtalent.example/board/${token}`);   // with no page of its own, a role's address is the board's
   ok(await alex.putJson('/board/settings', fields));
 });
 
@@ -875,6 +1215,16 @@ test('the pages tell search engines and link previews about the agency and the r
   assert.match(page.body, /<title>Senior Backend Engineer \| Harbour Talent Careers<\/title>/);
   assert.match(page.body, /<meta property="og:title" content="Senior Backend Engineer \| Harbour Talent Careers" \/>/);
   assert.match(page.body, new RegExp(`<link rel="canonical" href="https://book\\.harbourtalent\\.example/board/${token}" />`));
+  // Once the agency has said which page of its own website shows the board, that is the address search engines and
+  // link previews are given for the board and for each role, and the one in the job-posting data.
+  ok(await alex.putJson('/board/settings', { ...ok(await alex.get('/board/settings')), page_url: 'https://otterbrook.ca/jobs' }));
+  const moved = (await visit(`/board/${token}`)).body;
+  assert.match(moved, new RegExp(`<link rel="canonical" href="https://otterbrook\\.ca/jobs\\?role=${token}" />`));
+  assert.match(moved, new RegExp(`<meta property="og:url" content="https://otterbrook\\.ca/jobs\\?role=${token}" />`));
+  const movedData = JSON.parse(/id="board-job-data">(.*?)<\/script>/s.exec(moved)[1]);
+  assert.deepEqual([movedData.url, movedData.hiringOrganization.url], [`https://otterbrook.ca/jobs?role=${token}`, 'https://otterbrook.ca/jobs']);
+  assert.match((await visit('/board')).body, /<link rel="canonical" href="https:\/\/otterbrook\.ca\/jobs" \/>/);
+  ok(await alex.putJson('/board/settings', { ...ok(await alex.get('/board/settings')), page_url: '' }));
   const data = JSON.parse(/<script type="application\/ld\+json" id="board-job-data">(.*?)<\/script>/s.exec(page.body)[1]);
   assert.deepEqual(Object.keys(data), ['@context', '@type', 'title', 'description', 'datePosted', 'employmentType', 'hiringOrganization', 'jobLocation', 'baseSalary', 'directApply', 'url']);
   assert.equal(data['@type'], 'JobPosting');
@@ -893,12 +1243,22 @@ test('the pages tell search engines and link previews about the agency and the r
   assert.match(missing.body, /noindex/);
   assert.doesNotMatch(missing.body, /ld\+json/);
   // Text typed into a post cannot break out of the page it is written into.
-  await save(alex, northJob, { enabled: true, title: 'Planner </title><script>alert(1)</script>', location: 'West of the city', description: 'A job. </script><script>alert(2)</script> "quoted" & more.', show_salary: false });
+  await save(alex, northJob, { ...NORTH, title: 'Planner </title><script>alert(1)</script>', description: 'A job. </script><script>alert(2)</script> "quoted" & more.' });
   const odd = await visit(`/board/${northToken}`);
   assert.doesNotMatch(odd.body, /<script>alert/);
   assert.match(odd.body, /<title>Planner &lt;\/title&gt;&lt;script&gt;alert\(1\)&lt;\/script&gt; \| Harbour Talent Careers<\/title>/);
   assert.equal(JSON.parse(/id="board-job-data">(.*?)<\/script>/s.exec(odd.body)[1]).title, 'Planner </title><script>alert(1)</script>');
-  await save(alex, northJob, { enabled: true, title: 'Supply Chain Planner', location: 'West of the city', description: 'Our client sells outdoor clothing across Europe and North America.', show_salary: false });
+  await save(alex, northJob, NORTH);
+  // With a logo, the tab shows the agency's picture and not The Book's.
+  assert.match(list.body, /<link rel="icon" type="image\/svg\+xml" href="\/logo\.svg" \/>/);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]), Buffer.from('IHDR'), Buffer.from([0, 0, 0, 64, 0, 0, 0, 64, 8, 6, 0, 0, 0]), Buffer.alloc(8)]);
+  const form = new FormData();
+  form.append('photo', new Blob([png]), 'logo.png');
+  const { logo } = await (await fetch(`${server.base}/api/board/logo`, { method: 'PUT', headers: { Cookie: alex.cookie() }, body: form })).json();
+  const branded = (await visit('/board')).body;
+  assert.match(branded, new RegExp(`<link rel="icon" href="/api/public/board/logo\\?v=${logo}" />`));
+  assert.doesNotMatch(branded, /logo\.svg|apple-touch-icon/);
+  ok(await alex.del('/board/logo'));
 });
 
 // ---------- starting on a live database ----------
@@ -930,7 +1290,7 @@ test('starting on a database made by the live code adds the board’s tables and
   const before = { objects: objects(), rows: dump() };
   db.close();
 
-  const NEW = ['board_applications', 'board_log', 'board_overrules', 'board_posts'];
+  const NEW = ['board_applications', 'board_log', 'board_names', 'board_overrules', 'board_posts'];
   let api = await startServer({ port: UPGRADE_PORT, dataDir: dir });
   try {
     await api.stop();
@@ -938,7 +1298,7 @@ test('starting on a database made by the live code adds the board’s tables and
     const after = { objects: objects(), rows: dump() };
     // Every table, index and trigger that was there is still there, exactly as it was written.
     for (const [name, sql] of Object.entries(before.objects)) assert.equal(after.objects[name], sql, `${name} was changed or dropped`);
-    // What is new: the board's four tables and their indexes, and nothing else.
+    // What is new: the board's five tables and their indexes, and nothing else.
     const added = Object.keys(after.objects).filter((name) => !(name in before.objects)).sort();
     assert.deepEqual(added, ['idx_board_applications_post', 'idx_board_log_post', ...NEW].sort());
     for (const table of NEW) assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
@@ -985,6 +1345,56 @@ test('starting on a database made by the live code adds the board’s tables and
     assert.doesNotMatch(jonas.emails[0].body, /kestrel/i);
     // Somebody who was in the job before the board existed is not somebody who came through a post.
     assert.equal(ok(await owner.get('/applications/1')).board, null);
+  } finally {
+    await api.stop().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a database that already has the board’s first tables is given the new columns, and its posts stay as they were', async () => {
+  const dir = tempDir('board-columns');
+  const file = path.join(dir, 'app.db');
+  const T = '2026-11-01T15:00:00.000Z';
+  let db = new DatabaseSync(file);
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  db.exec(fs.readFileSync(path.join(FIXTURES, 'live-schema.sql'), 'utf8'));
+  db.exec(fs.readFileSync(path.join(FIXTURES, 'board-first-tables.sql'), 'utf8'));
+  const run = (sql, ...values) => db.prepare(sql).run(...values);
+  for (const [key, value] of [['agency_name', 'Harbour Talent'], ['links_normalised', '1'], ['activity_types_v2', '1'], ['reports_start', '2026-11-16'], ['client_photos', '1']]) run('INSERT INTO settings (key, value) VALUES (?, ?)', key, value);
+  run(`INSERT INTO clients (id, name, slug, created_at) VALUES (1, 'Kestrel Logistics', 'kestrel-logistics', ?)`, T);
+  run(`INSERT INTO users (id, email, password_hash, name, role, created_at) VALUES (1, 'alex@agency.example', 'x:y', 'Alex Morgan', 'admin', ?)`, T);
+  run(`INSERT INTO jobs (id, client_id, title, description, status, salary_min, salary_max, created_by, created_at, opened_at) VALUES (1, 1, 'Head of Sales, North', 'Lead the Kestrel sales team.', 'open', 90000, 110000, 1, ?, ?)`, T, T);
+  run(`INSERT INTO stages (id, job_id, name, kind, position) VALUES (1, 1, 'Applied', 'applied', 0)`);
+  run(`INSERT INTO candidates (id, client_id, name, email, created_at) VALUES (1, 1, 'Dana Whitlock', 'dana@mail.example', ?)`, T);
+  run(`INSERT INTO applications (id, candidate_id, job_id, stage_id, source, applied_at, stage_entered_at, updated_at) VALUES (1, 1, 1, 1, 'our_website', ?, ?, ?)`, T, T, T);
+  run(`INSERT INTO board_posts (id, job_id, token, enabled, title, location, description, show_salary, live, problems, checked_at, posted_at, created_by, created_at, updated_by, updated_at)
+       VALUES (1, 1, 'abcdef012345678901', 1, 'Head of Sales', 'North of England', 'Lead a sales team of eight at a same-day delivery business.', 0, 1, '[]', ?, ?, 1, ?, 1, ?)`, T, T, T, T);
+  run(`INSERT INTO board_applications (application_id, post_id, public_title) VALUES (1, 1, 'Head of Sales')`);
+  const read = (table) => db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all().map((row) => ({ ...row }));
+  const before = { posts: read('board_posts'), applications: read('board_applications') };
+  db.close();
+
+  let api = await startServer({ port: UPGRADE_PORT, dataDir: dir });
+  try {
+    // The public is still shown the post at the address it had, and the job is still on the client's careers page: nothing was switched on for it.
+    const board = await (await fetch(`${api.base}/api/public/board`)).json();
+    assert.deepEqual(board.posts.map((p) => [p.token, p.title, p.salary]), [['abcdef012345678901', 'Head of Sales', null]]);
+    assert.deepEqual((await (await fetch(`${api.base}/api/public/careers/kestrel-logistics`)).json()).jobs.map((j) => j.title), ['Head of Sales, North']);
+    await api.stop();
+    db = new DatabaseSync(file);
+    // Every row is as it was, with the new columns added and nothing chosen in them.
+    assert.deepEqual(read('board_posts'), before.posts.map((row) => ({ ...row, hide_from_careers: 0, round_salary: 0, renew: 0 })));
+    assert.deepEqual(read('board_applications'), before.applications.map((row) => ({ ...row, direct_applied_at: null })));
+    const objects = () => db.prepare(`SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name`).all().map((o) => `${o.name}: ${o.sql}`);
+    const after = objects();
+    db.close();
+    // Starting again changes nothing more.
+    api = await startServer({ port: UPGRADE_PORT, dataDir: dir });
+    await api.stop();
+    db = new DatabaseSync(file);
+    assert.deepEqual(objects(), after);
+    assert.deepEqual(read('board_posts'), before.posts.map((row) => ({ ...row, hide_from_careers: 0, round_salary: 0, renew: 0 })));
+    db.close();
   } finally {
     await api.stop().catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });

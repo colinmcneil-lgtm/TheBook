@@ -190,12 +190,14 @@ export default function JobDetail() {
       subtitle={[job.client_name, job.location, WORK_MODES[job.work_mode], salaryRange(job.salary_min, job.salary_max, job.currency)].filter(Boolean).join(' · ')}
       actions={
         <>
-          {job.status === 'open' && (
+          {job.status === 'open' && job.careers_page && (
             <>
               <Button icon={Copy} onClick={copyLink}>Copy apply link</Button>
               <a href={careersUrl} target="_blank" rel="noreferrer"><Button icon={ExternalLink}>View advert</Button></a>
             </>
           )}
+          {/* A job the agency advertises on its own board only. Everybody is told that it is not on the careers page; only the agency has the tab that says why. */}
+          {job.status === 'open' && !job.careers_page && <span className="self-center text-[13px] text-stone-500">Not listed on the careers page</span>}
           {isAgency && (
             <>
               <Menu

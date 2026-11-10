@@ -4,13 +4,17 @@ import { CircleAlert, CircleCheck, Copy, ExternalLink, EyeOff, ShieldCheck, Spar
 import { api, ago, copyText, fmtDate, plural, salaryRange, WORK_MODES, EMPLOYMENT } from '../lib.js';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { Badge, Button, Card, CardHeader, Checkbox, Field, Input, Textarea, useAction, useToast } from '../ui.jsx';
-import { PostView } from '../pages/Board.jsx';
+import { PostView, inkOn } from '../pages/Board.jsx';
 
 // The job's Confidential post tab: the agency's own advert for this job, for its public job board. What is typed
 // here is all the public is ever shown; nothing is taken from the client. The check below the form is what keeps
 // the client's name out, and the post cannot be public while it finds anything.
 
-const LOG = { published: 'Went public', taken_down: 'Came down', overruled: 'A word was overruled', overrule_withdrawn: 'An overrule was withdrawn' };
+const LOG = { published: 'Went public', taken_down: 'Came down', overruled: 'A word was overruled', overrule_withdrawn: 'An overrule was withdrawn', new_address: 'Given a new address' };
+/** The post's fields as the form holds them and as the check and the save are sent them. */
+const fieldsOf = (p) => ({ enabled: p.enabled, title: p.title, location: p.location, description: p.description, show_salary: p.show_salary, round_salary: p.round_salary, hide_from_careers: p.hide_from_careers });
+/** What the check looks at: everything but the switch. */
+const checkedOf = ({ enabled, ...fields }) => JSON.stringify(fields);
 
 export default function JobBoardPost({ job }) {
   const { isAdmin, bump } = useApp();
@@ -27,18 +31,20 @@ export default function JobBoardPost({ job }) {
   const savedPost = current && JSON.stringify(current.post), savedCheck = current && JSON.stringify(current.check);
   useEffect(() => {
     if (!current) return;
-    const p = current.post;
-    setForm({ enabled: p.enabled, title: p.title, location: p.location, description: p.description, show_salary: p.show_salary });
+    setForm(fieldsOf(current.post));
   }, [savedPost]);
+  // The other names the agency has listed for this client, one to a line, and whether the list in the box has been changed.
+  const savedNames = current && current.other_names.join('\n');
+  const [names, setNames] = useState('');
+  useEffect(() => { if (current) setNames(savedNames); }, [savedNames]);
 
   // The check is run again a moment after the recruiter stops typing, so they see what it finds before they save.
-  const typed = form && JSON.stringify([form.title, form.location, form.description, form.show_salary]);
+  const typed = form && checkedOf(form);
   const latest = useRef(typed);
   useEffect(() => {
     latest.current = typed;
     if (!form || !current) return undefined;
-    const saved = JSON.stringify([current.post.title, current.post.location, current.post.description, current.post.show_salary]);
-    if (typed === saved) { setChecked(current.check); return undefined; }
+    if (typed === checkedOf(fieldsOf(current.post))) { setChecked(current.check); return undefined; }
     const timer = setTimeout(async () => {
       try {
         const result = await api.post(`/jobs/${job.id}/board/check`, form);
@@ -56,11 +62,27 @@ export default function JobBoardPost({ job }) {
     bump();
   });
   const [draft, drafting] = useAction(async () => {
-    if (form.description.trim() && !window.confirm('Replace the advert text with a new draft?')) return;
+    // A title the recruiter has already changed from the job's own is theirs, and is left alone: the draft only
+    // replaces a title that is still the client's, which is the one that could be matched with the client's page.
+    const ownTitle = Boolean(form.title.trim()) && form.title.trim() !== job.title.trim();
+    if (form.description.trim() && !window.confirm(ownTitle ? 'Replace the advert text with a new draft? Your title is kept.' : 'Replace the advert text and the title with a new draft?')) return;
     const result = await api.post(`/jobs/${job.id}/board/draft`);
-    setForm((f) => ({ ...f, title: result.title, description: result.description }));
-    setDrafted(result.removed);
+    setForm((f) => ({ ...f, title: ownTitle ? f.title : result.title, description: result.description }));
+    setDrafted({ removed: result.removed, title: ownTitle ? null : result.title });
     toast('Drafted. Read it through before you save.');
+  });
+  const [newAddress, readdressing] = useAction(async () => {
+    if (!window.confirm('Give this post a new address?\n\nThe old link stops working, wherever it has been shared. Do this when something that pointed to the client was public at the old address, so that copies of it kept by search engines no longer lead to this post.')) return;
+    setView(await api.post(`/jobs/${job.id}/board/address`));
+    toast('The post has a new address');
+    bump();
+  });
+  const [saveNames, savingNames] = useAction(async () => {
+    const next = await api.put(`/jobs/${job.id}/board/names`, { names });
+    setView(next);
+    toast('Names saved. Every post for this client has been checked again.');
+    if (next.board_notice) toast(next.board_notice, 'error');
+    bump();
   });
   const [overrule, overruling] = useAction(async (problem) => {
     if (!window.confirm(`Overrule “${problem.found}” in “${problem.phrase}”?\n\nOnly do this when it is plainly not the client: a common word that happens to be in their name. It is recorded with your name. The same word anywhere else in the post is still found.`)) return;
@@ -76,13 +98,16 @@ export default function JobBoardPost({ job }) {
 
   if (!current || !form || !checked) return <Card><Pending error={error} /></Card>;
   const { post, state, board } = current;
-  const dirty = JSON.stringify(form) !== JSON.stringify({ enabled: post.enabled, title: post.title, location: post.location, description: post.description, show_salary: post.show_salary });
+  const dirty = JSON.stringify(form) !== JSON.stringify(fieldsOf(post));
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
-  const salary = salaryRange(job.salary_min, job.salary_max, job.currency);
-  const address = post.token ? `${window.location.origin}/board/${post.token}` : null;
+  // The job's salary range as the post can show it: as it is on the job, or rounded outwards.
+  const range = (which) => (current.salary ? salaryRange(current.salary[which].min, current.salary[which].max, job.currency) : '');
+  const salary = range('exact');
+  // Where people are sent: the post on the agency's own website when the board is shown there, or else on The Book.
+  const address = current.link || (post.token ? `${window.location.origin}/board/${post.token}` : null);
   const preview = {
     title: form.title, location: form.location, description: form.description, work_mode: job.work_mode, employment_type: job.employment_type,
-    salary: form.show_salary && salary ? { min: job.salary_min, max: job.salary_max, currency: job.currency } : null,
+    salary: form.show_salary && current.salary ? { ...current.salary[form.round_salary ? 'rounded' : 'exact'], currency: job.currency } : null,
   };
 
   return (
@@ -99,6 +124,7 @@ export default function JobBoardPost({ job }) {
                 <span className="min-w-0 flex-1 basis-56">Public on your job board{post.posted_at ? ` since ${fmtDate(post.posted_at)}` : ''}.</span>
                 <Button size="sm" icon={Copy} onClick={() => copyText(address, toast, 'Link copied')}>Copy link</Button>
                 <a href={address} target="_blank" rel="noreferrer"><Button size="sm" icon={ExternalLink}>Open</Button></a>
+                <button type="button" disabled={readdressing} onClick={newAddress} className="basis-full text-left text-xs text-brand-900/80 underline hover:text-brand-900">Give it a new address, so the old link stops working</button>
               </div>
             ) : post.enabled && state.says ? (
               <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950"><TriangleAlert className="mt-0.5 size-4 shrink-0" />{state.says}</p>
@@ -111,7 +137,13 @@ export default function JobBoardPost({ job }) {
               <p><span className="font-medium text-stone-800">{[WORK_MODES[job.work_mode], EMPLOYMENT[job.employment_type]].join(' · ')}</span> are shown as they are on the job. Change them with Edit, above.</p>
               <Checkbox checked={form.show_salary && Boolean(salary)} disabled={!salary} onChange={(e) => set('show_salary', e.target.checked)}
                 label={salary ? `Show the salary range (${salary})` : 'Show the salary range'} hint={salary ? undefined : 'This job has no salary range.'} />
+              {form.show_salary && Boolean(salary) && (
+                <Checkbox checked={form.round_salary} onChange={(e) => set('round_salary', e.target.checked)} label={`Round it (${range('rounded')})`}
+                  hint="The exact figures are the client’s. Rounded, they say what a candidate needs to know and are harder to match with anything the client has published." />
+              )}
             </div>
+            <Checkbox checked={form.hide_from_careers} onChange={(e) => set('hide_from_careers', e.target.checked)} label={`Keep this job off ${job.client_name}’s careers page`}
+              hint={`While this post is switched on, the job is not listed on ${job.client_name}’s own careers page, so nobody can put the two adverts side by side. Untick it only if the client needs the job on their page as well: the check then compares the two.`} />
             <Field label="Advert text" hint="Plain text; line breaks are kept. Describe the employer in general terms only (“a Series B health-tech company”).">
               <Textarea rows={16} value={form.description} onChange={(e) => set('description', e.target.value)}
                 placeholder={'Our client is a …\n\nWhat you will do\n• …\n\nWhat we are looking for\n• …'} />
@@ -127,7 +159,9 @@ export default function JobBoardPost({ job }) {
             {drafted && (
               <div className="rounded-lg bg-violet-50 px-3 py-2.5 text-[13px] leading-relaxed text-violet-950">
                 <p className="font-medium">This is a draft. Read it through: the check below is what counts, and it has been run on it.</p>
-                {drafted.length > 0 && <ul className="mt-1.5 list-disc space-y-0.5 pl-5">{drafted.map((r, i) => <li key={i}>{r}</li>)}</ul>}
+                {drafted.title && <p className="mt-1.5">The title was replaced as well: “{drafted.title}”.</p>}
+                {drafted.removed.length > 0 && <p className="mt-1.5 font-medium">Taken out or made general:</p>}
+                {drafted.removed.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-5">{drafted.removed.map((r, i) => <li key={i}>{r}</li>)}</ul>}
               </div>
             )}
             <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
@@ -176,16 +210,21 @@ export default function JobBoardPost({ job }) {
             {checked.warnings.map((w, i) => (
               <p key={i} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-950"><TriangleAlert className="mt-0.5 size-4 shrink-0" /><span>{w.message}</span></p>
             ))}
-            {checked.client_advert_public && (
+            {checked.client_advert_public && job.status === 'open' && job.careers_page && (
               <p className="text-[13px] text-stone-500">
-                This job is also advertised in {job.client_name}’s name on <a href={`/careers/${job.client_slug}/${job.id}`} target="_blank" rel="noreferrer" className="font-medium text-brand-700 hover:underline">their careers page</a>, which anybody can read.
-                Compare the two: a title, salary or sentence they share could be used to match them.
+                <a href={`/careers/${job.client_slug}/${job.id}`} target="_blank" rel="noreferrer" className="font-medium text-brand-700 hover:underline">Open {job.client_name}’s advert</a> and compare the two as a stranger would.
               </p>
             )}
+            <div className="space-y-2 border-t border-line pt-4">
+              <Field label={`Other names for ${job.client_name}`} hint="One on each line: brands, products, short names and anything else people call this client. The check looks for them in every post for this client, as it looks for the name.">
+                <Textarea rows={3} value={names} onChange={(e) => setNames(e.target.value)} spellCheck={false} placeholder={'e.g. a product’s name\na short name people use'} />
+              </Field>
+              <Button size="sm" busy={savingNames} disabled={names.trim() === savedNames} onClick={saveNames}>Save names</Button>
+            </div>
             <details className="text-[13px] text-stone-500">
               <summary className="font-medium text-stone-700">What the check looks for</summary>
               <ul className="mt-1.5 list-disc space-y-0.5 pl-5">{checked.looked_for.map((x, i) => <li key={i}>{x}</li>)}</ul>
-              <p className="mt-1.5">Capitals and accents make no difference, and a name broken up with dots, dashes or spaces is still found. It is run before the post goes public and again whenever the post, the job or the client is changed; a post that fails comes down until it is fixed.</p>
+              <p className="mt-1.5">Capitals and accents make no difference, and a name broken up with dots, dashes or spaces, written with look-alike letters or tucked inside a longer word is still found. It is run before the post goes public and again whenever the post, the job or the client is changed; a post that fails comes down until it is fixed.</p>
             </details>
           </div>
         </Card>
@@ -195,7 +234,7 @@ export default function JobBoardPost({ job }) {
         <Card className="overflow-hidden">
           <CardHeader title="Preview" action={<span className="text-xs text-stone-500">Exactly what the public sees</span>} />
           <div className="bg-white">
-            <div className="flex items-center gap-2 px-5 py-3 text-sm font-semibold" style={{ background: board.color, color: '#fff' }}><EyeOff className="size-4 opacity-80" />{board.name}</div>
+            <div className="flex items-center gap-2 px-5 py-3 text-sm font-semibold" style={{ background: board.color, color: inkOn(board.color) }}><EyeOff className="size-4 opacity-80" />{board.name}</div>
             <div className="px-5 py-6"><PostView board={board} post={preview} /></div>
           </div>
         </Card>

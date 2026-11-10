@@ -231,7 +231,7 @@ function Team() {
   const { data: people, error } = useApi('/users');
   const { data: invites } = useApi('/invites');
   const [modal, setModal] = useState(null); // 'invite' | { approve: person }
-  const [setActive] = useAction(async (u, active) => { await api.patch(`/users/${u.id}`, { active }); toast(active ? 'Reactivated' : 'Deactivated'); bump(); });
+  const [setActive] = useAction(async (u, active) => { const answer = await api.patch(`/users/${u.id}`, { active }); toast(active ? 'Reactivated' : 'Deactivated'); if (answer.board_notice) toast(answer.board_notice, 'error'); bump(); });
   const [decline] = useAction(async (u) => {
     if (!window.confirm(`Decline ${u.name}'s account request? It will be removed.`)) return;
     await api.del(`/users/${u.id}`);

@@ -38,6 +38,10 @@ app.use((req, res, next) => {
   // X-Frame-Options header can only say "nobody", so the board's pages leave it out and name who may in the policy below.
   const framedBy = board.isBoardPage(req.path) ? board.frameAncestors() : "'none'";
   if (framedBy === "'none'") res.setHeader('X-Frame-Options', 'DENY');
+  // A client's careers page is at the same web address as the agency's board. While the board has posts, search
+  // engines are asked not to list the careers pages, so that a search of this address does not set every client
+  // out beside the board (Settings, Agency, Our job board). The pages work as ever for anybody given their link.
+  if (/^\/careers(\/|$)/.test(req.path) && board.careersUnlisted()) res.setHeader('X-Robots-Tag', 'noindex');
   // Otterview records calls: this site's own pages may use the microphone and share a tab's sound; nothing embedded
   // in them may, and nothing here uses the camera or location.
   res.setHeader('Permissions-Policy', 'microphone=(self), display-capture=(self), camera=(), geolocation=()');
@@ -62,6 +66,10 @@ app.use('/api', (req, res, next) => {
 app.use('/api', api);
 // The board's data feed, at an address a web developer can be given: the same answer as /api/public/board/feed.
 app.get('/board/feed.json', board.sendFeed);
+// What search engines may read. Without this they were sent the workspace's page, which told them nothing. The data
+// routes are not for them, except the board's own, which its pages are drawn from; the pages say for themselves
+// whether they are to be listed.
+app.get('/robots.txt', (req, res) => res.type('text/plain').send('User-agent: *\nAllow: /api/public/board\nDisallow: /api/\n'));
 
 if (isProd) {
   app.use(express.static(path.resolve('dist'), { index: false, maxAge: '1h' }));
@@ -77,6 +85,8 @@ if (isProd) {
     try { page = fs.readFileSync(path.resolve('dist/index.html'), 'utf8'); } catch { return next(); } // read each time, like the page below: it is small, and never a release behind
     const head = board.pageHead(req.path, req.query.embed === '1');
     res.setHeader('Cache-Control', 'no-cache');
+    // With a logo of its own, the board's tab shows that and not The Book's (the tags below name it).
+    if (head.icon) page = page.replace(/\s*<link rel="(?:icon|apple-touch-icon)"[^>]*>/g, '');
     res.status(head.status).type('html').send(page
       .replace(/<title>[^<]*<\/title>/, () => `<title>${head.title.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}</title>`)
       .replace('</head>', () => `  ${head.tags}\n  </head>`));
