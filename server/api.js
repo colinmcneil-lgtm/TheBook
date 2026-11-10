@@ -1567,9 +1567,10 @@ api.post('/interviews', async (req, res) => {
   res.json({ id });
 });
 
-api.patch('/interviews/:id', (req, res) => {
+api.patch('/interviews/:id', async (req, res) => {
   const i = loadInterview(req.params.id, req.user);
   const b = req.body || {};
+  let changed = null; // the interview as it now stands, when its details were edited
   tx(() => {
     if (b.status && ['scheduled', 'completed', 'cancelled'].includes(b.status) && b.status !== i.status) {
       q.run('UPDATE interviews SET status = ? WHERE id = ?', b.status, i.id);
@@ -1582,11 +1583,22 @@ api.patch('/interviews/:id', (req, res) => {
       q.run('UPDATE interviews SET title = ?, kind = ?, starts_at = ?, duration_min = ?, location = ?, notes = ? WHERE id = ?',
         title, isStr(b.kind) && Object.hasOwn(KIND_LABELS, b.kind) ? b.kind : i.kind, starts.toISOString(),
         Math.min(480, Math.max(10, int(b.duration_min) ?? i.duration_min)), clean(b.location, 300), text(b.notes, 4000), i.id);
+      changed = q.get('SELECT title, kind, starts_at, duration_min, location FROM interviews WHERE id = ?', i.id);
       if (starts.toISOString() !== i.starts_at) logActivity(i.application_id, req.user.id, 'interview', `Rescheduled ${title}`);
+      // A new place, length, format or name is worth a line too, so the history says the details were changed and by whom.
+      else if (['title', 'kind', 'duration_min', 'location'].some((k) => (changed[k] ?? '') !== (i[k] ?? ''))) logActivity(i.application_id, req.user.id, 'interview', `Updated ${title}`);
     }
     if (Array.isArray(b.panel)) setPanel(i.id, i.client_id, b.panel.slice(0, 20));
     todos.interviewChanged(i.application_id);
   });
+  // Asked for, the candidate is sent the invitation again with the details as they now are.
+  if (changed && b.notify) {
+    const a = loadApp(i.application_id, req.user);
+    if (a.candidate_email) await sendTemplate('interview_invite', {
+      applicationId: a.id, to: a.candidate_email, userId: req.user.id,
+      vars: { ...mailVars(a, req.user), interview_time: clean(b.time_label, 120) || new Date(changed.starts_at).toUTCString(), interview_format: KIND_LABELS[changed.kind], interview_location: changed.location || 'Details to follow' },
+    });
+  }
   res.json({ ok: true });
 });
 
