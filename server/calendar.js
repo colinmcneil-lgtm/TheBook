@@ -22,7 +22,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { q, now, tx, PHONE_TAIL } from './db.js';
 import { keyFor, seal, unseal } from './secret.js';
-import { safeFetchIcs, normalizeFeedUrl, providerOf, createFeedCache, FeedFetchError } from './calendar-fetch.js';
+import { safeFetchIcs, normalizeFeedUrl, providerOf, createFeedCache, FeedFetchError, httpStatusError } from './calendar-fetch.js';
+import { mayRing } from './phone-numbers.js';
 import { readDay, forgetRead, CalendarReadError } from './calendar-worker.js';
 import { validZone, validDay, dayWindow, wallClock } from './calendar-time.js';
 import { clip, findJoinLink, findPhones, toE164 } from './calendar-links.js';
@@ -49,6 +50,10 @@ const short = (purpose, ...parts) => crypto.createHmac('sha256', keyFor(purpose)
 const keyOf = (userId, source, id) => short('calendar-event-key', userId, source, id);
 /** A fingerprint of an event's title and start, used to find a marked event again after its calendar gave it a new identity. */
 const printOf = (userId, title, start) => short('calendar-event-print', userId, title, start.toISOString());
+/** A fingerprint of the repeating event an event is one date of: finds a marked date again after the whole series was moved to another time. */
+const seriesOf = (userId, series) => (series ? short('calendar-event-series', userId, series) : null);
+/** The number written in an event, when it is one The Book would ring. Anyone can put a number in an invitation, so a premium-rate or overseas one is never turned into a Call button. */
+const ringable = (phones) => phones.find((p) => p.person && mayRing(p.e164))?.e164 ?? null;
 
 // ---------- reading calendars ----------
 // For the tests only: with CALENDAR_TEST_FILES naming a folder, a link to https://calendar.test/<name>.ics is read
@@ -59,6 +64,9 @@ if (process.env.CALENDAR_TEST_FILES && !TEST_FILES) console.error('CALENDAR_TEST
 
 async function readTestFile(u) {
   const name = path.basename(u.pathname);
+  // "answers-404.ics" stands for a calendar whose own server answers 404: the very error the real reader throws.
+  const answers = /^answers-(\d{3})\.ics$/.exec(name);
+  if (answers) throw httpStatusError(Number(answers[1]));
   if (!/^[\w.-]+\.ics$/.test(name)) throw new FeedFetchError('http_status', 'That calendar link no longer works. It may have been reset or switched off: copy the link again from your calendar\'s settings.');
   const text = await fs.promises.readFile(path.join(TEST_FILES, name), 'utf8').catch(() => null);
   if (text === null) throw new FeedFetchError('http_status', 'That calendar link no longer works. It may have been reset or switched off: copy the link again from your calendar\'s settings.');
@@ -279,12 +287,12 @@ function interviewsOf(user, from, to) {
 function interviewEvent(i) {
   const where = { title: i.title, location: i.location, description: i.notes };
   const start = new Date(i.starts_at);
-  const typed = findPhones(where).find((p) => p.person)?.e164 ?? null;
+  const typed = ringable(findPhones(where));
   return {
     source: 'interview', id: String(i.id), title: i.title, allDay: false, start, end: new Date(start.getTime() + i.duration_min * MINUTE),
     join: findJoinLink(where),
     // A phone interview is a call to the candidate, so their own number is the one to ring when none was typed in.
-    phone: typed ?? (i.kind === 'phone' ? toE164(i.phone) : null),
+    phone: typed ?? (i.kind === 'phone' && mayRing(toE164(i.phone)) ? toE164(i.phone) : null),
     guests: [{ name: i.name, email: i.email || null }],
     match: { application_id: i.application_id, candidate_id: i.candidate_id, name: i.name, photo: i.photo, job_title: i.job_title, client_name: i.client_name, how: 'interview' },
     suggestions: [],
@@ -315,6 +323,7 @@ function remember(user, events, ymd, tz) {
   for (const ev of events) {
     ev.key = keyOf(user.id, ev.source, ev.id);
     ev.print = printOf(user.id, ev.title, ev.start);
+    ev.seriesPrint = seriesOf(user.id, ev.series);
   }
   const rows = rowsOf(user.id, events.map((e) => e.key));
   const fresh = events.filter((e) => !rows.has(e.key));
@@ -324,32 +333,47 @@ function remember(user, events, ymd, tz) {
     const lost = inChunks([...new Set(fresh.map((e) => e.print))], (some) => q.all(
       `SELECT * FROM calendar_events WHERE user_id = ? AND fingerprint IN (${marks(some.length)}) AND (added = 1 OR application_id IS NOT NULL OR call_id IS NOT NULL)`, user.id, ...some))
       .filter((r) => !rows.has(r.event_key));
+    // The whole of a repeating event moved to another time ("all events"): each date has a new identity and a new
+    // start, so the fingerprint misses too. A marked date of the same series that was last seen on this day and is
+    // no longer there is that date, as long as the series has only one date on the day.
+    const series = [...new Set(fresh.map((e) => e.seriesPrint).filter(Boolean))];
+    const moved = inChunks(series, (some) => q.all(
+      `SELECT * FROM calendar_events WHERE user_id = ? AND day = ? AND series IN (${marks(some.length)}) AND (added = 1 OR application_id IS NOT NULL OR call_id IS NOT NULL)`, user.id, ymd, ...some))
+      .filter((r) => !rows.has(r.event_key));
+    const taken = new Set(); // the keys of lost rows already given to an event, so one mark is never handed to two
     for (const ev of fresh) {
-      const old = lost.filter((r) => r.fingerprint === ev.print && r.source === ev.source);
-      if (old.length === 1 && !old[0].taken) {
-        old[0].taken = true;
-        changes.push(() => q.run('UPDATE calendar_events SET event_key = ?, day = ?, tz = ?, seen_at = ? WHERE user_id = ? AND event_key = ?', ev.key, ymd, tz, stamp, user.id, old[0].event_key));
+      let old = lost.filter((r) => r.fingerprint === ev.print && r.source === ev.source && !taken.has(r.event_key));
+      if (old.length !== 1 && ev.seriesPrint && fresh.filter((e) => e.seriesPrint === ev.seriesPrint).length === 1) {
+        old = moved.filter((r) => r.series === ev.seriesPrint && r.source === ev.source && !taken.has(r.event_key));
+      }
+      if (old.length === 1) {
+        taken.add(old[0].event_key);
+        const oldKey = old[0].event_key;
+        changes.push(() => q.run('UPDATE calendar_events SET event_key = ?, day = ?, tz = ?, seen_at = ? WHERE user_id = ? AND event_key = ?', ev.key, ymd, tz, stamp, user.id, oldKey));
         rows.set(ev.key, { ...old[0], event_key: ev.key, day: ymd, tz, seen_at: stamp });
       } else {
-        changes.push(() => q.run('INSERT OR IGNORE INTO calendar_events (user_id, event_key, source, day, tz, fingerprint, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)', user.id, ev.key, ev.source, ymd, tz, ev.print, stamp));
-        rows.set(ev.key, { user_id: user.id, event_key: ev.key, source: ev.source, day: ymd, tz, fingerprint: ev.print, added: 0, application_id: null, call_id: null, seen_at: stamp });
+        changes.push(() => q.run('INSERT OR IGNORE INTO calendar_events (user_id, event_key, source, day, tz, fingerprint, series, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', user.id, ev.key, ev.source, ymd, tz, ev.print, ev.seriesPrint, stamp));
+        rows.set(ev.key, { user_id: user.id, event_key: ev.key, source: ev.source, day: ymd, tz, fingerprint: ev.print, series: ev.seriesPrint, added: 0, application_id: null, call_id: null, seen_at: stamp });
       }
     }
   }
   for (const ev of events) {
     const row = rows.get(ev.key);
     // Where it was last seen is kept up to date (an event can move to another day); "seen" is refreshed once a day at most.
-    if (row.day !== ymd || row.tz !== tz || row.fingerprint !== ev.print || Date.parse(stamp) - Date.parse(row.seen_at) > DAY) {
-      changes.push(() => q.run('UPDATE calendar_events SET day = ?, tz = ?, fingerprint = ?, seen_at = ? WHERE user_id = ? AND event_key = ?', ymd, tz, ev.print, stamp, user.id, ev.key));
-      Object.assign(row, { day: ymd, tz, fingerprint: ev.print, seen_at: stamp });
+    if (row.day !== ymd || row.tz !== tz || row.fingerprint !== ev.print || (row.series ?? null) !== ev.seriesPrint || Date.parse(stamp) - Date.parse(row.seen_at) > DAY) {
+      changes.push(() => q.run('UPDATE calendar_events SET day = ?, tz = ?, fingerprint = ?, series = ?, seen_at = ? WHERE user_id = ? AND event_key = ?', ymd, tz, ev.print, ev.seriesPrint, stamp, user.id, ev.key));
+      Object.assign(row, { day: ymd, tz, fingerprint: ev.print, series: ev.seriesPrint, seen_at: stamp });
     }
     ev.row = row;
   }
   // A calendar event that is one of The Book's interviews: the interview is shown, with whatever the calendar adds.
   for (const interview of events.filter((e) => e.source === 'interview')) {
     for (const twin of events.filter((e) => e.source === 'calendar' && !e.allDay && !e.hidden)) {
-      const who = twin.row.application_id ? q.get('SELECT candidate_id FROM applications WHERE id = ?', twin.row.application_id)?.candidate_id : twin.match?.candidate_id;
-      if (who !== interview.match.candidate_id || Math.abs(twin.start - interview.start) > SAME_MEETING) continue;
+      // Only an event The Book matched by itself is taken to be the interview. One the recruiter put a candidate on by
+      // hand stays an event of its own (a prep chat ten minutes before is not the interview), so their choice can
+      // always be seen and changed.
+      if (twin.row.application_id) continue;
+      if (twin.match?.candidate_id !== interview.match.candidate_id || Math.abs(twin.start - interview.start) > SAME_MEETING) continue;
       twin.hidden = true;
       interview.join ||= twin.join;
       interview.phone ||= twin.phone;
@@ -396,7 +420,7 @@ async function dayOf(user, ymd, tz, { force = false } = {}) {
   const { start, end } = dayWindow(ymd, tz);
   const fromCalendar = link ? await calendarDay(link, ymd, tz, force) : { events: [], warnings: [] };
   const interviews = interviewsOf(user, start, end);
-  const calendarEvents = fromCalendar.events.map((e) => ({ ...e, source: 'calendar', phone: e.phones.find((p) => p.person)?.e164 ?? null }));
+  const calendarEvents = fromCalendar.events.map((e) => ({ ...e, source: 'calendar', phone: ringable(e.phones) }));
   matchEvents(calendarEvents, interviews);
   const events = [...calendarEvents, ...interviews.map(interviewEvent)];
   remember(user, events, ymd, tz);
@@ -410,10 +434,12 @@ async function dayOf(user, ymd, tz, { force = false } = {}) {
  * to it. Used when a recording or a phone call is started with an `event_key`. It never throws and never stops a
  * call: a key that is not one of this person's events is simply not tied, and the answer is false.
  */
-export function tieCallToEvent(userId, eventKey, callId) {
+export function tieCallToEvent(userId, eventKey, callId, { onlyIfFree = false } = {}) {
   if (typeof eventKey !== 'string' || !KEY.test(eventKey) || !Number.isInteger(callId)) return false;
   try {
-    return q.run('UPDATE calendar_events SET call_id = ? WHERE user_id = ? AND event_key = ?', callId, userId, eventKey).changes > 0;
+    // `onlyIfFree`: for a call that may yet come to nothing (a phone call being placed). It must not push aside a
+    // call the event already has, or a second try that reaches nobody would leave the event with no call at all.
+    return q.run(`UPDATE calendar_events SET call_id = ? WHERE user_id = ? AND event_key = ?${onlyIfFree ? ' AND call_id IS NULL' : ''}`, callId, userId, eventKey).changes > 0;
   } catch {
     return false;
   }
@@ -449,7 +475,9 @@ export function registerCalendar(api, { agencyOnly, bad, takeHit, loadApp }) {
       if (feed.stale) throw feed.error;                                   // an old copy does not prove the link works now
       read = await readDay({ version: feed.version, text: feed.text, zone: tz, ymd: wallClock(new Date(), tz).ymd });
     } catch (err) {
-      if (err?.status) throw err;
+      // Whatever went wrong while reading is answered as "that link did not work" with its plain reason. The reader's
+      // error for a calendar that answered 404 or 401 carries that status, and it is the calendar's, not ours: passed
+      // on, a 401 would look to the app like the recruiter's own session ending.
       if (!(err instanceof FeedFetchError) && !(err instanceof CalendarReadError)) console.error(`Calendar: checking a link failed (${err?.code || err?.name || 'error'}).`);
       // The link that was saved before, if any, is left as it was. What was read while trying this one is not kept.
       forgetRead(cache.forget(req.user.id));
@@ -502,10 +530,14 @@ export function registerCalendar(api, { agencyOnly, bad, takeHit, loadApp }) {
       sets.push('application_id = ?'); values.push(app?.id ?? null);
     }
     if (!sets.length) bad('Say whether the event is added, or who it is with.');
+    // Looked for before anything is written: an event that has moved to another day, or gone, since the card was
+    // drawn is refused with nothing changed, so the screen never reports a failure for a change that took effect.
+    const zone = validZone(row.tz) ? row.tz : DEFAULT_ZONE;
+    const gone = 'That event is no longer in your calendar on that day, so nothing was changed. Your day has been read again: find the event where it is now.';
+    if (!(await dayOf(req.user, row.day, zone)).events.some((e) => e.key === row.event_key)) bad(gone, 409);
     q.run(`UPDATE calendar_events SET ${sets.join(', ')} WHERE user_id = ? AND event_key = ?`, ...values, req.user.id, row.event_key);
-    const day = await dayOf(req.user, row.day, validZone(row.tz) ? row.tz : DEFAULT_ZONE);
-    const event = day.events.find((e) => e.key === row.event_key);
-    if (!event) bad('That event is no longer in your calendar on that day. Open your day again to see it as it is now.', 404);
+    const event = (await dayOf(req.user, row.day, zone)).events.find((e) => e.key === row.event_key);
+    if (!event) bad(gone, 409);
     res.json(event);
   });
 }

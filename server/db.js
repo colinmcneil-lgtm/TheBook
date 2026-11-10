@@ -411,6 +411,49 @@ addColumn('calls', 'audio_channels', 'INTEGER');               // 2 = each perso
 addColumn('calls', 'voicemail', 'INTEGER NOT NULL DEFAULT 0'); // 1 = a message a caller left when nobody answered
 addColumn('calls', 'notified_at', 'TEXT');                     // when the recruiter was e-mailed that the notes are ready
 addColumn('calls', 'event_key', 'TEXT');                       // the calendar event the call was made from, if any
+// A phone call is written out with nobody at a screen, so what would be a button for a browser recording is tried
+// again by itself: how often the transcription and the e-mail to the recruiter have been tried, and when each is next due.
+addColumn('calls', 'transcribe_tries', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('calls', 'transcribe_next_at', 'TEXT');
+addColumn('calls', 'notify_tries', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('calls', 'notify_next_at', 'TEXT');
+// Wrong PINs on the switchboard: how many locks in a row this phone has earned (each longer than the last), and how
+// many wrong PINs were keyed in since `phone_pin_wrong_since` (ten in a day switches the PIN off).
+addColumn('phone_calls', 'title', 'TEXT');                     // what the call is called in the Oracle when it is with nobody on file (the calendar event's name)
+addColumn('users', 'phone_lock_level', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('users', 'phone_pin_wrong', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('users', 'phone_pin_wrong_since', 'TEXT');
+db.exec(`
+-- What is still owed to the phone service after a phone call's own row has gone. Erasing a person erases the rows
+-- of their calls, and the row was the only memory of a recording still sitting at the phone service; these two
+-- tables outlive it. They hold the phone service's own names for things and nothing about any person.
+-- A recording to delete at the phone service, tried until it is gone.
+CREATE TABLE IF NOT EXISTS phone_recordings_owed (
+  recording_sid TEXT PRIMARY KEY,
+  noted_at TEXT NOT NULL,
+  tries INTEGER NOT NULL DEFAULT 0,
+  next_at TEXT
+);
+-- A recorded call that was erased before its recording was known: the phone service is asked what it recorded for
+-- the call, and whatever it names is deleted.
+CREATE TABLE IF NOT EXISTS phone_calls_erased (
+  call_sid TEXT PRIMARY KEY,
+  noted_at TEXT NOT NULL,
+  next_at TEXT
+);
+-- Written by the database itself, so every way a call's row can go (a candidate deleted, two records merged, a
+-- clean-up nobody has written yet) leaves the note behind.
+CREATE TRIGGER IF NOT EXISTS phone_calls_owed_recording BEFORE DELETE ON phone_calls
+WHEN OLD.recording_sid IS NOT NULL AND OLD.recording_deleted_at IS NULL
+BEGIN
+  INSERT OR IGNORE INTO phone_recordings_owed (recording_sid, noted_at) VALUES (OLD.recording_sid, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+END;
+CREATE TRIGGER IF NOT EXISTS phone_calls_erased_unrecorded BEFORE DELETE ON phone_calls
+WHEN OLD.record = 1 AND OLD.call_sid IS NOT NULL AND OLD.recording_sid IS NULL
+  AND (OLD.recording_state = 'waiting' OR (OLD.recording_state IS NULL AND OLD.status NOT IN ('ended', 'failed')))
+BEGIN
+  INSERT OR IGNORE INTO phone_calls_erased (call_sid, noted_at) VALUES (OLD.call_sid, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+END;`);
 // ---------- end of phone calls ----------
 // ---------- your calendar in The Oracle ----------
 // Kept together and after everything above: the tables below point at users, applications and calls, and the indexes
@@ -476,6 +519,7 @@ INSERT OR IGNORE INTO candidate_name_dirty (candidate_id)
 CREATE INDEX IF NOT EXISTS idx_candidates_email_lower ON candidates(lower(email));
 CREATE INDEX IF NOT EXISTS idx_candidates_phone_tail ON candidates(${PHONE_TAIL}) WHERE phone IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_interviews_starts ON interviews(starts_at);`);
+addColumn('calendar_events', 'series', 'TEXT'); // finds a marked date of a repeating event again when the whole series is moved (a keyed fingerprint, not the calendar's own identifier)
 // ---------- end of the calendar's part ----------
 
 export const q = {

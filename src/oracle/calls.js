@@ -18,6 +18,13 @@ export function typedNumber(text) {
   return /^[\d\s().+-]+$/.test(t) && t.replace(/\D/g, '').length >= 7 ? t : null;
 }
 
+/**
+ * The person looked up for an application, once the look-up for that same application has come back; null until
+ * then. An event with nobody matched has no application at all, and nothing has been looked up for it: that is
+ * "nobody", never a look-up to read from.
+ */
+export const personFor = (found, applicationId) => (found && applicationId && found.applicationId === applicationId ? found.person : null);
+
 const whoOf = (call) => (call.candidate_name ? firstName(call.candidate_name) : call.to_display || 'them');
 /**
  * The few words that head each stage of a call. The sentence underneath comes from the server. `direction` is only

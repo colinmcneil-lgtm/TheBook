@@ -12,7 +12,7 @@ import { CONSENT_WORDING, useRecorder } from './RecorderProvider.jsx';
 import { CallRecorder } from './recorder.js';
 import { usePerson, usePhone } from './phone.jsx';
 import { showNumber, telHref } from './calls.js';
-import { MINUTE, dayLabel, dueNow, endsAt, isNear, lengthOf, shiftDay, startsAt } from './day.js';
+import { MINUTE, dayLabel, dueNow, endsAt, isNear, lengthOf, reminderOf, shiftDay, startsAt } from './day.js';
 import { CandidatePicker, CardIntro, ConsentTick, Notice, useLive } from './bits.jsx';
 
 const JOIN_KINDS = { meet: 'Google Meet', zoom: 'Zoom', teams: 'Teams', webex: 'Webex' };
@@ -71,7 +71,8 @@ export function CalendarProvider({ children }) {
     return () => { clearInterval(timer); window.removeEventListener('focus', seen); document.removeEventListener('visibilitychange', seen); };
   }, [loadToday]);
 
-  const dismiss = useCallback((key) => setDismissed((was) => { const next = new Set(was).add(key); keep('oracle.reminders.closed', [...next]); return next; }), []);
+  // Closed and shown reminders are remembered by event and start time: an event that is moved is reminded about again.
+  const dismiss = useCallback((event) => setDismissed((was) => { const next = new Set(was).add(reminderOf(event)); keep('oracle.reminders.closed', [...next]); return next; }), []);
   // The call being made for an event right now, if any: no reminder for that one. A phone call that has just ended
   // and was recorded still counts, until the day is read again and the event shows its call; one that reached nobody
   // does not, so the reminder comes back.
@@ -81,8 +82,8 @@ export function CalendarProvider({ children }) {
   useEffect(() => {
     if (permission !== 'granted') return;
     for (const event of due) {
-      if (notified.current.has(event.key)) continue;
-      notified.current.add(event.key);
+      if (notified.current.has(reminderOf(event))) continue;
+      notified.current.add(reminderOf(event));
       keep('oracle.reminders.shown', [...notified.current]);
       try {
         const note = new Notification(`${event.title} ${Date.now() >= startsAt(event) ? 'has started' : `starts at ${fmtTime(event.start)}`}`, {
@@ -114,7 +115,7 @@ export function CalendarProvider({ children }) {
   return (
     <CalendarContext.Provider value={value}>
       {children}
-      {recording && <RecordEventModal event={recording} onClose={() => setRecording(null)} onStarted={() => { dismiss(recording.key); setRecording(null); }} />}
+      {recording && <RecordEventModal event={recording} onClose={() => setRecording(null)} onStarted={() => { dismiss(recording); setRecording(null); }} />}
     </CalendarContext.Provider>
   );
 }
@@ -138,7 +139,9 @@ export function EventActions({ event, dark, className }) {
   const strong = dark ? 'border-transparent bg-gold text-brand-950 hover:brightness-105' : 'border-transparent bg-brand-700 text-white shadow-sm hover:bg-brand-800';
   const button = 'inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border px-3 text-[13px] font-medium whitespace-nowrap transition-colors max-sm:h-10';
   const call = () => {
-    phone.openDialer(person?.phone ? { person, application_id: event.match.application_id, event_key: event.key } : { to: event.phone, event_key: event.key });
+    phone.openDialer(person?.phone ? { person, application_id: event.match.application_id, event_key: event.key }
+      // A number that is only written in the event: the dialog says where it came from, and the call takes the event's name.
+      : { to: event.phone, event_key: event.key, event_title: event.title });
   };
   const callButton = !number ? null : connected
     ? <button key="call" type="button" onClick={call} className={cx(button, callFirst ? strong : plain)}><Phone className="size-4" />Call</button>
@@ -273,7 +276,7 @@ export function EventPrompt() {
       </span>
       {/* On a phone the words and the close button share the first line and the actions take the second. */}
       <EventActions event={prompt} dark className="max-sm:order-last max-sm:basis-full" />
-      <button type="button" onClick={() => dismiss(prompt.key)} aria-label="Dismiss this reminder" className="rounded-md p-1.5 text-white/80 hover:bg-white/10 hover:text-white max-sm:p-2.5"><X className="size-4" /></button>
+      <button type="button" onClick={() => dismiss(prompt)} aria-label="Dismiss this reminder" className="rounded-md p-1.5 text-white/80 hover:bg-white/10 hover:text-white max-sm:p-2.5"><X className="size-4" /></button>
     </div>
   );
 }
@@ -322,8 +325,12 @@ function EventRow({ event, now, onChange, onChoose }) {
               </p>
             )}
           </div>
-          <Button size="sm" busy={busy} icon={event.added ? Check : Plus} aria-pressed={event.added} onClick={toggle} title={event.added ? 'Take this event off your list' : undefined}
-            className={cx('max-sm:!h-10 max-sm:!px-3', event.added && '!border-brand-200 !bg-brand-50 !text-brand-800')}>{event.added ? 'Added' : 'Add'}</Button>
+          {/* An all-day event has no moment to be reminded of, or to record or call at, so there is nothing to add it for.
+              One that was added before can still be taken off. */}
+          {(!event.all_day || event.added) && (
+            <Button size="sm" busy={busy} icon={event.added ? Check : Plus} aria-pressed={event.added} onClick={toggle} title={event.added ? 'Take this event off your list' : undefined}
+              className={cx('max-sm:!h-10 max-sm:!px-3', event.added && '!border-brand-200 !bg-brand-50 !text-brand-800')}>{event.added ? 'Added' : 'Add'}</Button>
+          )}
         </div>
         {underWay ? (
           <p className="mt-1.5 inline-flex min-h-8 items-center gap-2 text-[13px] font-medium text-red-700"><span className="size-2 rounded-full bg-red-600" aria-hidden="true" />{underWay}</p>
@@ -385,7 +392,14 @@ export function CalendarCard({ className }) {
 
   const [refresh, refreshing] = useAction(async () => { day.set(await api.get(dayPath(date, true))); });
   const change = async (event, changes) => {
-    const saved = await api.put(`/calendar/events/${encodeURIComponent(event.key)}`, changes);
+    let saved;
+    try {
+      saved = await api.put(`/calendar/events/${encodeURIComponent(event.key)}`, changes);
+    } catch (err) {
+      // The event has moved or gone since this card was drawn: show the day as it is now, then say why nothing changed.
+      if (err.status === 404 || err.status === 409) day.reload();
+      throw err;
+    }
     day.set({ ...data, events: data.events.map((e) => (e.key === saved.key ? saved : e)) });
     if (changes.added) calendar.offerReminders();
   };

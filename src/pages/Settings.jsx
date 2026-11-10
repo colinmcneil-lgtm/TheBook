@@ -170,7 +170,8 @@ function CalendarLinkCard() {
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-stone-50 px-3 py-2.5 text-sm">
             <span className="min-w-0 flex-1 basis-48">
               <span className="block font-medium text-stone-900">{PROVIDERS[status.provider] || PROVIDERS.other}</span>
-              <span className="block text-[13px] text-stone-500">{status.last_read_at ? `Last read ${ago(status.last_read_at)}` : 'Not read yet'}</span>
+              <span className="block text-[13px] text-stone-500">{/* The time is of the last read that worked. Beside "Not being read" that has to be said, or the two contradict each other. */}
+                {!status.last_read_at ? 'Not read yet' : status.error ? `Last read successfully ${ago(status.last_read_at)}` : `Last read ${ago(status.last_read_at)}`}</span>
             </span>
             <Button size="sm" variant="danger" icon={Trash2} busy={removing} onClick={remove}>Remove</Button>
           </div>
@@ -253,16 +254,37 @@ function AiCard() {
               </p>
             ) : isAdmin ? (
               <>
-                <p>To connect them, create a Twilio account, buy a number there, and set these three where the app is hosted, then restart it:</p>
+                {/* Exactly what is still in the way, when some of it has been done: being told to set what is already set helps nobody. */}
+                {phone.problem && phone.missing?.length < 4 && (
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950"><span className="font-medium">What is still missing:</span> {phone.problem}</p>
+                )}
+                <p>To connect them, create a Twilio account, buy a number there, and set these four where the app is hosted, then restart it:</p>
                 <ul className="list-disc space-y-1 pl-5">
                   <li>{code(PHONE_SETTINGS[0])}: the account’s ID, which starts with AC.</li>
                   <li>{code(PHONE_SETTINGS[1])}: the account’s secret token, shown next to it in the Twilio console.</li>
                   <li>{code(PHONE_SETTINGS[2])}: the number you bought, written like +14165550123.</li>
+                  <li>{code('APP_URL')}: the public https address people open The Book at, with nothing after it. Twilio reports on each call to that address, and The Book only believes reports sent to exactly it.</li>
                 </ul>
-                <p>The Book also has to know its own public address ({code('APP_URL')}), because Twilio reports on each call to that address. The README has the steps.</p>
               </>
             ) : (
-              <p>An admin can connect them: it needs a Twilio account and three settings ({settingNames(PHONE_SETTINGS)}) where the app is hosted.</p>
+              <p>An admin can connect them: it needs a Twilio account and four settings ({settingNames([...PHONE_SETTINGS, 'APP_URL'])}) where the app is hosted.</p>
+            )}
+            {isAdmin && (
+              // Without this step calls placed from the app work, but ringing The Book's number reaches nothing, and
+              // nothing else in the app can know that: Twilio simply never tells The Book about the call.
+              <div className="space-y-1.5 rounded-lg border border-line bg-stone-50 px-3 py-2.5">
+                <p><span className="font-medium text-stone-900">One step is done at Twilio, not here.</span> Until it is, calls placed from the app work, but ringing The Book’s number from your own phone, and candidates ringing it, reach nothing. In the Twilio console open Phone Numbers, Active numbers, your number, and under Voice configuration enter:</p>
+                <ul className="space-y-1.5">
+                  {[['A call comes in', 'inbound'], ['Call status changes', 'status']].map(([label, name]) => (
+                    <li key={name}>
+                      <span className="block text-[13px] text-stone-700">{label}: Webhook, HTTP POST</span>
+                      <code className="mt-0.5 block rounded bg-white px-2 py-1 text-xs break-all text-stone-800 ring-1 ring-line select-all">{phone.webhooks?.[name] || `https://the-address-of-The-Book/api/phone/twilio/${name}`}</code>
+                    </li>
+                  ))}
+                </ul>
+                {!phone.webhooks && <p className="text-[13px] text-stone-500">The two addresses are shown in full here once {code('APP_URL')} is set.</p>}
+                <p className="text-[13px] text-stone-500">To check it, ring The Book’s number from a mobile saved in The Book: a voice should say “This is The Book” and ask for your PIN.</p>
+              </div>
             )}
           </div>
         )}

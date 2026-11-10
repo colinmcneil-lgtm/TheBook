@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { toE164, placeOf, displayNumber, spokenNumber, searchDigits } from '../server/phone-numbers.js';
+import { toE164, placeOf, displayNumber, spokenNumber, searchDigits, mayRing } from '../server/phone-numbers.js';
 import { twilioSignature, validateTwilioSignature, validateWebhook, signatureAlgorithm } from '../server/twilio-signature.js';
 import { PHONE_CANNED, CANNED, tempDir } from './oracle-helpers.mjs';
 
@@ -136,4 +136,29 @@ test('a two-channel answer with parts missing is still read', () => {
   // An ordinary one-channel answer is read exactly as before.
   assert.equal(turnsFrom(CANNED).turns.length, 4);
   assert.equal(turnsFrom(CANNED).channels, undefined);
+});
+
+test('a transcript is read channel by channel only when that was asked for', () => {
+  // An uploaded stereo file is not sent with multichannel, so its speakers are the ones told apart by voice, even
+  // if the answer mentions two channels. Read channel by channel it would be one long turn by one speaker.
+  const stereo = { ...CANNED, metadata: { ...CANNED.metadata, channels: 2 } };
+  const told = turnsFrom(stereo, false);
+  assert.equal(told.turns.length, 4);
+  assert.deepEqual([...new Set(told.turns.map((t) => t.speaker))].sort(), [0, 1]);
+  assert.equal(told.channels, undefined);
+  // A phone call was asked for by channel, and is read that way.
+  assert.equal(turnsFrom(PHONE_CANNED, true).channels, 2);
+  assert.deepEqual(turnsFrom(PHONE_CANNED, true).turns, turnsFrom(PHONE_CANNED).turns);
+});
+
+test('which numbers The Book would ring', () => {
+  assert.equal(mayRing('+14165550142'), true);
+  assert.equal(mayRing('+12125550188'), true);
+  assert.equal(mayRing('+19005550199'), false, 'premium rate');
+  assert.equal(mayRing('+18005550199'), false, 'toll-free');
+  assert.equal(mayRing('+18765550199'), false, 'Jamaica shares +1 but is not allowed unless the workspace says so');
+  assert.equal(mayRing('+18765550199', ['CA', 'US', 'JM']), true);
+  assert.equal(mayRing('+442079460958'), false);
+  assert.equal(mayRing('+8823421000111'), false, 'a satellite number');
+  assert.equal(mayRing(null), false);
 });

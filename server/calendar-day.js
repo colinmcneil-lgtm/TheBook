@@ -20,6 +20,7 @@ import { dayWindow, zonedTimeToUtc } from './calendar-time.js';
 import { clip, findJoinLink, findPhones } from './calendar-links.js';
 
 const PAD_MS = 36 * 3600000;             // look a day and a half either side, then keep exactly what falls on the day
+const DAY_BUDGET_MS = 8000;       // how long working out one day's repeating events may take before the rest are left out
 const MAX_OCCURRENCES = 24;              // of one event in that window; more than this is not a meeting
 const MAX_TITLE = 300, MAX_LOCATION = 2000, MAX_DESCRIPTION = 20000, MAX_GUESTS = 100, MAX_NAME = 200, MAX_WARNINGS = 8;
 
@@ -216,17 +217,35 @@ export function parseFeed(icsText, zone) {
  * date was first set for. So it stays the same when the event is renamed, and when that one date is moved.
  * Cancelled events are included and flagged, so the caller decides. `warnings` are plain sentences for the recruiter.
  */
+/** Roughly how many times a day a repeating rule comes round at its busiest, from the hours, minutes and seconds it lists. */
+function timesADay(options, freq) {
+  const listed = (list) => (Array.isArray(list) && list.length ? list.length : 1);
+  const hours = freq === 'HOURLY' ? Math.ceil(24 / Math.max(1, Number(options.interval) || 1)) : listed(options.byHour);
+  return hours * listed(options.byMinute) * listed(options.bySecond);
+}
+
 export function eventsForDay(feed, ymd) {
   const zone = feed.zone;
   const { start: dayStart, end: dayEnd } = dayWindow(ymd, zone);
   const warnings = [...feed.warnings], events = [];
   const skip = (title, why) => { if (warnings.length < MAX_WARNINGS) warnings.push(`${quoted(title || 'An event')} was left out because ${why}.`); };
+  const began = Date.now();
+  let outOfTime = false;
 
   for (const ev of Object.values(feed.data)) {
     if (ev.type !== 'VEVENT') continue;
     const masterTitle = text(ev.summary);
     const freq = String(ev.rrule?.options?.freq ?? '').toUpperCase();
     if (freq === 'SECONDLY' || freq === 'MINUTELY') { skip(masterTitle, `it repeats every ${freq === 'SECONDLY' ? 'second' : 'minute'}`); continue; }
+    // A rule can also list many minutes and seconds of every hour, which comes to the same thing and is far slower
+    // to work out than to refuse: twenty such events in a small file held the reader for most of a minute.
+    if (freq && timesADay(ev.rrule.options, freq) > MAX_OCCURRENCES) { skip(masterTitle, 'it repeats too often to be a meeting'); continue; }
+    // One day gets a few seconds. Whatever repeating events are left after that are left out, and the recruiter is told.
+    if (freq && Date.now() - began > DAY_BUDGET_MS) {
+      if (!outOfTime) warnings.unshift('Your calendar has so many repeating events that reading this day took too long, so some of them are not shown.');
+      outOfTime = true;
+      continue;
+    }
     if (!(ev.start instanceof Date) || Number.isNaN(ev.start.getTime())) { skip(masterTitle, 'its start time could not be read'); continue; }
 
     let occurrences;
@@ -262,6 +281,9 @@ export function eventsForDay(feed, ymd) {
       const originalTime = !original ? '' : original.dateOnly || (occ.isFullDay && !(src.recurrenceid instanceof Date)) ? localYmd(original) : original.toISOString();
       events.push({
         id: `${clip(ev.uid || `${title}@${ev.start.toISOString()}`, 500)}${originalTime ? `#${originalTime}` : ''}`,
+        // Which repeating event this is one date of. When the whole series is moved to another time every date gets
+        // a new id, and this is what still says they are the same meetings.
+        series: originalTime && ev.uid ? clip(ev.uid, 500) : null,
         title, allDay: Boolean(occ.isFullDay), start: new Date(start.getTime()), end: new Date(end.getTime()),
         cancelled: status === 'CANCELLED' || /^cancel{1,2}ed\s*:/i.test(title),
         location, description: description || clip(callText.description, MAX_DESCRIPTION),

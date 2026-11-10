@@ -104,7 +104,10 @@ export async function startStandin(options = {}) {
   //   absent          <Dial> recordings come to nothing: the callback says "absent" and there is no audio to fetch
   //   keyMs           real milliseconds a person takes to key something in at a <Gather> (0 unless a screen is being watched)
   //   talkMs          real milliseconds an answered call lasts, unless the app hangs it up sooner (0 likewise)
-  const behaviour = { drop: [], twice: false, mono: false, monoReported: 1, downloadFailures: 0, deleteFailures: 0, firstLegDigits: null, absent: false, keyMs: 0, talkMs: 0 };
+  //   monoRefusal     the status that refuses two channels of a one-channel recording: 400 (one of Twilio's pages) or 404 (another)
+  //   stuck           recordings never finish: the list of a call's recordings says "processing" for ever
+  //   hangupRefused   changing a call that is already over is refused with 400, as Twilio's error 21220 describes
+  const behaviour = { drop: [], twice: false, mono: false, monoReported: 1, monoRefusal: 400, downloadFailures: 0, deleteFailures: 0, firstLegDigits: null, absent: false, stuck: false, hangupRefused: false, keyMs: 0, talkMs: 0 };
   const realPause = (ms) => new Promise((r) => setTimeout(r, ms));
 
   const audio = { call2: callWav(SECONDS.talk, 2), call1: callWav(SECONDS.talk, 1), voicemail: voicemailWav(SECONDS.voicemailMessage) };
@@ -543,13 +546,14 @@ export async function startStandin(options = {}) {
         if (req.method === 'POST') {
           const status = form.get('Status');
           if (status && !['canceled', 'completed'].includes(status)) return done(apiError(res, 400, 21220, `Invalid call status: ${status}`)); // code is a placeholder
+          if (status && !call.live && behaviour.hangupRefused) return done(apiError(res, 400, 21220, 'Invalid call status: the call is not in-progress and cannot be redirected or ended')); // HTTP status from memory in the research
           if (status && call.live) call.hangupRequested = status;
           return done(send(res, 200, callJson(call)));
         }
       }
       if ((r = /^Calls\/(CA[0-9a-f]{32})\/Recordings\.json$/i.exec(rest)) && req.method === 'GET') {
         if (!calls.has(r[1])) return done(apiError(res, 404, 20404, `The requested resource ${path} was not found`));
-        const list = [...recordings.values()].filter((rec) => rec.callSid === r[1] && !rec.deleted).map(recordingJson);
+        const list = [...recordings.values()].filter((rec) => rec.callSid === r[1] && !rec.deleted).map(recordingJson).map((rec) => (behaviour.stuck ? { ...rec, status: 'processing' } : rec));
         return done(send(res, 200, { recordings: list, page: 0, page_size: 50, start: 0, end: Math.max(0, list.length - 1), next_page_uri: null, previous_page_uri: null, uri: `${accountPath}/Calls/${r[1]}/Recordings.json` }));
       }
       if ((r = /^Recordings\/(RE[0-9a-f]{32})(\.json|\.wav|\.mp3)?$/i.exec(rest))) {
@@ -567,7 +571,7 @@ export async function startStandin(options = {}) {
         if (behaviour.downloadFailures > 0) { behaviour.downloadFailures--; return done(apiError(res, 404, 20404, 'The recording is not available yet')); }
         const requested = url.searchParams.get('RequestedChannels');
         if (requested !== null && requested !== '1' && requested !== '2') return done(apiError(res, 400, 20001, 'RequestedChannels must be 1 or 2'));
-        if (requested === '2' && rec.channels !== 2) return done(apiError(res, 400, 16113, 'Cannot download a dual-channel presentation of a mono recording'));
+        if (requested === '2' && rec.channels !== 2) return done(apiError(res, behaviour.monoRefusal, behaviour.monoRefusal === 404 ? 20404 : 16113, 'Cannot download a dual-channel presentation of a mono recording'));
         // Without RequestedChannels this stand-in gives ONE channel, on purpose: Twilio's default was not verified, so always ask.
         if (requested === null && rec.channels === 2) entry.warnings.push('RequestedChannels was not sent: this stand-in returns a mono mix. Send RequestedChannels=2 to get both channels.');
         const key = rec.kind === 'voicemail' ? 'voicemail' : requested === '2' ? 'call2' : 'call1';

@@ -552,14 +552,101 @@ test('marks and the saved link survive a restart; a calendar that cannot be read
   assert.match((await dana.get('/calendar/status')).body.error, /no longer works/);
   // A mark can still be changed on an interview, which does not need the calendar.
   assert.equal((await put(dana, `/calendar/events/${day.events[0].key}`, { added: true })).status, 200);
-  // And a calendar event cannot be found while the calendar is unreadable: said plainly, nothing broken.
-  assert.equal((await put(dana, `/calendar/events/${titled(before, 'Call Kevin').key}`, { added: true })).status, 404);
+  // And a calendar event cannot be found while the calendar is unreadable: said plainly, nothing changed, nothing broken.
+  const unreadable = await put(dana, `/calendar/events/${titled(before, 'Call Kevin').key}`, { added: false });
+  assert.equal(unreadable.status, 409);
+  assert.match(unreadable.body.error, /no longer in your calendar on that day, so nothing was changed/);
   writeCalendar();
   day = await freshDay(dana);
   assert.deepEqual(day.warnings, []);
   // Same keys as before the restart, and the mark is still there.
   assert.deepEqual(day.events.map((e) => e.key), before.events.map((e) => e.key));
   assert.equal(titled(day, 'Call Kevin').added, true);
+});
+
+// ---------- what the reviews of the first version found ----------
+test('a link the calendar\'s own server refuses is answered with the plain reason, never with that server\'s status', async () => {
+  // "answers-404.ics" throws the very error the real reader throws when the calendar's server answers 404: it carries
+  // that status, which once leaked into our own answer (a 401 there signed the recruiter out of the app).
+  const before = (await sam.get('/calendar/status')).body;
+  for (const [status, sentence] of [[404, /no longer works\. It may have been reset or switched off/], [410, /no longer works/], [401, /Your calendar refused that link/],
+    [403, /Your calendar refused that link/], [500, /answered with an error \(500\)/], [503, /answered with an error \(503\)/]]) {
+    const res = await put(sam, '/calendar/link', { url: `https://calendar.test/answers-${status}.ics`, tz: TZ });
+    assert.equal(res.status, 400, `the calendar answering ${status}`);
+    assert.match(res.body.error, sentence);
+  }
+  assert.equal((await sam.get('/me')).status, 200, 'still signed in');
+  assert.deepEqual((await sam.get('/calendar/status')).body, before);
+  assert.ok(!/at .*calendar\.js:\d+/.test(api.output()), 'and no stack trace is printed for a link that did not work');
+});
+
+test('a mark is kept when a whole repeating event is moved to another time', async () => {
+  const weekly = titled(await dayOf(dana), 'Weekly check-in');
+  assert.equal((await put(dana, `/calendar/events/${weekly.key}`, { added: true })).body.added, true);
+  // "All events" moved from 3:30 to 4:00: the same identity in the file, but every date is now named by a new time.
+  writeCalendar({ ...EVENTS, oneToOne: vevent('UID:weekly-priya@test', 'SUMMARY:Weekly check-in', `DTSTART${at('20261020', '1600')}`, `DTEND${at('20261020', '1615')}`, 'RRULE:FREQ=WEEKLY;BYDAY=TU') });
+  const moved = titled(await freshDay(dana), 'Weekly check-in');
+  assert.equal(line(moved, TZ), '16:00-16:15 Weekly check-in');
+  assert.notEqual(moved.key, weekly.key);
+  assert.equal(moved.added, true, 'still added');
+  assert.equal((await put(dana, `/calendar/events/${moved.key}`, { added: false })).body.added, false);
+  writeCalendar();
+});
+
+test('a number in an event is only offered to call when it is one The Book would ring', async () => {
+  writeCalendar({ ...EVENTS,
+    premium: timed('premium@test', 'Ring me back', '1900', '1915', 'DESCRIPTION:ring me back on 1-900-555-0199'),
+    abroad: timed('abroad@test', 'Call the Kingston office', '1915', '1930', 'DESCRIPTION:tel:+1 876 555 0199'),
+    satellite: timed('satellite@test', 'Site visit', '1930', '1945', 'LOCATION:+882 3421 000 111'),
+    local: timed('local@test', 'Call the Ottawa office', '1945', '2000', 'DESCRIPTION:Cell: 613-555-0188') });
+  const day = await freshDay(dana);
+  assert.deepEqual(['Ring me back', 'Call the Kingston office', 'Site visit', 'Call the Ottawa office'].map((title) => titled(day, title).phone), [null, null, null, '+16135550188']);
+  assert.equal(titled(day, 'Call Kevin').phone, '+14165550142');
+  writeCalendar();
+});
+
+test('changing an event that has since moved to another day changes nothing and says so; the event is changed where it now is', async () => {
+  const marc = titled(await dayOf(dana), 'Chat with Marc');
+  assert.equal((await put(dana, `/calendar/events/${marc.key}`, { added: true })).body.added, true);
+  writeCalendar({ ...EVENTS, marc: vevent('UID:marc@test', 'SUMMARY:Chat with Marc', `DTSTART${at('20261112', '1300')}`, `DTEND${at('20261112', '1330')}`) });
+  await freshDay(dana, '2026-11-11'); // the calendar is read again, but not the day the event went to
+  const stale = await put(dana, `/calendar/events/${marc.key}`, { added: false });
+  assert.equal(stale.status, 409);
+  assert.match(stale.body.error, /no longer in your calendar on that day, so nothing was changed/);
+  const there = titled(await dayOf(dana, '2026-11-12'), 'Chat with Marc');
+  assert.deepEqual([there.key, there.added], [marc.key, true], 'the mark is as it was');
+  assert.equal((await put(dana, `/calendar/events/${marc.key}`, { added: false })).body.added, false);
+  writeCalendar();
+});
+
+test('an event the recruiter put a candidate on by hand is never folded into that candidate\'s interview', async () => {
+  // Kevin Tremblay has an interview in The Book at 14:05 (see above). A prep chat five minutes later is not it.
+  writeCalendar({ ...EVENTS, prep: timed('prep@test', 'Prep chat', '1410', '1425') });
+  const prep = titled(await freshDay(dana), 'Prep chat');
+  assert.equal((await put(dana, `/calendar/events/${prep.key}`, { added: true })).status, 200);
+  const chosen = await put(dana, `/calendar/events/${prep.key}`, { application_id: app.kevinT });
+  assert.equal(chosen.status, 200, JSON.stringify(chosen.body));
+  assert.deepEqual([chosen.body.title, who(chosen.body), chosen.body.added], ['Prep chat', 'Kevin Tremblay (chosen)', true]);
+  const day = await dayOf(dana);
+  assert.ok(titled(day, 'Prep chat') && titled(day, 'Second interview'), 'both are still in the day');
+  // So a wrong pick can be undone.
+  assert.equal((await put(dana, `/calendar/events/${prep.key}`, { application_id: null, added: false })).body.match, null);
+  writeCalendar();
+});
+
+test('events that repeat many times an hour are left out at once, and do not tie the reader up', async () => {
+  const minutes = Array.from({ length: 60 }, (_, i) => i).join(',');
+  const storm = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`storm${i}`,
+    vevent(`UID:storm${i}@test`, `SUMMARY:Storm ${i}`, 'DTSTART:20000101T000000Z', 'DTEND:20000101T000001Z', `RRULE:FREQ=HOURLY;BYMINUTE=${minutes};BYSECOND=${minutes}`)]));
+  writeCalendar({ ...EVENTS, ...storm });
+  const began = Date.now();
+  const day = await freshDay(dana);
+  assert.ok(Date.now() - began < 5000, `the day came back in ${Date.now() - began} ms`);
+  assert.ok(day.warnings.some((w) => /Storm \d+.* was left out because it repeats too often to be a meeting/.test(w)), JSON.stringify(day.warnings));
+  assert.ok(!day.events.some((e) => e.title.startsWith('Storm')));
+  assert.ok(titled(day, 'Call Kevin'), 'the real events are all there');
+  writeCalendar();
+  await freshDay(dana);
 });
 
 test('removing the link removes what was noted about the calendar\'s events', async () => {

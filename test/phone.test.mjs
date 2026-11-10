@@ -31,6 +31,8 @@ const connected = (port, extra = {}) => ({
   APP_URL: `http://127.0.0.1:${port}`,
   PHONE_SWEEP_MS: '150', PHONE_QUIET_MS: '500', PHONE_RECORDING_WAIT_MS: '350', PHONE_RECORDING_GIVE_UP_MS: '900', PHONE_RETRY_MS: '50',
   PHONE_CALLS_PER_HOUR: '500', // these tests place far more calls in a minute than a person does in an hour
+  PHONE_STRANGERS_PER_HOUR: '500', PHONE_STRANGERS_PER_DAY: '500', PHONE_RING_INS_PER_HOUR: '500', // and ring in far more often
+  ORACLE_PHONE_RETRY_MS: '60', PHONE_NOTIFY_RETRY_MS: '80',
   DEEPGRAM_API_KEY: 'good', DEEPGRAM_API_URL: deepgram.url, DEEPGRAM_RETRY_MS: '30', DEEPGRAM_TIMEOUT_MS: '1500',
   ANTHROPIC_API_KEY: 'good', ANTHROPIC_BASE_URL: anthropic.url,
   ...mail.env(), ...extra,
@@ -115,7 +117,11 @@ after(async () => {
 test('status says what is connected, and whose phone and PIN are saved', async () => {
   const mine = await priya.get('/phone/status');
   assert.equal(mine.status, 200);
-  assert.deepEqual(mine.body, { configured: true, number: BOOK_NUMBER, number_display: '(647) 555-0100', my_phone: N.priya, my_pin_set: true, notice: true, countries: ['CA', 'US'] });
+  assert.deepEqual(mine.body, {
+    configured: true, number: BOOK_NUMBER, number_display: '(647) 555-0100', my_phone: N.priya, my_pin_set: true, notice: true, countries: ['CA', 'US'],
+    // Nothing is missing, and the two addresses to enter on the number at Twilio are given in full.
+    missing: [], problem: null, webhooks: { inbound: `${base}/api/phone/twilio/inbound`, status: `${base}/api/phone/twilio/status` },
+  });
   const theirs = (await sam.get('/phone/status')).body;
   assert.equal(theirs.my_phone, null);
   assert.equal(theirs.my_pin_set, false);
@@ -402,11 +408,11 @@ test('the switchboard refuses a number it may not call, a phone with no PIN, and
   await ringIn(twilio, base, N.priya, ['3333', PIN, '4165550123']);
   asked = webhooks(twilio, mark, 'gather-action');
   assert.equal(asked.length, 1, 'after the third wrong PIN the call is ended: the right one is never asked for');
-  assert.match(asked[0].response, /The switchboard is now locked for this phone for fifteen minutes\. Goodbye\.<\/Say><Hangup\/>/);
+  assert.match(asked[0].response, /The switchboard is now locked for this phone for a quarter of an hour\. Goodbye\.<\/Say><Hangup\/>/);
   // Even the right PIN does nothing now.
   mark = twilio.entries.length;
   await ringIn(twilio, base, N.priya, [PIN, '4165550123']);
-  assert.match(webhooks(twilio, mark, 'voice-url')[0].response, /The switchboard is locked for this phone after three wrong PINs/);
+  assert.match(webhooks(twilio, mark, 'voice-url')[0].response, /The switchboard is locked for this phone after wrong PINs/);
   assert.equal(webhooks(twilio, mark, 'gather-action').length, 0);
   assert.ok(!webhooks(twilio, mark).some((hook) => /<Dial/.test(hook.response || '')));
   const [lockedOut] = db(`SELECT phone_locked_until FROM users WHERE email = 'priya@agency.example'`);
@@ -955,7 +961,11 @@ test('with phone calls not connected, everything says so and nothing else breaks
   try {
     const owner = session(bare.base);
     assert.equal((await owner.post('/setup', { agencyName: 'Bare', name: 'Alex Morgan', email: 'alex@agency.example', password: 'demo1234' })).status, 200);
-    assert.deepEqual((await owner.get('/phone/status')).body, { configured: false, number: null, number_display: null, my_phone: null, my_pin_set: false, notice: true, countries: ['CA', 'US'] });
+    assert.deepEqual((await owner.get('/phone/status')).body, {
+      configured: false, number: null, number_display: null, my_phone: null, my_pin_set: false, notice: true, countries: ['CA', 'US'],
+      missing: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_NUMBER', 'APP_URL'],
+      problem: 'TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_NUMBER are not set, and neither is APP_URL, the public address of The Book.', webhooks: null,
+    });
     // A mobile can be saved ahead of time.
     assert.deepEqual((await savePhone(owner, '416 555 0199', '7305', bare.base)).body, { my_phone: '+14165550199', my_pin_set: true });
     const refused = await owner.post('/phone/calls', { to: N.dana });
@@ -1046,6 +1056,418 @@ test('calls placed in an hour are limited for each person, from the app and from
   } finally {
     twilio.behaviour.downloadFailures = 0;
     await limited.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------- what the reviews of the first version found ----------
+/** Change the server's database directly, for states no route leads to quickly (a lock that has run out, an old message). */
+function dbRun(query, ...params) {
+  const database = new DatabaseSync(path.join(dataDir, 'app.db'), { timeout: 5000 });
+  try { return database.prepare(query).run(...params); } finally { database.close(); }
+}
+/** Finished recordings the stand-in still holds: what would be sitting at Twilio. */
+const recordingsLeft = () => [...twilio.recordings.values()].filter((rec) => rec.status === 'completed' && !rec.deleted).length;
+const newCandidate = async (name, email, phone) => {
+  const jobId = (await admin.get(`/applications/${appDana}`)).body.job.id;
+  const appId = (await admin.upload('/applications', { job_id: jobId, name, email, phone })).body.id;
+  return { appId, candidateId: (await admin.get(`/applications/${appId}`)).body.candidate.id };
+};
+
+test('a candidate erased while their recording is still waiting to be fetched, or while Twilio still holds a copy: the recording is deleted from Twilio all the same', async () => {
+  await twilio.idle();
+  await until(async () => recordingsLeft(), (n) => n === 0);
+  // 1. The recording is ready, but the phone service keeps answering "not found" for the audio when the person is erased.
+  const first = await newCandidate('Vera Lindqvist', 'vera@mail.example', '289 555 0171');
+  twilio.behaviour.downloadFailures = 1000;
+  try {
+    const { placed } = await callAndWait(priya, { application_id: first.appId });
+    await until(async () => db('SELECT recording_state, recording_tries FROM phone_calls WHERE id = ?', placed.id)[0], (row) => row.recording_tries >= 1);
+    assert.equal(recordingsLeft(), 1);
+    assert.equal((await admin.del(`/candidates/${first.candidateId}`)).status, 200);
+    assert.equal(db('SELECT COUNT(*) AS n FROM phone_calls WHERE id = ?', placed.id)[0].n, 0);
+    await until(async () => recordingsLeft(), (n) => n === 0);
+  } finally {
+    twilio.behaviour.downloadFailures = 0;
+  }
+  // 2. The audio is on our disk, but deleting Twilio's copy keeps failing when the person is erased.
+  const second = await newCandidate('Wim Achterberg', 'wim@mail.example', '289 555 0172');
+  twilio.behaviour.deleteFailures = 1000;
+  try {
+    const { placed } = await callAndWait(priya, { application_id: second.appId });
+    await writtenOut(priya, placed.call_id);
+    assert.equal(recordingsLeft(), 1, 'Twilio still has its copy');
+    assert.equal((await admin.del(`/candidates/${second.candidateId}`)).status, 200);
+    await sleep(400);
+    assert.equal(recordingsLeft(), 1);
+    assert.equal(db('SELECT COUNT(*) AS n FROM phone_recordings_owed')[0].n, 1, 'what is still owed is remembered without the call');
+    twilio.behaviour.deleteFailures = 0;
+    await until(async () => recordingsLeft(), (n) => n === 0);
+    await until(async () => db('SELECT COUNT(*) AS n FROM phone_recordings_owed')[0].n, (n) => n === 0);
+  } finally {
+    twilio.behaviour.deleteFailures = 0;
+  }
+  // 3. Erased with the recording still to come, and the news that it is ready never arrives.
+  const third = await newCandidate('Xavier Oyelaran', 'xavier@mail.example', '289 555 0173');
+  twilio.behaviour.drop = ['recording:'];
+  try {
+    const placed = (await priya.post('/phone/calls', { application_id: third.appId })).body;
+    await twilio.idle();
+    await until(() => phoneCallOf(priya, placed.id), (c) => c.status === 'ended');
+    assert.equal(recordingsLeft(), 1);
+    assert.equal((await admin.del(`/candidates/${third.candidateId}`)).status, 200);
+    await until(async () => recordingsLeft(), (n) => n === 0);
+    await until(async () => db('SELECT COUNT(*) AS n FROM phone_calls_erased')[0].n, (n) => n === 0);
+  } finally {
+    twilio.behaviour.drop = [];
+  }
+  assert.ok(!/RE[0-9a-f]{32}|CA[0-9a-f]{32}/.test(server.output()), 'the phone service\'s names for calls and recordings are not logged either');
+});
+
+test('the transcription service being busy does not lose a phone call\'s transcript: it is tried again by itself, and the recruiter is told when it cannot be written out at all', async () => {
+  const mailed = mail.sent.length, heard = deepgram.requests.length;
+  deepgram.mode = 'busy';
+  try {
+    const { placed, call } = await callAndWait(priya, { application_id: appDana });
+    assert.equal(call.outcome, 'completed');
+    // Three requests a few moments apart all answer "busy". The call is not failed: it waits and goes again.
+    await until(async () => deepgram.requests.slice(heard), (list) => list.length >= 4);
+    assert.equal((await oracleCall(priya, placed.call_id)).call.status, 'transcribing');
+    assert.equal(mail.sent.length, mailed);
+    deepgram.mode = null;
+    const { call: written } = await writtenOut(priya, placed.call_id);
+    assert.equal(written.error, null);
+    const [message] = await until(async () => mail.sent.slice(mailed), (list) => list.length >= 1);
+    assert.equal(message.subject, 'Your call notes for Dana Whitlock are ready');
+    assert.deepEqual({ ...db('SELECT transcribe_tries, transcribe_next_at FROM calls WHERE id = ?', placed.call_id)[0] }, { transcribe_tries: 0, transcribe_next_at: null });
+  } finally {
+    deepgram.mode = null;
+  }
+  // Audio the service cannot read at all is not worth trying again: the recruiter is told once, with the reason.
+  const before = mail.sent.length;
+  deepgram.mode = 'corrupt';
+  try {
+    const { placed } = await callAndWait(priya, { application_id: appDana });
+    const failed = await until(() => oracleCall(priya, placed.call_id), (d) => d.call?.status === 'failed');
+    assert.equal(failed.call.has_audio, true);
+    const [message] = await until(async () => mail.sent.slice(before), (list) => list.length >= 1);
+    assert.deepEqual(message.to, ['priya@agency.example']);
+    assert.equal(message.subject, 'Your call with Dana Whitlock could not be written out');
+    assert.match(message.text, /was recorded, but it could not be written out:/);
+    assert.match(message.text, /The recording is safe\./);
+    assert.ok(message.text.includes(`${base}/oracle/${placed.call_id}`));
+    await sleep(400);
+    assert.equal(mail.sent.length, before + 1, 'told once');
+  } finally {
+    deepgram.mode = null;
+  }
+});
+
+test('the "notes are ready" e-mail is sent again when the mail provider fails, and only marked as sent once it is', async () => {
+  const mailed = mail.sent.length;
+  mail.failures = 2;
+  mail.refused = 0;
+  try {
+    const { placed } = await callAndWait(priya, { application_id: appJonas });
+    await writtenOut(priya, placed.call_id);
+    const [message] = await until(async () => mail.sent.slice(mailed), (list) => list.length >= 1);
+    assert.equal(mail.refused, 2, 'two tries were refused first');
+    assert.equal(message.subject, 'Your call notes for Jonas Brandt are ready');
+    await until(async () => db('SELECT notified_at FROM calls WHERE id = ?', placed.call_id)[0], (row) => row.notified_at);
+    await sleep(400);
+    assert.equal(mail.sent.length, mailed + 1, 'and it is not sent twice');
+  } finally {
+    mail.failures = 0;
+  }
+});
+
+test('news that a call ended overtaking how ringing the other person went: the call says what happened, is not shown as recorded, and leaves nothing in the Oracle', async () => {
+  await twilio.idle();
+  const sidOf = (id) => db('SELECT call_sid FROM phone_calls WHERE id = ?', id)[0].call_sid;
+  // The stand-in is silenced, and Twilio's messages are sent by hand in the order that went wrong.
+  twilio.behaviour.drop = [''];
+  try {
+    for (const variant of ['late', 'never']) {
+      const placed = (await priya.post('/phone/calls', { application_id: appKevin })).body;
+      assert.ok(placed.call_id);
+      await twilio.idle();
+      const c = `c=${placed.id}`, CallSid = sidOf(placed.id);
+      assert.equal((await webhook(`voice?${c}`, { CallSid, CallStatus: 'in-progress' })).status, 200);
+      assert.match((await webhook(`connect?${c}&n=1`, { CallSid, Digits: '1' })).text, /<Dial /);
+      assert.equal((await phoneCallOf(priya, placed.id)).status, 'calling_them');
+      assert.equal((await webhook(`status?${c}`, { CallSid, CallStatus: 'completed', CallDuration: '9' })).status, 204);
+      if (variant === 'late') {
+        // The answer to "how did ringing them go" arrives after all.
+        const said = await webhook(`dial-done?${c}`, { CallSid, DialCallStatus: 'busy' });
+        assert.match(said.text, /Kevin&apos;s phone was busy\./);
+        const call = await phoneCallOf(priya, placed.id);
+        assert.deepEqual([call.status, call.outcome, call.message, call.recorded], ['ended', 'busy', 'Kevin\'s phone was busy.', false]);
+      } else {
+        // It never arrives: Twilio is asked, and says the other phone was never reached.
+        const call = await until(() => phoneCallOf(priya, placed.id), (c2) => c2.outcome && c2.outcome !== 'no_answer');
+        assert.deepEqual([call.status, call.outcome, call.message, call.recorded], ['ended', 'cancelled', 'The call was cancelled.', false]);
+      }
+      assert.equal((await priya.get(`/oracle/calls/${placed.call_id}`)).status, 404, 'no entry is left waiting for a recording');
+      assert.equal(db('SELECT recording_state FROM phone_calls WHERE id = ?', placed.id)[0].recording_state, null);
+    }
+  } finally {
+    twilio.behaviour.drop = [];
+  }
+});
+
+test('hanging up a call Twilio has already ended closes it, and does not say the phone service failed', async () => {
+  twilio.behaviour.drop = ['status:completed', 'dial-action', 'recording:'];
+  twilio.behaviour.hangupRefused = true;
+  try {
+    const placed = (await priya.post('/phone/calls', { to: N.dana, record: false })).body;
+    await twilio.idle(); // over at Twilio; nothing told us
+    assert.equal((await phoneCallOf(priya, placed.id)).status, 'in_call');
+    const hung = await priya.post(`/phone/calls/${placed.id}/hangup`);
+    assert.equal(hung.status, 200, JSON.stringify(hung.body));
+    const call = await phoneCallOf(priya, placed.id);
+    assert.deepEqual([call.status, call.outcome], ['ended', 'completed']);
+  } finally {
+    twilio.behaviour.drop = [];
+    twilio.behaviour.hangupRefused = false;
+  }
+});
+
+test('Twilio answering "not found" instead of "bad request" for two channels of a one-channel recording: the one channel is fetched', async () => {
+  const mark = twilio.entries.length;
+  Object.assign(twilio.behaviour, { mono: true, monoReported: 0, monoRefusal: 404 }); // the news that it is ready does not say how many channels
+  try {
+    const { placed } = await callAndWait(priya, { application_id: appDana });
+    const { call: written } = await writtenOut(priya, placed.call_id, false);
+    assert.equal(written.has_audio, true);
+    const asked = restCalls(twilio, mark, /^GET .*\/Recordings\/RE\w+\.wav/).map((r) => `${/RequestedChannels=(\d)/.exec(r.path)[1]}:${r.status}`);
+    assert.deepEqual(asked, ['2:404', '2:404', '2:404', '1:200'], 'two channels a few times, in case it was only not ready yet, then one');
+    await until(async () => recordingsLeft(), (n) => n === 0);
+  } finally {
+    Object.assign(twilio.behaviour, { mono: false, monoReported: 1, monoRefusal: 400 });
+  }
+});
+
+test('the switchboard: a mistyped number is answered in words for a keypad, a second call at once is refused, and keys that are not a PIN end the call after three asks', async () => {
+  let mark = twilio.entries.length;
+  await ringIn(twilio, base, N.priya, [PIN, '5550159', '5550159', '5550159']);
+  let asked = webhooks(twilio, mark, 'gather-action');
+  assert.match(asked[1].response, /<Say>That number was not understood\. Key in the area code and the number, ten digits, then press hash\. Enter the number to call/);
+  assert.ok(!/Write it|\(416\)/.test(asked.map((a) => a.response).join(' ')), 'nothing written for a screen is read out');
+  assert.match(asked[3].response, /Goodbye\.<\/Say><Hangup\/>/);
+
+  // "*" then "#" is not a wrong PIN, but it is an ask: three and the call is over.
+  mark = twilio.entries.length;
+  await ringIn(twilio, base, N.priya, ['*', '*', '*', '*', '*']);
+  asked = webhooks(twilio, mark, 'gather-action');
+  assert.equal(asked.length, 3);
+  assert.match(asked[2].response, /<Say>No PIN was entered\. Goodbye\.<\/Say><Hangup\/>/);
+  assert.equal(db(`SELECT phone_pin_fails FROM users WHERE email = 'priya@agency.example'`)[0].phone_pin_fails, 0, 'none of that counted as a wrong PIN');
+
+  // With a call placed from the app still under way, ringing in gets as far as the number and is then refused.
+  const placed = (await priya.post('/phone/calls', { to: N.talksOn, record: false })).body;
+  await until(() => phoneCallOf(priya, placed.id), (c) => c.status === 'in_call');
+  mark = twilio.entries.length;
+  const rang = fetch(`${twilio.baseUrl}/_standin/inbound`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: N.priya, digits: [PIN, '4165550124'], voiceUrl: `${base}/api/phone/twilio/inbound`, statusCallback: `${base}/api/phone/twilio/status` }) });
+  assert.equal((await rang).status, 201);
+  asked = await until(async () => webhooks(twilio, mark, 'gather-action'), (list) => list.length >= 2);
+  assert.match(asked[1].response, /<Say>You already have a call under way\. Hang up first, or wait for it to end\. Goodbye\.<\/Say><Hangup\/>/);
+  assert.ok(!webhooks(twilio, mark).some((hook) => /<Dial/.test(hook.response || '')));
+  assert.equal((await priya.post(`/phone/calls/${placed.id}/hangup`)).status, 200);
+  await twilio.idle();
+});
+
+test('wrong PINs: each lock is longer than the last, and ten in a day switch the PIN off until a new one is chosen', async () => {
+  const lockedFor = () => (Date.parse(db(`SELECT phone_locked_until FROM users WHERE email = 'priya@agency.example'`)[0].phone_locked_until) - Date.now()) / 60000;
+  const unlock = () => dbRun(`UPDATE users SET phone_locked_until = NULL WHERE email = 'priya@agency.example'`); // as if the lock had run out
+  const mailed = mail.sent.length;
+  const wrong = async (n) => { for (let i = 0; i < n; i++) await ringIn(twilio, base, N.priya, ['9090']); };
+  await wrong(3);
+  assert.ok(lockedFor() > 14 && lockedFor() <= 15, 'a quarter of an hour');
+  unlock();
+  await wrong(3);
+  assert.ok(lockedFor() > 59 && lockedFor() <= 60, 'then an hour');
+  unlock();
+  let mark = twilio.entries.length;
+  await wrong(3);
+  assert.ok(lockedFor() > 1439 && lockedFor() <= 1440, 'then a day');
+  assert.match(webhooks(twilio, mark, 'gather-action').at(-1).response, /locked for this phone for a day/);
+  unlock();
+  mark = twilio.entries.length;
+  await wrong(1); // the tenth wrong PIN inside a day
+  assert.match(webhooks(twilio, mark, 'gather-action')[0].response, /the PIN for this phone has been switched off\. Choose a new one in The Book/);
+  assert.equal(db(`SELECT phone_pin_hash FROM users WHERE email = 'priya@agency.example'`)[0].phone_pin_hash, null);
+  // Even the right PIN is no use now: there is none.
+  mark = twilio.entries.length;
+  await ringIn(twilio, base, N.priya, [PIN, '4165550123']);
+  assert.match(webhooks(twilio, mark, 'voice-url')[0].response, /first choose a PIN in The Book/);
+  assert.ok(!webhooks(twilio, mark).some((hook) => /<Dial/.test(hook.response || '')));
+  assert.equal((await priya.get('/phone/status')).body.my_pin_set, false);
+  const subjects = (await until(async () => mail.sent.slice(mailed), (list) => list.length >= 4)).map((m) => m.subject);
+  assert.equal(subjects.filter((subject) => /locked out of The Book's switchboard/.test(subject)).length, 3);
+  assert.equal(subjects.filter((subject) => /has been switched off/.test(subject)).length, 1);
+  // PINs anybody would try are refused; a new one puts everything back.
+  for (const easy of ['2580', '1212', '1122', '1987', '7007']) {
+    const refused = await savePhone(priya, N.priya, easy);
+    assert.equal(refused.status, 400, easy);
+    assert.match(refused.body.error, /harder to guess/);
+  }
+  assert.deepEqual((await savePhone(priya, N.priya, PIN)).body, { my_phone: N.priya, my_pin_set: true });
+  mark = twilio.entries.length;
+  await ringIn(twilio, base, N.priya, [PIN, '6135550111']);
+  assert.ok(webhooks(twilio, mark).some((hook) => /<Dial/.test(hook.response || '')), 'the switchboard works again');
+  await twilio.idle();
+});
+
+test('a call placed from a calendar event with nobody on file is named after the event', async () => {
+  const { placed } = await callAndWait(priya, { to: '905-555-0142', title: 'Call Kevin about the Hamilton role', event_key: 'kevin_event_key_000000' });
+  const { call } = await writtenOut(priya, placed.call_id, false);
+  assert.equal(call.title, 'Call Kevin about the Hamilton role');
+  assert.equal((await priya.post('/phone/calls', { to: '905-555-0142', title: 7 })).status, 400);
+  // With a candidate, the call is named after them, as every other call is.
+  const withDana = await callAndWait(priya, { application_id: appDana, title: 'Intro call' });
+  assert.equal((await writtenOut(priya, withDana.placed.call_id, false)).call.title, 'Call with Dana Whitlock');
+});
+
+test('somebody who is deactivated gives their mobile number back, so the next person can save it', async () => {
+  const { token } = (await admin.post('/invites', { role: 'recruiter', email: 'tess@agency.example' })).body;
+  const tess = session(base);
+  assert.equal((await tess.post(`/invites/${token}/accept`, { name: 'Tess Marlow', password: 'demo1234' })).status, 200);
+  assert.equal((await savePhone(tess, '416 555 0190', '7305')).status, 200);
+  assert.equal((await savePhone(admin, '416 555 0190')).status, 400, 'taken while she is on the team');
+  const id = db(`SELECT id FROM users WHERE email = 'tess@agency.example'`)[0].id;
+  assert.equal((await admin.patch(`/users/${id}`, { active: false })).status, 200);
+  assert.deepEqual({ ...db('SELECT phone, phone_pin_hash FROM users WHERE id = ?', id)[0] }, { phone: null, phone_pin_hash: null });
+  const own = (await admin.get('/phone/status')).body.my_phone;
+  assert.equal((await savePhone(admin, '416 555 0190')).status, 200);
+  assert.equal((await savePhone(admin, own ?? '')).status, 200);
+});
+
+test('a restart between the transcript and the notes: the notes are still written and the recruiter is still told', async () => {
+  const dir = tempDir('phone-restart');
+  const env = connected(PHONE_PORTS.limits);
+  let again = await startServer({ port: PHONE_PORTS.limits, dataDir: dir, env });
+  try {
+    const owner = session(again.base);
+    assert.equal((await owner.post('/setup', { agencyName: 'Restart', name: 'Alex Morgan', email: 'alex@agency.example', password: 'demo1234' })).status, 200);
+    assert.equal((await savePhone(owner, N.alex, PIN, again.base)).status, 200);
+    const mailed = mail.sent.length, asked = anthropic.requests.length;
+    anthropic.mode = 'hang'; // the notes are being written when the plug is pulled
+    const placed = (await owner.post('/phone/calls', { to: N.dana })).body;
+    await twilio.idle();
+    await until(async () => (await owner.get(`/oracle/calls/${placed.call_id}`)).body, (d) => d.call?.status === 'ready');
+    await until(async () => anthropic.requests.slice(asked), (list) => list.length >= 1);
+    await again.stop('SIGKILL');
+    anthropic.mode = null;
+    assert.equal(mail.sent.length, mailed);
+    again = await startServer({ port: PHONE_PORTS.limits, dataDir: dir, env });
+    const { call } = await until(async () => (await owner.get(`/oracle/calls/${placed.call_id}`)).body, (d) => d.call?.notes);
+    assert.ok(call.notes.length > 20);
+    const [message] = await until(async () => mail.sent.slice(mailed), (list) => list.length >= 1);
+    assert.deepEqual(message.to, ['alex@agency.example']);
+    assert.match(message.subject, /^Your call notes for .* are ready$/);
+  } finally {
+    anthropic.mode = null;
+    await again.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a recording Twilio never finishes: the call stops saying it is waiting, and in the end says there is no audio', async () => {
+  const dir = tempDir('phone-stuck');
+  const env = connected(PHONE_PORTS.limits, { PHONE_RECORDING_STUCK_MS: '1200', PHONE_RECORDING_LOST_MS: '2600' });
+  const stuck = await startServer({ port: PHONE_PORTS.limits, dataDir: dir, env });
+  twilio.behaviour.drop = ['recording:'];
+  twilio.behaviour.stuck = true;
+  try {
+    const owner = session(stuck.base);
+    assert.equal((await owner.post('/setup', { agencyName: 'Stuck', name: 'Alex Morgan', email: 'alex@agency.example', password: 'demo1234' })).status, 200);
+    assert.equal((await savePhone(owner, N.alex, PIN, stuck.base)).status, 200);
+    const placed = (await owner.post('/phone/calls', { to: N.dana })).body;
+    await twilio.idle();
+    const oracle = async () => (await owner.get(`/oracle/calls/${placed.call_id}`)).body;
+    assert.equal((await oracle()).call.status, 'recording');
+    const waiting = await until(oracle, (d) => d.call?.status === 'failed');
+    assert.equal(waiting.call.error, 'The phone service has not finished the recording of this call yet. The Book checks again every hour.');
+    const mark = twilio.entries.length;
+    const given = await until(oracle, (d) => /never finished/.test(d.call?.error || ''), 8000);
+    assert.equal(given.call.error, 'The phone service never finished the recording of this call, so there is no audio.');
+    const phoneCall = (await owner.get(`/phone/calls/${placed.id}`)).body;
+    assert.equal(phoneCall.recorded, false);
+    await sleep(500);
+    const asks = restCalls(twilio, mark, /Recordings\.json/).length;
+    await sleep(500);
+    assert.equal(restCalls(twilio, mark, /Recordings\.json/).length, asks, 'and Twilio is no longer asked about it');
+    // If the recording turns up after all, it is still taken.
+    twilio.behaviour.stuck = false;
+    const [rec] = [...twilio.recordings.values()].filter((r) => !r.deleted && r.status === 'completed');
+    assert.ok(rec, 'the recording exists at the stand-in');
+    const url = `${stuck.base}/api/phone/twilio/recording?c=${placed.id}`;
+    const params = { RecordingSid: rec.sid, RecordingStatus: 'completed', RecordingChannels: '2', RecordingDuration: '12', RecordingSource: 'DialVerb' };
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Twilio-Signature': twilioSignature(twilio.config.authToken, url, params) }, body: new URLSearchParams(params).toString() });
+    assert.equal(res.status, 204);
+    const late = await until(oracle, (d) => d.call?.status === 'ready');
+    assert.equal(late.call.has_audio, true);
+  } finally {
+    twilio.behaviour.drop = [];
+    twilio.behaviour.stuck = false;
+    await stuck.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('calls from numbers nobody knows are limited far below the rest, cost nothing unasked, are not taken when the disk is nearly full, and are deleted when nobody claims them', async () => {
+  const dir = tempDir('phone-strangers');
+  const env = connected(PHONE_PORTS.limits, { PHONE_STRANGERS_PER_HOUR: '2', PHONE_STRANGERS_PER_DAY: '50', PHONE_KEEP_UNKNOWN_MESSAGES_MS: '2500' });
+  let quiet = await startServer({ port: PHONE_PORTS.limits, dataDir: dir, env });
+  const dirOf = () => fs.readdirSync(path.join(dir, 'uploads')).filter((name) => name.startsWith('call-'));
+  try {
+    const owner = session(quiet.base);
+    assert.equal((await owner.post('/setup', { agencyName: 'Quiet', name: 'Alex Morgan', email: 'alex@agency.example', password: 'demo1234' })).status, 200);
+    const clientId = (await owner.post('/clients', { name: 'Kestrel Logistics', engagement_model: 'per_hire', fee_percent: 20 })).body.id;
+    const jobId = (await owner.post('/jobs', { client_id: clientId, title: 'Head of Sales', status: 'open', location: 'Toronto', description: 'Lead and grow our sales team.' })).body.id;
+    assert.equal((await owner.upload('/applications', { job_id: jobId, name: 'Dana Whitlock', email: 'dana@mail.example', phone: '(416) 555-0123' })).status, 200);
+    // Nobody has a mobile saved, so every caller goes straight to leaving a message.
+    const mailed = mail.sent.length, noted = anthropic.requests.length;
+    let mark = twilio.entries.length;
+    await ringIn(twilio, quiet.base, '+12125550101');
+    assert.match(webhooks(twilio, mark, 'voice-url')[0].response, /Please leave a message after the tone\.<\/Say><Record /);
+    const [left] = await until(async () => (await owner.get('/oracle/calls')).body, (list) => list.length === 1 && list[0].status === 'ready');
+    assert.equal(left.title, 'Voicemail');
+    const [message] = await until(async () => mail.sent.slice(mailed), (list) => list.length >= 1);
+    assert.match(message.subject, /has been written out$/, 'written out, and the owner is told');
+    assert.equal(anthropic.requests.length, noted, 'but no notes are written for a message from nobody\'s number until somebody asks');
+    assert.equal((await owner.get(`/oracle/calls/${left.id}`)).body.call.notes, null);
+    assert.equal(dirOf().length, 1);
+
+    await ringIn(twilio, quiet.base, '+12125550102');
+    // The third unknown number in the hour gets a busy tone and costs nothing...
+    mark = twilio.entries.length;
+    await ringIn(twilio, quiet.base, '+12125550103');
+    assert.match(webhooks(twilio, mark, 'voice-url')[0].response, /<Response><Reject reason="busy"\/><\/Response>/);
+    // ...while a candidate ringing from the number on their profile is still answered.
+    mark = twilio.entries.length;
+    await ringIn(twilio, quiet.base, N.dana);
+    assert.match(webhooks(twilio, mark, 'voice-url')[0].response, /Please leave a message after the tone\.<\/Say><Record /);
+    await until(async () => (await owner.get('/oracle/calls')).body, (list) => list.some((c) => c.title === 'Voicemail from Dana Whitlock' && c.status === 'ready'));
+
+    // A message from nobody's number that nobody put on a candidate is deleted, with its audio, once it is old enough.
+    const kept = await until(async () => (await owner.get('/oracle/calls')).body, (list) => !list.some((c) => c.title === 'Voicemail'), 10000);
+    assert.deepEqual(kept.map((c) => c.title), ['Voicemail from Dana Whitlock']);
+    await until(async () => dirOf().length, (n) => n === 1);
+    assert.match(quiet.output(), /left by unknown numbers more than \d+ days ago w(as|ere) deleted/);
+
+    // With next to no room left on the disk, callers are not asked to leave a message.
+    await quiet.stop();
+    quiet = await startServer({ port: PHONE_PORTS.limits, dataDir: dir, env: { ...env, PHONE_MIN_FREE_MB: '99999999999' } });
+    mark = twilio.entries.length;
+    await ringIn(twilio, quiet.base, N.dana);
+    const told = webhooks(twilio, mark, 'voice-url')[0].response;
+    assert.match(told, /Nobody can take your call right now\. Please try again later\.<\/Say><Hangup\/>/);
+    assert.ok(!/<Record/.test(told));
+    assert.match(quiet.output(), /nearly full/);
+  } finally {
+    await quiet.stop();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

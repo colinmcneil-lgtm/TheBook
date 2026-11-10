@@ -4,8 +4,8 @@
 // the phone and calendar routes; these are the parts that can be checked without one.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LEAD, MINUTE, SOON, dayLabel, dueNow, endsAt, isDue, isNear, lengthOf, shiftDay } from '../src/oracle/day.js';
-import { followed, headline, isOver, madeBy, showNumber, telHref, typedNumber } from '../src/oracle/calls.js';
+import { LEAD, MINUTE, SOON, dayLabel, dueNow, endsAt, isDue, isNear, lengthOf, reminderOf, shiftDay } from '../src/oracle/day.js';
+import { followed, headline, isOver, madeBy, personFor, showNumber, telHref, typedNumber } from '../src/oracle/calls.js';
 
 const START = Date.parse('2026-11-10T19:00:00Z');
 const event = (more = {}) => ({ key: 'e1', title: 'Call Kevin', start: new Date(START).toISOString(), end: new Date(START + 30 * MINUTE).toISOString(), all_day: false, added: true, call_id: null, ...more });
@@ -36,7 +36,7 @@ test('reminders come soonest first, without the ones closed or being dealt with'
   const first = event({ key: 'first' });
   const closed = event({ key: 'closed' });
   const calling = event({ key: 'calling' });
-  const due = dueNow([later, first, closed, calling], START, { closed: new Set(['closed']), busyWith: 'calling' });
+  const due = dueNow([later, first, closed, calling], START, { closed: new Set([reminderOf(closed)]), busyWith: 'calling' });
   assert.deepEqual(due.map((e) => e.key), ['first', 'later']);
   assert.deepEqual(dueNow(undefined, START), [], 'no day loaded yet');
 });
@@ -133,4 +133,26 @@ test('a call says how it came to be in The Oracle', () => {
   assert.equal(madeBy({ source: 'phone', direction: 'outbound', created_by_name: 'Alex Morgan' }), 'Phone call placed by Alex Morgan');
   assert.equal(madeBy({ source: 'phone', direction: 'inbound', created_by_name: 'Alex Morgan' }), 'Phone call taken by Alex Morgan');
   assert.equal(madeBy({ source: 'phone', direction: null, created_by_name: null }), 'Phone call made by someone who has left');
+});
+
+test('a reminder that was closed comes back when its event is moved to a later time', () => {
+  const two = event();
+  const closed = new Set([reminderOf(two)]);
+  assert.deepEqual(dueNow([two], START - MINUTE, { closed }), [], 'closed for the time it was set for');
+  // The candidate asks for an hour later: the same event (and key), a new start.
+  const three = event({ start: new Date(START + 60 * MINUTE).toISOString(), end: new Date(START + 90 * MINUTE).toISOString() });
+  assert.equal(three.key, two.key);
+  assert.deepEqual(dueNow([three], START - MINUTE, { closed }), [], 'not yet due at the old time');
+  assert.deepEqual(dueNow([three], START + 59 * MINUTE, { closed }).map((e) => e.key), ['e1'], 'due again at the new one');
+  assert.notEqual(reminderOf(three), reminderOf(two));
+});
+
+test('an event with nobody matched has no person to look up, and that is not an error', () => {
+  // Before anything has been looked up, for an event with no match: this once read a property of nothing, which
+  // took the reminder banner, and with it the whole workspace, off the screen.
+  assert.equal(personFor(null, undefined), null);
+  assert.equal(personFor(null, 7), null, 'still loading');
+  assert.equal(personFor({ applicationId: 7, person: { name: 'Kevin' } }, undefined), null);
+  assert.equal(personFor({ applicationId: 7, person: { name: 'Kevin' } }, 8), null, 'the look-up for another event');
+  assert.deepEqual(personFor({ applicationId: 7, person: { name: 'Kevin' } }, 7), { name: 'Kevin' });
 });

@@ -79,6 +79,16 @@ export function placeOf(e164) {
   return { country: null };
 }
 
+/** The countries this workspace may ring, as two-letter codes: Canada and the United States unless PHONE_COUNTRIES says otherwise. */
+export const allowedCountries = () => [...new Set((process.env.PHONE_COUNTRIES || '').trim().split(',').map((code) => code.trim().toUpperCase()).filter((code) => /^[A-Z]{2}$/.test(code)))]
+  .concat((process.env.PHONE_COUNTRIES || '').trim() ? [] : ['CA', 'US']);
+/** Is this stored number one The Book would ring: an ordinary number (not premium-rate or special) in an allowed country? */
+export function mayRing(e164, countries = allowedCountries()) {
+  if (!e164) return false;
+  const place = placeOf(e164);
+  return !place.special && Boolean(place.country) && countries.includes(place.country);
+}
+
 /** For people to read: "+16475550199" becomes "(647) 555-0199". Numbers elsewhere are shown as stored. */
 export function displayNumber(e164) {
   const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164 || '');

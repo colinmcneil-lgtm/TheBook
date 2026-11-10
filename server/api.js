@@ -639,6 +639,10 @@ api.patch('/users/:id', agencyOnly, (req, res) => {
   if (b.password !== undefined || b.active === false) q.run('DELETE FROM sessions WHERE user_id = ?', target.id);
   // Links this person handed out stop working with them, so nobody can be let in on their say-so after they have left.
   if (b.active === false) q.run('DELETE FROM invites WHERE created_by = ? AND used_at IS NULL', target.id);
+  // Their mobile and its PIN go too: a number says who is ringing in, so it must be free for whoever has that phone next.
+  if (b.active === false) {
+    q.run('UPDATE users SET phone = NULL, phone_pin_hash = NULL, phone_pin_fails = 0, phone_locked_until = NULL, phone_lock_level = 0, phone_pin_wrong = 0, phone_pin_wrong_since = NULL WHERE id = ?', target.id);
+  }
   res.json({ ok: true });
 });
 

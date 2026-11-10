@@ -232,8 +232,12 @@ Oracle without anyone pressing Record.
 2. **Call from your phone (the switchboard).** Save The Book's number in your contacts. Ring it from the mobile you
    saved in The Book, key in your PIN and #, then the number you want and #. The call is placed and recorded the
    same way, with no screen needed. If the number is exactly one candidate's, the call goes on that candidate. Three
-   wrong PINs end the call and lock that mobile out of the switchboard for fifteen minutes (you are e-mailed when it
-   happens); wrong PINs add up across calls, so hanging up and trying again does not help a guesser.
+   wrong PINs end the call and lock that mobile out of the switchboard (you are e-mailed when it happens): for a
+   quarter of an hour the first time, an hour the next, then a day. Wrong PINs add up across calls, so hanging up
+   and trying again does not help a guesser, and ten of them inside a day switch the PIN off until its owner
+   chooses a new one in the app. A caller's number can be faked, so the PIN is the only real lock, and it must not
+   be something that can be guessed a few tries at a time for ever. One call at a time: while a call you placed is
+   under way, a second one from the switchboard is refused.
 3. **Somebody rings the number.** The caller is found by their number and put through to the recruiter who last
    called them, or else the owner of their most recent application, or else the first admin who has a mobile saved.
    Your phone shows The Book's number, and before you are joined a voice says "Call from Dana Whitlock, a candidate"
@@ -256,6 +260,14 @@ call you placed the first channel is you, and on a call that came in it is the c
 on its own and the two are woven together by time, with the names filled in. Notes are then written as for any
 Oracle call, and the recruiter is e-mailed "Your call notes for Dana Whitlock are ready" with a link. Without e-mail
 connected, no e-mail is sent and nothing else changes.
+
+Nobody is at a screen for a phone call, so what would be a button for a browser recording happens by itself. If the
+transcription service is busy, failing or not answering, the call goes back in line (after a minute, then five,
+fifteen, an hour, and so on for about two days); if it cannot be written out at all, the recruiter is e-mailed
+"Your call with Dana Whitlock could not be written out" with the reason and a link. If the e-mail itself cannot be
+sent, it is tried again for three days and only marked as sent once the mail provider has taken it. A restart
+between the transcript and the notes loses neither: the notes are written and the e-mail sent once the server is
+back.
 
 Twilio's messages to The Book (webhooks) are not guaranteed to arrive, or to arrive once. Every one can be
 repeated without harm, and once a minute The Book asks Twilio about calls it has heard nothing about and about
@@ -298,10 +310,13 @@ privacy notice. Twilio, Deepgram and Anthropic all process calls in the United S
 | `PHONE_NOTICE` | See above. Default on. |
 | `PHONE_FORWARD_SHOWS` | `caller` to show a caller's own number when they are put through. Default: The Book's number. |
 | `PHONE_CALLS_PER_HOUR` | The most calls one person can place in an hour. Default 30. |
+| `PHONE_STRANGERS_PER_HOUR`, `PHONE_STRANGERS_PER_DAY` | The most calls put through from numbers that are not a candidate's. Default 10 an hour and 40 a day. |
+| `PHONE_MIN_FREE_MB` | With less free disk space than this, callers are not asked to leave a message. Default 500. |
 | `PHONE_VOICE` | Optional: which of Twilio's voices reads the prompts (for example `alice`). |
 
 Without the three Twilio settings (or without an address in `APP_URL`), the app says phone calls are not connected,
-and everything else works as before. People can still save their mobile and PIN ahead of time.
+and everything else works as before. People can still save their mobile and PIN ahead of time. Settings, Agency
+says which of the four is still missing, and shows the two addresses for step 5 below, filled in, ready to copy.
 
 ### Setting it up
 
@@ -316,9 +331,13 @@ and everything else works as before. People can still save their mobile and PIN 
    connect e-mail if you want the "notes are ready" message.
 5. In Twilio, open Phone Numbers, Active numbers, your number, Voice configuration. For **A call comes in** choose
    Webhook, `https://<your address>/api/phone/twilio/inbound`, HTTP POST. For **Call status changes** enter
-   `https://<your address>/api/phone/twilio/status`, HTTP POST. Save.
+   `https://<your address>/api/phone/twilio/status`, HTTP POST. Save. Until this is done, calls placed from the app
+   work but ringing The Book's number reaches nothing, and The Book cannot know: it shows "Connected" either way.
+   Settings, Agency shows the two addresses in full. To check, ring the number from a saved mobile: a voice should
+   say "This is The Book".
 6. In The Book, each person on the agency team saves their own mobile number under Settings, Your account, and a
-   PIN of 4 to 6 digits if they want to ring in. Save The Book's number in your phone as "The Book".
+   PIN of 4 to 6 digits if they want to ring in (six is better; a PIN needs at least three different digits, and
+   runs, years and 2580 are refused). Save The Book's number in your phone as "The Book".
 
 ### What stops it running up a bill
 
@@ -330,10 +349,17 @@ and everything else works as before. People can still save their mobile and PIN 
   rest, each priced on its own) are refused. The same check applies to the mobile a person saves, since The Book
   rings that too. For countries other than Canada and the US, The Book cannot tell a premium-rate number from an
   ordinary one, so if you add any, rely on Twilio's geographic permissions as well.
-- Each person can place 30 calls an hour and one at a time from the app. The count is kept in the database, so a
-  restart does not reset it. A call is cut off at three hours.
-- Calls coming in are put through at most 10 an hour from one number and 60 an hour in all; beyond that the call is
-  turned away with a busy tone, without being answered.
+- Each person can place 30 calls an hour and one at a time, whether from the app or from the switchboard. The
+  count is kept in the database, so a restart does not reset it. A call is cut off at three hours. One saved mobile
+  can ring the switchboard 20 times an hour, and the PIN prompt ends the call after three asks.
+- Calls coming in are put through at most 10 an hour from one number, 60 an hour and 300 a day in all; beyond that
+  the call is turned away with a busy tone, without being answered. Calls from numbers that are not a candidate's
+  get a much smaller share (10 an hour and 40 a day), because anyone can make them, and each one rings a
+  recruiter's phone and may leave a message to store and write out.
+- A message left by a number that is nobody's is written out, but no notes are drafted for it until somebody asks
+  on its page, at most five e-mails a day are sent about such messages, and one that nobody has put on a candidate
+  after 30 days is deleted with its audio. When the disk has less than 500 MB free, callers are not asked to leave
+  a message at all, so the room that is left stays for calls being recorded.
 - Webhooks are accepted only with Twilio's signature. Anything else is answered 403 and changes nothing.
 
 ### Privacy
@@ -341,7 +367,9 @@ and everything else works as before. People can still save their mobile and PIN 
 Phone calls follow the Oracle's rules: agency only; client users are refused on every route and see nothing of a
 call, not even the line on a candidate's history. Deleting a candidate deletes their phone calls with the audio,
 transcripts and notes, and the entries in each recruiter's list of calls; if a call with them is still going, its
-recording is deleted from Twilio when it arrives. Deleting a call in the Oracle while it is still going does the
+recording is deleted from Twilio when it arrives. A recording that was still at Twilio when the person was deleted
+(not fetched yet, or fetched but Twilio's copy not yet deleted) is remembered by its Twilio name alone and deleted
+there, tried again until Twilio says it is gone. Deleting a call in the Oracle while it is still going does the
 same. Phone numbers and PINs are never written to the server log. PINs are stored as salted hashes. What Twilio
 told The Book about each call is kept for two weeks to help with fault-finding, with numbers and keys masked.
 
@@ -431,12 +459,12 @@ Google, Microsoft and Apple describe them, and were not tried while this was bui
   Calendar** and copy the link (it starts `webcal://`, which is fine). On an iPhone: Calendar, Calendars, the (i)
   beside the calendar, Public Calendar, Share Link.
 
-Paste the link into The Oracle. The Book reads the calendar once before accepting the link, and says plainly what
+Paste the link under Settings, Your account, "Your calendar". The Book reads the calendar once before accepting the link, and says plainly what
 is wrong if it cannot. One calendar per person; to use another, paste its link in place of the first.
 
 **Treat the link like a password.** Anyone who has it can read that calendar. The Book stores it sealed, never
-shows it again (not to you, not to an admin) and never writes it to a log. To take access away, remove the link in
-The Oracle, and to be sure, also reset it where it came from: **Reset** beside the secret address in Google,
+shows it again (not to you, not to an admin) and never writes it to a log. To take access away, remove the link
+under Settings, Your account, "Your calendar", and to be sure, also reset it where it came from: **Reset** beside the secret address in Google,
 **Unpublish** in Outlook, or turn Public Calendar off in iCloud.
 
 ### What the day shows
@@ -490,7 +518,10 @@ redirect, and the connection is made to exactly the address that was checked), a
 10 MB and 15 seconds at most, and what comes back has to be a calendar. Saving a link can be tried twelve times an
 hour per person. Everything inside an event is text a stranger may have written (anyone can send an invitation):
 it is cut to length before it is looked at, shown as text only, and large calendars are read on a thread of their
-own so that reading one never holds up anybody else.
+own so that reading one never holds up anybody else. A phone number written in an event only becomes a Call button
+when it is a number The Book would ring itself (an ordinary number in an allowed country), so an invitation cannot
+put a premium-rate or overseas number one tap away. An event set to repeat many times an hour is left out, with a
+sentence saying so, before any time is spent working out its dates.
 
 ### Limits
 
@@ -510,7 +541,8 @@ No real Google, Outlook or iCloud link could be fetched from where this was buil
 reachable, and no account was available. The reader was tested against calendar files written to look like what
 they publish, and against local servers playing every trick the reader has to refuse. So, with the first real link:
 
-1. Create an event with a guest and a Meet or Teams link, paste the calendar's link into The Oracle, and check
+1. Create an event with a guest and a Meet or Teams link, paste the calendar's link under Settings, Your account,
+   "Your calendar", and check
    that the event appears with its guest, its link to join and the right time. Note how long a new event takes to
    show up when the day is read again.
 2. If the guests are missing (expected for Outlook), matching will rest on names and phone numbers.

@@ -32,8 +32,14 @@ export const isNear = (event, now) => !event.all_day && now >= startsAt(event) -
 /** Should the recruiter be reminded of this event now? Only events they added, that have no call yet, from two minutes before until they end. */
 export const isDue = (event, now) => Boolean(event.added) && !event.all_day && !event.call_id && now >= startsAt(event) - LEAD && now < endsAt(event);
 /**
- * The events to remind about right now, soonest first. `closed` holds the keys of reminders the recruiter closed,
- * and `busyWith` is the key of the event a call is being made for this minute (no reminder for that one).
+ * What one reminder goes by: the event and the time it starts. An event keeps its key when it is moved, so a
+ * reminder that was closed (or already shown on the desktop) for two o'clock is a different one from the reminder
+ * for three, after the candidate asked for an hour later.
+ */
+export const reminderOf = (event) => `${event.key}@${event.start}`;
+/**
+ * The events to remind about right now, soonest first. `closed` holds the reminders the recruiter closed (see
+ * reminderOf), and `busyWith` is the key of the event a call is being made for this minute (no reminder for that one).
  */
 export const dueNow = (events, now, { closed = new Set(), busyWith = null } = {}) =>
-  (events || []).filter((e) => isDue(e, now) && !closed.has(e.key) && e.key !== busyWith).sort((a, b) => startsAt(a) - startsAt(b));
+  (events || []).filter((e) => isDue(e, now) && !closed.has(reminderOf(e)) && e.key !== busyWith).sort((a, b) => startsAt(a) - startsAt(b));

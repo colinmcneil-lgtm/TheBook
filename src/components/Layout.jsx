@@ -32,6 +32,19 @@ function TopBars({ children }) {
   return <div ref={box} className="shrink-0">{children}</div>;
 }
 
+/**
+ * One bar across the top. A bar that fails to draw is left out and the fault is logged: these sit above every page,
+ * so without this one broken reminder would empty the whole window, and a recording under way would go with it.
+ * It is tried again when the recruiter moves to another page.
+ */
+class Bar extends React.Component {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error) { console.error('A bar across the top could not be shown:', error); }
+  componentDidUpdate(before) { if (this.state.failed && before.at !== this.props.at) this.setState({ failed: false }); }
+  render() { return this.state.failed ? null : this.props.children; }
+}
+
 function ScopeSwitcher() {
   const { clients, scope, scopeClient, setScope, isAgency } = useApp();
   const trigger = (
@@ -121,7 +134,13 @@ export default function Layout({ children }) {
 
   return (
     <div className="flex h-full flex-col">
-    {isAgency && <TopBars><RecorderStrip /><PhoneStrip /><EventPrompt /></TopBars>}
+    {isAgency && (
+      <TopBars>
+        <Bar at={location.pathname}><RecorderStrip /></Bar>
+        <Bar at={location.pathname}><PhoneStrip /></Bar>
+        <Bar at={location.pathname}><EventPrompt /></Bar>
+      </TopBars>
+    )}
     <div className="flex min-h-0 flex-1">
       <aside className="no-print hidden w-60 shrink-0 lg:block">{sidebar}</aside>
       {open && (

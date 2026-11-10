@@ -33,6 +33,14 @@ export class FeedFetchError extends Error {
     Object.assign(this, extra);
   }
 }
+/**
+ * What is thrown when the calendar's own server answers with anything but the calendar. It carries that server's
+ * status (`status`), which is the calendar's, never the status our own answer should have.
+ */
+export const httpStatusError = (status) => new FeedFetchError('http_status',
+  status === 404 || status === 410 ? 'That calendar link no longer works. It may have been reset or switched off: copy the link again from your calendar\'s settings.'
+    : status === 401 || status === 403 ? 'Your calendar refused that link. Copy the link again from your calendar\'s settings.'
+      : `Your calendar answered with an error (${status}). Try again in a few minutes.`, { status });
 
 // ---------- which addresses may be reached ----------
 const blocked = new net.BlockList();
@@ -242,9 +250,8 @@ function oneHop(u, pinned, o, deadline, conditional) {
       if (status === 304 && conditional) { res.resume(); req.destroy(); return finish(resolve, { notModified: true }); }
       if (status !== 200) {
         res.resume();
-        return fail('http_status', status === 404 || status === 410 ? 'That calendar link no longer works. It may have been reset or switched off: copy the link again from your calendar\'s settings.'
-          : status === 401 || status === 403 ? 'Your calendar refused that link. Copy the link again from your calendar\'s settings.'
-            : `Your calendar answered with an error (${status}). Try again in a few minutes.`, { status });
+        req?.destroy();
+        return finish(reject, httpStatusError(status));
       }
       const declared = Number(res.headers['content-length']);
       if (Number.isFinite(declared) && declared > o.maxBytes) return tooLarge();

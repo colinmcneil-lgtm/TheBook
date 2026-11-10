@@ -430,7 +430,7 @@ async function deepgram(file, type, twoChannel = false) {
  * are joined. When no speaker numbers came back at all, nothing is joined: the call would become one endless
  * paragraph with a single time to jump to. Everything in the answer is optional, so each part is read with a fallback.
  */
-export function turnsFrom(answer) {
+export function turnsFrom(answer, byChannel = null) {
   const seconds = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
   const speakerOf = (v) => (Number.isInteger(Number(v)) && Number(v) >= 0 ? Number(v) : 0); // no speaker labels: everything is one speaker
   const piece = (speaker, start, end, text) => ({ speaker: speakerOf(speaker), told: speaker != null, start: seconds(start), end: seconds(end), text: String(text ?? '').replace(/\s+/g, ' ').trim() });
@@ -440,7 +440,10 @@ export function turnsFrom(answer) {
   const heard = Array.isArray(answer?.results?.channels) ? answer.results.channels : [];
   const channels = Number.isInteger(answer?.metadata?.channels) ? answer.metadata.channels : heard.length;
   // More than one channel came back: the audio was written out channel by channel, and the answer says how many.
-  if (channels > 1) return { turns: channelTurns(utterances, heard, piece), durationMs, channels };
+  // `byChannel` is whether that was asked for. When it was not (a recording from the browser, or an uploaded file
+  // that happens to be stereo), the speakers are the ones the service told apart by voice, however many channels
+  // the answer mentions; reading it channel by channel would make the whole call one speaker.
+  if (channels > 1 && byChannel !== false) return { turns: channelTurns(utterances, heard, piece), durationMs, channels };
   let pieces = utterances.map((u) => piece(u?.speaker, u?.start, u?.end, u?.transcript)).filter((p) => p.text);
   if (!pieces.length) {
     // No list of utterances came back: fall back on the paragraphs, then on the plain text.
@@ -500,14 +503,46 @@ function phoneSpeakers(call) {
   return speakers;
 }
 
-// Others can ask to be told when a call has been written out, and again once its notes are there. The phone
-// module uses it to e-mail the recruiter, who may be nowhere near a screen.
+// Others can ask to be told when a call has been written out and its notes are there, or when it could not be
+// written out after all. The phone module uses it to e-mail the recruiter, who may be nowhere near a screen.
 const readyListeners = [];
 export const onCallReady = (listener) => { readyListeners.push(listener); };
 function tellReady(callId) {
   for (const listener of readyListeners) {
     Promise.resolve().then(() => listener(callId)).catch((err) => console.error('Could not tell someone their call is ready:', err?.message ?? err));
   }
+}
+
+/** A message left on the phone line by a number that is nobody's: anyone can leave one, so nothing is spent on it unasked. */
+const fromNobody = (call) => call.source === 'phone' && Boolean(call.voicemail) && !call.candidate_id;
+/**
+ * What follows a transcript: the notes are written (unless they are there, could not be written, or the call is a
+ * message from nobody's number), and then whoever asked is told. Also used to pick up a call that a restart, or a
+ * failed e-mail, left written out but with its recruiter never told. Safe to ask for twice: one runs at a time.
+ */
+const finishing = new Set();
+export function finishWritingUp(id) {
+  const call = callRow(id);
+  if (!call || finishing.has(id)) return;
+  // The recruiter comes back to a transcript and its notes. Notes that are already there (written or edited before a
+  // second transcription) are left alone. The submission is never drafted unasked: that is a button.
+  // If they cannot be written, the reason is kept on the call (see notesFor) and the page shows it.
+  if (call.status === 'ready' && aiConfigured() && !call.notes && !call.notes_error && !fromNobody(call)) {
+    finishing.add(id);
+    notesFor(id).catch((err) => console.error('Writing call notes failed:', err?.status ?? '', err?.name ?? '', err?.message ?? err))
+      .finally(() => { finishing.delete(id); tellReady(id); });
+  } else tellReady(id);
+}
+
+// A phone call is written out with nobody at a screen to press "Transcribe" again, so when the transcription
+// service is busy, failing or not answering, the call goes back in line by itself with a growing pause.
+const PHONE_RETRY = Number(process.env.ORACLE_PHONE_RETRY_MS) > 0 ? Number(process.env.ORACLE_PHONE_RETRY_MS) : 60000;
+const PHONE_RETRY_STEPS = [1, 5, 15, 60, 180, 360, 720, 1440]; // minutes: about two days in all
+const retryTimers = new Map();
+function transcribeLater(id, wait) {
+  clearTimeout(retryTimers.get(id));
+  // A long wait is also kept in the database (transcribe_next_at), so a restart picks it up; see recoverAfterRestart.
+  retryTimers.set(id, setTimeout(() => { retryTimers.delete(id); startTranscription(id); }, Math.min(wait, 2 ** 31 - 1)).unref());
 }
 
 // Transcription runs in the background, two calls at a time, never inside the request that delivered the audio.
@@ -552,12 +587,22 @@ async function transcribeAudio(call) {
   } catch (err) {
     const problem = err instanceof TranscriptionError ? err : new TranscriptionError('server', { detail: String(err?.message ?? err) });
     console.error('Transcription failed:', problem.kind, problem.status ?? '', problem.code ?? '', problem.detail, problem.requestId ?? '');
-    settle(`status = 'failed', error = ?`, problem.message);
+    const step = PHONE_RETRY_STEPS[call.transcribe_tries];
+    if (call.source === 'phone' && problem.retryable && step) {
+      // Still "transcribing" as far as the page is concerned: it will be, again, shortly.
+      const wait = PHONE_RETRY * step;
+      if (settle('transcribe_tries = transcribe_tries + 1, transcribe_next_at = ?', new Date(Date.now() + wait).toISOString())) {
+        console.error(`Call ${id}: trying the transcription again in ${Math.round(wait / 1000)} seconds.`);
+        transcribeLater(id, wait);
+      }
+      return;
+    }
+    if (settle(`status = 'failed', error = ?, transcribe_next_at = NULL`, problem.message)) tellReady(id);
     return;
   }
-  const { turns, durationMs, channels } = turnsFrom(answer);
+  const { turns, durationMs, channels } = turnsFrom(answer, twoChannel);
   if (!turns.length) {
-    settle(`status = 'failed', error = ?, duration_ms = COALESCE(duration_ms, ?)`, NO_SPEECH, durationMs);
+    if (settle(`status = 'failed', error = ?, duration_ms = COALESCE(duration_ms, ?), transcribe_next_at = NULL`, NO_SPEECH, durationMs)) tellReady(id);
     return;
   }
   // On a two-channel phone call the speaker is the channel, so the names are known without anyone listening. If the
@@ -571,14 +616,10 @@ async function transcribeAudio(call) {
   }
   // Names given to the speakers of a pasted transcript do not carry over: the service numbers speakers its own way.
   const saved = settle(`status = 'ready', error = NULL, transcript = ?, transcript_source = 'deepgram', duration_ms = COALESCE(duration_ms, ?),
+    transcribe_tries = 0, transcribe_next_at = NULL, notes_error = CASE WHEN notes IS NULL THEN NULL ELSE notes_error END,
     speakers = COALESCE(?, CASE WHEN transcript_source = 'pasted' THEN '{}' ELSE speakers END)`, JSON.stringify(turns), durationMs, named);
   if (!saved) return;
-  // The recruiter comes back to a transcript and its notes. Notes that are already there (written or edited before a
-  // second transcription) are left alone. The submission is never drafted unasked: that is a button.
-  // If they cannot be written, the reason is kept on the call (see notesFor) and the page shows it.
-  if (aiConfigured() && !callRow(id)?.notes) {
-    notesFor(id).catch((err) => console.error('Writing call notes failed:', err?.status ?? '', err?.name ?? '', err?.message ?? err)).finally(() => tellReady(id));
-  } else tellReady(id);
+  finishWritingUp(id);
 }
 
 // ---------- a pasted transcript ----------
@@ -906,9 +947,11 @@ async function removeOldPieces() {
 }
 /** What a restart leaves behind: transcriptions that were under way, recordings that were cut short, and files no call points at. */
 function recoverAfterRestart() {
-  for (const call of q.all(`SELECT id FROM calls WHERE status = 'transcribing'`)) {
-    if (transcriptionConfigured()) startTranscription(call.id);
-    else q.run(`UPDATE calls SET status = 'uploaded', updated_at = ? WHERE id = ?`, now(), call.id);
+  for (const call of q.all(`SELECT id, transcribe_next_at FROM calls WHERE status = 'transcribing'`)) {
+    if (!transcriptionConfigured()) q.run(`UPDATE calls SET status = 'uploaded', updated_at = ? WHERE id = ?`, now(), call.id);
+    // A phone call that was waiting to be tried again keeps waiting for what is left of its pause.
+    else if (call.transcribe_next_at && Date.parse(call.transcribe_next_at) > Date.now()) transcribeLater(call.id, Date.parse(call.transcribe_next_at) - Date.now());
+    else startTranscription(call.id);
   }
   // Audio and pieces whose call is gone (a candidate deleted in a way that skipped the file clean-up, or a crash
   // between writing a file and recording it). Calls are personal data, so nothing is left lying around.
@@ -1300,7 +1343,7 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
     if (!transcriptionConfigured()) bad('Transcription is not connected to this workspace. Ask whoever hosts The Book to set DEEPGRAM_API_KEY, or paste a transcript instead.');
     if (call.status !== 'transcribing') {
       oracleLimit('transcribe', req.user, 60);
-      q.run(`UPDATE calls SET status = 'transcribing', error = NULL, updated_at = ? WHERE id = ?`, now(), call.id);
+      q.run(`UPDATE calls SET status = 'transcribing', error = NULL, transcribe_tries = 0, transcribe_next_at = NULL, updated_at = ? WHERE id = ?`, now(), call.id);
     }
     startTranscription(call.id);
     res.status(202).json({ status: 'transcribing' });

@@ -6,14 +6,14 @@
 // about once a second. Closing a dialog or leaving a page never ends a call.
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { ArrowLeft, ChevronDown, CircleCheck, Hash, Phone, PhoneCall, PhoneForwarded, PhoneOff, PhoneOutgoing, Search, Smartphone, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, CircleCheck, Hash, Phone, PhoneCall, PhoneForwarded, PhoneIncoming, PhoneOff, PhoneOutgoing, Search, Smartphone, X } from 'lucide-react';
 import { useApp, useApi } from '../state.jsx';
-import { api, url, firstName, photoUrl } from '../lib.js';
-import { WAITING_WORDS, followed, headline, isOver, showNumber, telHref, typedNumber } from './calls.js';
+import { api, url, ago, firstName, photoUrl } from '../lib.js';
+import { WAITING_WORDS, followed, headline, isOver, personFor, showNumber, telHref, typedNumber } from './calls.js';
 import { Avatar, Button, Card, Checkbox, Input, Loading, Modal, useAction, cx } from '../ui.jsx';
 import { useRecorder } from './RecorderProvider.jsx';
 import { formatElapsed } from './recorder.js';
-import { CardIntro, Notice } from './bits.jsx';
+import { CardIntro, Notice, useLive } from './bits.jsx';
 
 const NONE = {
   status: null, statusError: null, call: null, live: false, dialogOpen: false, cannotCall: null, cannotRecord: null, hangingUp: false,
@@ -30,6 +30,8 @@ const problemOf = (err) => (err?.status || !(err instanceof TypeError) ? err.mes
 
 /** The names of the settings that connect the phone line, for admins. */
 export const PHONE_SETTINGS = ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_NUMBER'];
+/** With APP_URL, the public address Twilio reports to: the phone line needs all four. */
+const ALL_PHONE_SETTINGS = [...PHONE_SETTINGS, 'APP_URL'];
 const code = (text) => <code key={text} className="rounded bg-stone-200/70 px-1 py-0.5 text-xs text-stone-800">{text}</code>;
 export const settingNames = (names) => names.map((name, i) => <React.Fragment key={name}>{i > 0 && (i === names.length - 1 ? ' and ' : ', ')}{code(name)}</React.Fragment>);
 
@@ -63,7 +65,7 @@ export function usePerson(applicationId) {
     loadPerson(applicationId).then((person) => live && setFound({ applicationId, person })).catch(() => {});
     return () => { live = false; };
   }, [applicationId]);
-  return found?.applicationId === applicationId ? found.person : null;
+  return personFor(found, applicationId);
 }
 
 // ---- the phone line, for the whole app --------------------------------------------------------------------------------------
@@ -147,9 +149,9 @@ export function PhoneProvider({ children }) {
   const place = useCallback(async (target) => {
     if (cannotCall) throw new Error(cannotCall);
     if (latest.current && !isOver(latest.current)) throw new Error('You already have a call under way. Hang up first, or wait for it to end.');
-    const { application_id, candidate_id, to, record = true, event_key, name, to_display } = target;
+    const { application_id, candidate_id, to, record = true, event_key, name, to_display, title } = target;
     const made = await api.post('/phone/calls', {
-      application_id: application_id || undefined, candidate_id: candidate_id || undefined, to: to || undefined, record, event_key: event_key || undefined,
+      application_id: application_id || undefined, candidate_id: candidate_id || undefined, to: to || undefined, record, event_key: event_key || undefined, title: title || undefined,
     });
     setCall({
       id: made.id, call_id: made.call_id ?? null, status: made.status || 'ringing_you', outcome: null, message: '', to_display: to_display || null,
@@ -194,7 +196,8 @@ export function PhoneSetup({ onNavigate, className }) {
       <Notice className={className}>
         <span className="font-medium text-stone-900">Phone calls are not connected to this workspace yet.</span>{' '}
         {isAdmin
-          ? <>To connect them, set {settingNames(PHONE_SETTINGS)} where the app is hosted, then restart it. <Link to="/settings?tab=agency#phone-connection" onClick={onNavigate} className={link}>What each one is</Link></>
+          // When some of the settings are in, say which thing is still missing rather than listing what is already set.
+          ? <>{status.problem && status.missing?.length < 4 ? status.problem : <>To connect them, set {settingNames(ALL_PHONE_SETTINGS)} where the app is hosted.</>} Then restart the app. <Link to="/settings?tab=agency#phone-connection" onClick={onNavigate} className={link}>What each one is</Link></>
           : <>An admin can connect them in the app’s hosting settings. <Link to="/settings?tab=agency#phone-connection" onClick={onNavigate} className={link}>What is needed</Link></>}
       </Notice>
     );
@@ -376,8 +379,9 @@ function CallDialog({ preset, onClose }) {
   const [record, setRecord] = useState(true);
   const [problem, setProblem] = useState(null);
   const [placing, setPlacing] = useState(false);
-  // A call already under way when the dialog opens is shown rather than a second one offered.
-  const [showing, setShowing] = useState(phone.live ? call.id : null);
+  // A call already under way when the dialog opens is shown rather than a second one offered. Once the dialog has
+  // shown a call it follows whichever call is current, so "Call again" stays here with its Hang up.
+  const [showing, setShowing] = useState(phone.live);
 
   useEffect(() => {
     if (!looking) return undefined;
@@ -393,6 +397,11 @@ function CallDialog({ preset, onClose }) {
     return () => { live = false; };
   }, []);
 
+  // The number came from a calendar event or from the list of recent calls (and has not been swapped for another):
+  // said so, since nobody typed it.
+  const given = Boolean(preset.to && number === preset.to);
+  const fromEvent = given && Boolean(preset.event_key);
+  const whose = fromEvent ? `The number in “${preset.event_title || 'this event'}”.` : given && preset.to_from ? preset.to_from : 'A number you typed.';
   const choose = (found) => { setPerson(found); setNumber(null); setApplicationId(found.applications[0]?.id ?? null); setProblem(null); };
   const back = () => { setPerson(null); setNumber(null); setProblem(null); };
   const callNow = async () => {
@@ -400,15 +409,15 @@ function CallDialog({ preset, onClose }) {
     setProblem(null);
     setPlacing(true);
     try {
-      const made = await phone.place(person
+      await phone.place(person
         ? { application_id: applicationId || undefined, candidate_id: applicationId ? undefined : person.candidate_id, name: person.name, to_display: person.phone_display, record, event_key: preset.event_key }
-        : { to: number, to_display: number, record, event_key: preset.event_key });
-      setShowing(made.id);
+        : { to: number, to_display: showNumber(number), record, event_key: preset.event_key, title: fromEvent ? preset.event_title : undefined });
+      setShowing(true);
     } catch (err) { setProblem(problemOf(err)); }
     setPlacing(false);
   };
 
-  if (showing && call?.id === showing) {
+  if (showing && call) {
     return (
       <Modal title="Phone call" subtitle={isOver(call) ? undefined : 'Closing this does not end the call.'} size="sm" onClose={onClose}>
         <LiveCall onDone={onClose} className="py-2" />
@@ -438,8 +447,10 @@ function CallDialog({ preset, onClose }) {
         {person ? <Avatar name={person.name} size={44} src={photoUrl(person.candidate_id, person.photo)} />
           : <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-white text-brand-700 ring-1 ring-brand-200"><Hash className="size-5" /></span>}
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[15px] font-semibold text-stone-900">{person ? person.name : number}</span>
-          <span className="tabular block truncate text-sm text-stone-600">{person ? person.phone_display : 'A number you typed. If it is one candidate’s number, the call goes on their profile.'}</span>
+          <span className="tabular block truncate text-[15px] font-semibold text-stone-900">{person ? person.name : showNumber(number)}</span>
+          <span className={cx('block text-sm text-stone-600', person && 'tabular truncate')}>
+            {person ? person.phone_display : `${whose} If it is one candidate’s number, the call goes on their profile.`}
+          </span>
           {jobs.length === 1 && <span className="block truncate text-[13px] text-stone-500">About {jobs[0].job_title} · {jobs[0].client_name}</span>}
         </span>
       </div>
@@ -482,6 +493,7 @@ function CallDialog({ preset, onClose }) {
 /** How to place a call with no screen at all: ring The Book's number from the saved mobile, PIN, then the number. */
 function Switchboard() {
   const { status } = usePhone();
+  const { isAdmin } = useApp();
   if (!status?.configured || !status.number) return null;
   const step = (n, children) => (
     <li className="flex gap-3">
@@ -514,8 +526,55 @@ function Switchboard() {
         ) : (
           <p className="text-xs text-stone-500">Your PIN is set (<Link to="/settings?tab=account#phone" className="font-medium text-brand-700 hover:underline">change it</Link>). Save the number above in your phone as “The Book” so it is one tap away.</p>
         )}
+        {/* The Book cannot tell whether the number has been pointed at it at Twilio, so it says what to do if it has not. */}
+        <p className="text-xs text-stone-500">
+          If the number does not answer “This is The Book”, one set-up step at Twilio is still to do.{' '}
+          {isAdmin ? <Link to="/settings?tab=agency#phone-connection" className="font-medium text-brand-700 hover:underline">See the two addresses to enter there</Link> : 'Ask an admin to finish it under Settings, Agency.'}
+        </p>
       </div>
     </details>
+  );
+}
+
+/**
+ * The last few phone calls, each in one sentence. A call that reached nobody leaves nothing in The Oracle, so this
+ * is the only place a missed call (somebody rang back and left no message) can be seen, and returned.
+ */
+function RecentCalls() {
+  const phone = usePhone();
+  // Read again whenever a call starts or ends, and every minute while the card is on screen (calls can come in).
+  const recent = useLive('/phone/calls?limit=6', () => true, 60_000);
+  useEffect(() => { recent.reload(); }, [phone.live]);
+  const calls = (recent.data || []).filter((c) => isOver(c)).slice(0, 5);
+  if (!calls.length) return null;
+  const ready = Boolean(phone.status?.configured && phone.status?.my_phone) && !phone.cannotCall && !phone.live;
+  return (
+    <div className="mt-4">
+      <h3 className="text-[13px] font-medium text-stone-700">Your recent calls</h3>
+      <ul className="mt-1.5 divide-y divide-line overflow-hidden rounded-lg border border-line">
+        {calls.map((c) => {
+          const missed = c.direction === 'inbound' && c.outcome === 'no_answer';
+          return (
+            <li key={c.id} className="flex items-start gap-2.5 px-3 py-2">
+              <span className={cx('mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full', missed ? 'bg-amber-100 text-amber-800' : 'bg-stone-100 text-stone-500')}>
+                {c.direction === 'inbound' ? <PhoneIncoming className="size-3.5" /> : <PhoneOutgoing className="size-3.5" />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className={cx('text-[13px] leading-snug', missed ? 'font-medium text-stone-900' : 'text-stone-700')}>{c.message}</p>
+                <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-stone-500">
+                  <span>{ago(c.started_at)}{!c.candidate_name && c.to_display ? <> · <span className="tabular">{c.to_display}</span></> : null}</span>
+                  {c.recorded && c.call_id && <Link to={`/oracle/${c.call_id}`} className="font-medium text-brand-700 hover:underline">Open the call</Link>}
+                  {ready && c.to_display && (c.outcome !== 'completed' || c.direction === 'inbound') && (
+                    <button type="button" onClick={() => phone.openDialer({ to: c.to_display, to_from: c.candidate_name ? `${c.candidate_name}’s number, from your recent calls.` : 'The number from your recent calls.' })}
+                      className="font-medium text-brand-700 hover:underline">{c.direction === 'inbound' ? 'Call back' : 'Call again'}</button>
+                  )}
+                </p>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -537,6 +596,7 @@ export function CallCard() {
           <Switchboard />
         </>
       )}
+      {status?.configured && <RecentCalls />}
     </Card>
   );
 }

@@ -32,8 +32,8 @@ import { pipeline } from 'node:stream/promises';
 import { q, now, tx, getSetting, UPLOAD_DIR } from './db.js';
 import { appUrl, notify } from './mail.js';
 import { validateWebhook } from './twilio-signature.js';
-import { toE164, placeOf, displayNumber, spokenNumber, searchDigits, KNOWN_COUNTRIES } from './phone-numbers.js';
-import { transcriptionConfigured, startTranscription, onCallReady, lengthWords, UNTITLED, VOICEMAIL } from './oracle.js';
+import { toE164, placeOf, displayNumber, spokenNumber, searchDigits, allowedCountries, KNOWN_COUNTRIES } from './phone-numbers.js';
+import { transcriptionConfigured, startTranscription, onCallReady, finishWritingUp, removeCallFiles, lengthWords, UNTITLED, VOICEMAIL } from './oracle.js';
 import { tieCallToEvent } from './calendar.js';
 
 // ---------- settings ----------
@@ -43,7 +43,7 @@ const AUTH_TOKEN = env('TWILIO_AUTH_TOKEN');
 const BOOK_NUMBER = toE164(env('TWILIO_NUMBER'));                  // The Book's own number, in the stored form
 const API_URL = (env('TWILIO_API_URL') || 'https://api.twilio.com').replace(/\/+$/, '');
 // Which countries may be called, as two-letter codes. Canada and the United States unless set.
-const COUNTRIES = [...new Set((env('PHONE_COUNTRIES') || 'CA,US').split(',').map((code) => code.trim().toUpperCase()).filter((code) => /^[A-Z]{2}$/.test(code)))];
+const COUNTRIES = allowedCountries();
 // The notice the other person hears before a recorded call is connected: on unless switched off, and the words can be replaced.
 const NOTICE_SETTING = env('PHONE_NOTICE');
 const NOTICE_ON = !/^(off|false|0|no)$/i.test(NOTICE_SETTING);
@@ -64,17 +64,45 @@ const RETRY_BASE = ms('PHONE_RETRY_MS', 5 * SECOND);                // the first
 const RING_YOU = 25, RING_THEM = 25, RING_FORWARD = 20;             // seconds; short enough that most voicemail has not picked up
 const MAX_CALL_SECONDS = 3 * 3600;                                  // the same three hours a recording in the browser may run
 const MAX_AUDIO_BYTES = 800 * 1024 * 1024;                          // three hours on two channels is about 350 MB
-const LOCK_MINUTES = 15, MAX_PIN_FAILS = 3, MAX_ASKS = 3;
-const INBOUND_PER_NUMBER = 10, INBOUND_PER_HOUR = 60;               // calls put through in an hour, from one number and in all
+const RECORDING_STUCK = ms('PHONE_RECORDING_STUCK_MS', HOUR);        // still "processing" at Twilio after this long: the call says so, and checks go hourly
+const RECORDING_LOST = ms('PHONE_RECORDING_LOST_MS', DAY);          // and after this long it is taken that there will be no recording
+const MAX_PIN_FAILS = 3, MAX_ASKS = 3;
+// Three wrong PINs lock a phone out, for longer each time it happens again without a right PIN in between. Ten
+// wrong PINs inside a day switch the PIN off altogether, until its owner chooses a new one in the app: a caller's
+// number can be faked, so the PIN must not be something that can be guessed at a steady trickle for ever.
+const LOCK_STEPS = [15 * MINUTE, HOUR, DAY];
+const LOCK_WORDS = ['a quarter of an hour', 'an hour', 'a day'];
+const MAX_PIN_WRONG_A_DAY = 10;
+const count = (name, fallback) => (Number.isInteger(Number(env(name))) && Number(env(name)) >= 0 && env(name) !== '' ? Number(env(name)) : fallback);
+const RING_INS_PER_HOUR = count('PHONE_RING_INS_PER_HOUR', 20);     // times one saved mobile may ring the switchboard in an hour
+// Calls put through in an hour and in a day: from one number, from everybody, and from numbers that are not a
+// candidate's (the only ones a stranger can use to make The Book ring phones, record, transcribe and send e-mail).
+const INBOUND_PER_NUMBER = 10, INBOUND_PER_HOUR = 60, INBOUND_PER_DAY = 300;
+const STRANGERS_PER_HOUR = count('PHONE_STRANGERS_PER_HOUR', 10), STRANGERS_PER_DAY = count('PHONE_STRANGERS_PER_DAY', 40);
+const STRANGER_MAILS_PER_DAY = 5;                                   // e-mails a day about messages left by numbers nobody knows
+const KEEP_STRANGER_MESSAGES = ms('PHONE_KEEP_UNKNOWN_MESSAGES_MS', 30 * DAY); // a message from nobody's number, never put on a candidate, is deleted after this
+const MIN_FREE_BYTES = count('PHONE_MIN_FREE_MB', 500) * 1024 * 1024; // with less room than this on the disk, callers are not asked to leave a message
+const NOTIFY_STEPS = [1, 5, 15, 60, 180, 360, 720];                 // minutes between tries at the "notes are ready" e-mail
+const NOTIFY_BASE = ms('PHONE_NOTIFY_RETRY_MS', MINUTE);
+const NOTIFY_FOR = 3 * DAY;                                         // how long that e-mail is still worth sending
 const KEEP_WEBHOOKS = 14 * DAY;
 
 /** Can calls be placed? Needs the three Twilio settings, and the public address Twilio is to call us back on. */
 export const phoneConfigured = () => Boolean(ACCOUNT_SID && AUTH_TOKEN && BOOK_NUMBER && appUrl());
+/** Which settings are still not set, by name, and one sentence saying what stands in the way (null when nothing does). */
+function whatIsMissing() {
+  const missing = [!ACCOUNT_SID && 'TWILIO_ACCOUNT_SID', !AUTH_TOKEN && 'TWILIO_AUTH_TOKEN', !env('TWILIO_NUMBER') && 'TWILIO_NUMBER', !appUrl() && 'APP_URL'].filter(Boolean);
+  const twilio = missing.filter((name) => name !== 'APP_URL');
+  const problem = twilio.length ? `${twilio.join(', ')} ${twilio.length > 1 ? 'are' : 'is'} not set${missing.includes('APP_URL') ? ', and neither is APP_URL, the public address of The Book' : ''}.`
+    : missing.length ? 'The three Twilio settings are set, but The Book does not know its own public address. Set APP_URL to the https address people open The Book at.'
+    : !BOOK_NUMBER ? 'TWILIO_NUMBER could not be read as a phone number. Write it like +16475550100.'
+    : null;
+  return { missing: !missing.length && !BOOK_NUMBER ? ['TWILIO_NUMBER'] : missing, problem };
+}
 
 if (ACCOUNT_SID || AUTH_TOKEN || env('TWILIO_NUMBER')) {
-  const missing = [!ACCOUNT_SID && 'TWILIO_ACCOUNT_SID', !AUTH_TOKEN && 'TWILIO_AUTH_TOKEN', !env('TWILIO_NUMBER') && 'TWILIO_NUMBER', !appUrl() && 'APP_URL'].filter(Boolean);
-  if (missing.length) console.error(`Phone calls are not connected: ${missing.join(', ')} ${missing.length > 1 ? 'are' : 'is'} not set.`);
-  else if (!BOOK_NUMBER) console.error('Phone calls are not connected: TWILIO_NUMBER is not a phone number The Book can read. Write it as +1 and ten digits.');
+  const { problem } = whatIsMissing();
+  if (problem) console.error(`Phone calls are not connected: ${problem}`);
   const unknown = COUNTRIES.filter((code) => !KNOWN_COUNTRIES.has(code));
   if (unknown.length) console.error(`PHONE_COUNTRIES names ${unknown.join(', ')}, which The Book does not know how to recognise numbers for. Numbers there will be refused.`);
 }
@@ -111,10 +139,15 @@ function pinMatches(pin, stored) {
   const given = crypto.scryptSync(String(pin), salt, 32), kept = Buffer.from(hash, 'hex');
   return given.length === kept.length && crypto.timingSafeEqual(given, kept);
 }
-/** PINs anybody would try first: one digit repeated, or a run up or down ("1234", "654321"). */
+/**
+ * PINs anybody would try first: a run up or down ("1234", "654321"), fewer than three different digits ("1111",
+ * "1212", "1122"), the middle column of the keypad ("2580"), or a year ("1987", "2024").
+ */
 function easyPin(pin) {
   const steps = new Set([...pin].slice(1).map((digit, i) => Number(digit) - Number(pin[i])));
-  return steps.size === 1 && [0, 1, -1].includes([...steps][0]);
+  if (steps.size === 1 && [0, 1, -1].includes([...steps][0])) return true;
+  if (new Set(pin).size < 3) return true;
+  return /^(2580|0852|1379|9731|1397|7913)/.test(pin) || /^(19|20)\d\d$/.test(pin);
 }
 
 /**
@@ -123,7 +156,13 @@ function easyPin(pin) {
  */
 function callable(typed, whose = 'That') {
   const number = toE164(String(typed ?? ''));
-  if (!number) return { error: `${whose === 'That' ? 'That phone number' : 'Your mobile number'} could not be understood. Write it with its area code, for example (416) 555-0123.` };
+  if (!number) {
+    return {
+      error: `${whose === 'That' ? 'That phone number' : 'Your mobile number'} could not be understood. Write it with its area code, for example (416) 555-0123.`,
+      // The same thing for somebody with a keypad and no screen: nothing to "write", and no brackets to read out.
+      spoken: 'That number was not understood. Key in the area code and the number, ten digits, then press hash.',
+    };
+  }
   if (number === BOOK_NUMBER) return { error: `That is The Book's own number.` };
   const place = placeOf(number);
   if (place.special) return { error: 'That is a premium-rate, toll-free or other special number, which The Book does not call.' };
@@ -271,7 +310,8 @@ function sentence(pc) {
       if (pc.reason === 'no_key') return 'You did not press 1, so nobody was called.';
       return 'You did not pick up.';
     case 'cancelled':
-      if (pc.reason === 'locked') return 'Three wrong PINs were keyed in, so the switchboard is locked for this phone for fifteen minutes.';
+      if (/^locked/.test(pc.reason || '')) return `Three wrong PINs were keyed in, so the switchboard is locked for this phone for ${LOCK_WORDS[Number(pc.reason.split(':')[1]) || 0]}.`;
+      if (pc.reason === 'pin_off') return 'Too many wrong PINs were keyed in, so the PIN for this phone has been switched off. Choose a new one in Settings, Your account.';
       if (pc.reason === 'hung_up_early') return 'You rang in and hung up before calling anyone.';
       return 'The call was cancelled.';
     default:
@@ -307,12 +347,13 @@ function newOracleCall(pc) {
   const id = q.insert(
     `INSERT INTO calls (recording_id, title, status, source, direction, phone_number, speaker_roles, event_key, application_id, candidate_id, created_by, created_at, updated_at)
      VALUES (?, ?, 'recording', 'phone', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    crypto.randomBytes(16).toString('hex'), name ? `Call with ${name}` : UNTITLED, pc.direction === 'inbound' ? 'inbound' : 'outbound', pc.to_number,
+    crypto.randomBytes(16).toString('hex'), name ? `Call with ${name}` : pc.title || UNTITLED, pc.direction === 'inbound' ? 'inbound' : 'outbound', pc.to_number,
     JSON.stringify(SPEAKERS[pc.direction]), pc.event_key, pc.application_id, pc.candidate_id, pc.user_id ?? firstAdmin()?.id ?? null, t, t);
   q.run('UPDATE phone_calls SET call_id = ?, call_made = 1 WHERE id = ?', id, pc.id);
   // Placed from an event in the recruiter's day: the event then shows this call. If the call reaches nobody the
   // entry is removed again and the event goes back to having no call.
-  if (pc.event_key && pc.user_id) tieCallToEvent(pc.user_id, pc.event_key, id);
+  // An event that already has a recorded call keeps it until this one has a recording of its own (see collectRecording).
+  if (pc.event_key && pc.user_id) tieCallToEvent(pc.user_id, pc.event_key, id, { onlyIfFree: true });
   return id;
 }
 /** A call that ended with nothing recorded has no place in the Oracle: remove the entry made for it when it was placed. */
@@ -364,6 +405,57 @@ function closeCall(id, twilioStatus, seconds = null) {
            recording_state = COALESCE(recording_state, ?), updated_at = ? WHERE id = ?`,
     status, outcome, reason ?? null, now(), outcome === 'completed' && seconds > 0 ? seconds : null, mayBeRecorded ? 'waiting' : null, now(), pc.id);
   if (!mayBeRecorded && !pc.recording_state) dropEmptyOracleCall(pc);
+  // The call ended while the other phone was ringing and Twilio has not said how that went (it does not promise the
+  // order of its messages, and may send none at all when the recruiter hangs up first). Ask, so the call does not
+  // sit in the Oracle "waiting for the recording" of a conversation that never happened.
+  if (!pc.outcome && reason === 'unknown_end') settleUnknownEnd(pc.id).catch(() => {});
+}
+
+const UNSETTLED = ['unknown_end', 'never_rung'];
+/** How ringing the other person went, for an outcome: Twilio's word for it, as [outcome, reason]. */
+const dialOutcome = (dialStatus, connected) => (connected ? ['completed', null]
+  : dialStatus === 'busy' ? ['busy', null]
+  : dialStatus === 'no-answer' ? ['no_answer', null]
+  : dialStatus === 'completed' ? ['no_answer', 'hung_up_first']   // answered, then hung up while the notice played
+  : dialStatus === 'canceled' ? ['cancelled', null]
+  : ['failed', null]);
+/**
+ * A call that was closed as "ended before anyone was connected" learns how ringing the other person really went
+ * (from the dial result arriving late, or from asking Twilio). When they were never reached, nothing was recorded:
+ * the call stops waiting for a recording and its entry in the Oracle goes.
+ */
+function learnDialResult(id, dialStatus, connected, talk = null, because = null) {
+  const pc = phoneCall(id);
+  // "never_rung" is what asking Twilio came to when it knew of no other half. The dial result itself, if it turns
+  // up after that, is the better word and replaces it.
+  if (!pc || !UNSETTLED.includes(pc.reason) || pc.answered_at) return;
+  const [outcome, reason] = because ? [dialOutcome(dialStatus, connected)[0], because] : dialOutcome(dialStatus, connected);
+  if (connected) {
+    q.run(`UPDATE phone_calls SET outcome = 'completed', reason = NULL, answered_at = COALESCE(answered_at, ended_at, ?), talk_sec = COALESCE(talk_sec, ?),
+             recording_state = CASE WHEN record = 1 THEN COALESCE(recording_state, 'waiting') ELSE recording_state END, updated_at = ? WHERE id = ? AND reason = ?`,
+      now(), talk, now(), id, pc.reason);
+    return;
+  }
+  // A recording that is already named is real, whatever the dial result says, and is still fetched.
+  const nothingRecorded = pc.recording_state === 'waiting' && !pc.recording_sid;
+  q.run(`UPDATE phone_calls SET status = ?, outcome = ?, reason = ?, recording_state = CASE WHEN ? = 1 THEN NULL ELSE recording_state END, updated_at = ? WHERE id = ? AND reason = ?`,
+    outcome === 'failed' ? 'failed' : 'ended', outcome, reason, nothingRecorded ? 1 : 0, now(), id, pc.reason);
+  if (nothingRecorded || !pc.recording_state) dropEmptyOracleCall(pc);
+}
+/** Ask Twilio how the other half of a call ended. Resolves to true once the answer is in; false means ask again later. */
+async function settleUnknownEnd(id) {
+  const pc = phoneCall(id);
+  if (!pc || pc.reason !== 'unknown_end' || !pc.call_sid) return true;
+  try {
+    const children = (await twilio('GET', `/Calls.json?ParentCallSid=${encodeURIComponent(pc.call_sid)}`))?.calls ?? [];
+    const child = children.find((call) => FINAL.has(call?.status));
+    if (child) learnDialResult(id, child.status, child.status === 'completed' && Number(child.duration) > 0, Number(child.duration) || null);
+    else if (!children.length) learnDialResult(id, 'canceled', false, null, 'never_rung'); // Twilio knows of no other half: the other phone was never rung
+    else return false;                                                  // still ringing as far as Twilio knows: asked again by the sweep
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------- the recording: fetch it, keep it, delete Twilio's copy ----------
@@ -471,7 +563,11 @@ async function collectRecording(id) {
     try {
       await download(sid, channels, partial);
     } catch (err) {
-      if (!(channels === 2 && err.status === 400)) throw err;
+      // Twilio's own pages disagree on how it refuses two channels of a one-channel recording: "bad request" on
+      // one, "not found" on another. "Not found" is also what a recording that is not ready yet answers, so that
+      // is only taken as a refusal once it has been the answer a few times running.
+      const refused = err.status === 400 || (err.status === 404 && !pc.recording_channels && pc.recording_tries >= 3);
+      if (!(channels === 2 && refused)) throw err;
       channels = 1;
       await download(sid, 1, partial);
     }
@@ -528,6 +624,7 @@ async function collectRecording(id) {
       applicationId, fresh.candidate_id, fresh.user_id, consent.at, consent.wording, now(), callId);
     q.run(`UPDATE phone_calls SET recording_state = 'stored', recording_channels = ?, recording_sec = ?, recording_next_at = NULL, application_id = ?, updated_at = ? WHERE id = ?`,
       facts.channels, Math.round(facts.seconds), applicationId, now(), id);
+    if (fresh.event_key && fresh.user_id) tieCallToEvent(fresh.user_id, fresh.event_key, callId); // recorded: this is now the event's call
     if (applicationId) {
       // On the candidate's history, where client users never see it (the same as any other call).
       logActivity(applicationId, fresh.user_id, 'call', `${fresh.voicemail ? 'Voicemail left' : 'Phone call'}${lengthWords(durationMs)}`);
@@ -549,7 +646,8 @@ async function sweep() {
   for (const row of q.all(`SELECT id FROM phone_calls WHERE recording_state = 'fetching' AND updated_at < ?`, ago(HOUR))) {
     if (!collecting.has(row.id)) q.run(`UPDATE phone_calls SET recording_state = 'pending', recording_next_at = NULL WHERE id = ? AND recording_state = 'fetching'`, row.id);
   }
-  for (const row of q.all(`SELECT id FROM phone_calls WHERE recording_state = 'pending' AND (recording_next_at IS NULL OR recording_next_at <= ?)`, now())) await collect(row.id);
+  // Started, not waited for: one download that hangs must not hold up the checks on every other call.
+  for (const row of q.all(`SELECT id FROM phone_calls WHERE recording_state = 'pending' AND (recording_next_at IS NULL OR recording_next_at <= ?)`, now())) collect(row.id);
   // 2. Recordings we hold whose copy at Twilio is still there.
   for (const pc of q.all(`SELECT * FROM phone_calls WHERE recording_state IN ('stored', 'discarded') AND recording_sid IS NOT NULL AND recording_deleted_at IS NULL`)) {
     if (!collecting.has(pc.id)) await removeTwiliosCopy(pc); // one being fetched right now deletes Twilio's copy itself, a moment later
@@ -571,14 +669,29 @@ async function sweep() {
     }
   }
   // 4. Calls that ended and should have a recording, but nobody told us it was ready: look for it.
-  for (const pc of q.all(`SELECT * FROM phone_calls WHERE recording_state = 'waiting' AND status IN ('ended', 'failed') AND call_sid IS NOT NULL AND ended_at < ?`, ago(RECORDING_WAIT))) {
+  for (const row of q.all(`SELECT id FROM phone_calls WHERE reason = 'unknown_end' AND recording_state = 'waiting' AND recording_sid IS NULL AND call_sid IS NOT NULL`)) {
+    await settleUnknownEnd(row.id); // first, whether the other person was reached at all
+  }
+  for (const pc of q.all(`SELECT * FROM phone_calls WHERE recording_state = 'waiting' AND status IN ('ended', 'failed') AND call_sid IS NOT NULL AND ended_at < ?
+                          AND (recording_next_at IS NULL OR recording_next_at <= ?)`, ago(RECORDING_WAIT), now())) {
     try {
       const list = (await twilio('GET', `/Calls/${pc.call_sid}/Recordings.json`))?.recordings ?? [];
       const ready = list.find((rec) => rec.status === 'completed' && /^RE[0-9a-f]{32}$/i.test(rec.sid));
+      const since = Date.now() - Date.parse(pc.ended_at);
       if (ready) {
-        if (recordingReady(pc.id, { sid: ready.sid, channels: Number(ready.channels) || null, seconds: Number(ready.duration) || null, voicemail: ready.source === 'RecordVerb' })) await collect(pc.id);
-      } else if (Date.now() - Date.parse(pc.ended_at) > RECORDING_GIVE_UP && !list.some((rec) => rec.status === 'processing' || rec.status === 'in-progress')) {
+        if (recordingReady(pc.id, { sid: ready.sid, channels: Number(ready.channels) || null, seconds: Number(ready.duration) || null, voicemail: ready.source === 'RecordVerb' })) collect(pc.id);
+      } else if (since > RECORDING_GIVE_UP && !list.some((rec) => rec.status === 'processing' || rec.status === 'in-progress')) {
         noRecording(pc.id);
+      } else if (since > RECORDING_LOST) {
+        // Twilio has been "processing" it for a day. That is not coming; if it ever does, it is still taken.
+        noRecording(pc.id, 'The phone service never finished the recording of this call, so there is no audio.');
+      } else if (since > RECORDING_STUCK) {
+        // Still "processing" long after it should be done. The call stops saying it is waiting, and Twilio is asked hourly.
+        q.run('UPDATE phone_calls SET recording_next_at = ? WHERE id = ?', later(Math.min(HOUR, RECORDING_STUCK)), pc.id);
+        if (pc.call_id) {
+          q.run(`UPDATE calls SET status = 'failed', error = ?, updated_at = ? WHERE id = ? AND status = 'recording' AND audio_file IS NULL`,
+            'The phone service has not finished the recording of this call yet. The Book checks again every hour.', now(), pc.call_id);
+        }
       }
     } catch (err) {
       console.error(`Phone call ${pc.id}: could not ask the phone service for its recording (${err.message}).`);
@@ -587,7 +700,77 @@ async function sweep() {
   // 5. Calls in the Oracle left waiting for a phone call that is over and has nothing to give them.
   for (const pc of q.all(`SELECT p.* FROM phone_calls p JOIN calls k ON k.id = p.call_id WHERE p.status IN ('ended', 'failed') AND k.status = 'recording'
                           AND (p.recording_state IS NULL OR p.recording_state = 'absent')`)) dropEmptyOracleCall(pc);
+  // 6. What is still owed to Twilio for calls whose own record has been erased with the person.
+  await settleErased();
+  // 7. Recruiters who have not been told about a call that is written out (the e-mail failed, or a restart came
+  //    between the transcript and the notes), and messages from nobody's number that nobody ever claimed.
+  for (const call of q.all(`SELECT id FROM calls WHERE source = 'phone' AND status IN ('ready', 'failed') AND notified_at IS NULL AND notify_tries < ?
+                            AND audio_file IS NOT NULL AND updated_at > ? AND (notify_next_at IS NULL OR notify_next_at <= ?)`, NOTIFY_STEPS.length + 1, ago(NOTIFY_FOR), now())) {
+    finishWritingUp(call.id);
+  }
+  removeOldStrangerMessages();
   q.run('DELETE FROM phone_webhooks WHERE received_at < ?', ago(KEEP_WEBHOOKS));
+}
+
+/**
+ * Recordings at Twilio that belong to calls we no longer hold a row for. Each named recording is deleted until
+ * Twilio says it is gone; each erased call is asked about until it is over and has nothing left to give.
+ */
+async function settleErased() {
+  for (const call of q.all('SELECT * FROM phone_calls_erased WHERE next_at IS NULL OR next_at <= ?', now())) {
+    try {
+      const list = (await twilio('GET', `/Calls/${call.call_sid}/Recordings.json`))?.recordings ?? [];
+      for (const rec of list) if (/^RE[0-9a-f]{32}$/i.test(rec?.sid ?? '')) q.run('INSERT OR IGNORE INTO phone_recordings_owed (recording_sid, noted_at) VALUES (?, ?)', rec.sid, now());
+      const state = (await twilio('GET', `/Calls/${call.call_sid}.json`))?.status;
+      const age = Date.now() - Date.parse(call.noted_at);
+      const unfinished = list.some((rec) => ['in-progress', 'paused', 'stopped', 'processing'].includes(rec?.status));
+      // Done once the call is over, enough time has passed for a recording to show itself, and none is still being made.
+      if ((FINAL.has(state) && age > RECORDING_GIVE_UP && !unfinished) || age > RECORDING_LOST + MAX_CALL_SECONDS * SECOND) q.run('DELETE FROM phone_calls_erased WHERE call_sid = ?', call.call_sid);
+      else q.run('UPDATE phone_calls_erased SET next_at = ? WHERE call_sid = ?', later(age < 2 * RECORDING_GIVE_UP ? 0 : Math.min(10 * MINUTE, RECORDING_GIVE_UP)), call.call_sid);
+    } catch (err) {
+      if (err.status === 404) q.run('DELETE FROM phone_calls_erased WHERE call_sid = ?', call.call_sid); // Twilio has never heard of it
+      else q.run('UPDATE phone_calls_erased SET next_at = ? WHERE call_sid = ?', later(Math.min(MINUTE, SWEEP_EVERY)), call.call_sid);
+    }
+  }
+  for (const owed of q.all('SELECT * FROM phone_recordings_owed WHERE next_at IS NULL OR next_at <= ?', now())) {
+    if (await deleteAtTwilio(owed.recording_sid)) {
+      q.run('DELETE FROM phone_recordings_owed WHERE recording_sid = ?', owed.recording_sid);
+      console.log('A recording of a phone call that has been erased was deleted from the phone service.');
+    } else {
+      q.run('UPDATE phone_recordings_owed SET tries = tries + 1, next_at = ? WHERE recording_sid = ?', later(retryIn(owed.tries + 1)), owed.recording_sid);
+    }
+  }
+}
+/** A recording of an erased call has turned up by name: delete it at Twilio now, and keep trying if that fails. */
+function oweRecording(sid) {
+  q.run('INSERT OR IGNORE INTO phone_recordings_owed (recording_sid, noted_at) VALUES (?, ?)', sid, now());
+  runSweep();
+}
+
+/**
+ * A message left by a number that is nobody's, which nobody put on a candidate in a month, is deleted with its
+ * audio. Anyone can ring The Book's number and leave one, and nothing else would ever remove them.
+ */
+function removeOldStrangerMessages() {
+  const old = q.all(`SELECT id, audio_file, recording_id FROM calls WHERE source = 'phone' AND voicemail = 1 AND candidate_id IS NULL AND application_id IS NULL AND created_at < ? LIMIT 200`, ago(KEEP_STRANGER_MESSAGES));
+  if (!old.length) return;
+  tx(() => { for (const call of old) q.run('DELETE FROM calls WHERE id = ?', call.id); });
+  removeCallFiles(old);
+  console.log(`${old.length} message${old.length === 1 ? '' : 's'} left by unknown numbers more than ${Math.round(KEEP_STRANGER_MESSAGES / DAY)} days ago ${old.length === 1 ? 'was' : 'were'} deleted.`);
+}
+
+/** Is the disk the recordings go on nearly full? Looked at once a minute at most. When it cannot be told, it is taken not to be. */
+let diskLooked = 0, diskLow = false;
+function diskIsLow() {
+  if (Date.now() - diskLooked > MINUTE || !diskLooked) {
+    diskLooked = Date.now();
+    try {
+      const disk = fs.statfsSync(UPLOAD_DIR);
+      diskLow = disk.bavail * disk.bsize < MIN_FREE_BYTES;
+      if (diskLow) console.error('The disk recordings are kept on is nearly full, so callers are not being asked to leave a message. Free some space or move to a larger volume.');
+    } catch { diskLow = false; }
+  }
+  return diskLow;
 }
 let sweeping = false;
 function runSweep() {
@@ -605,34 +788,65 @@ function recordingReady(id, { sid, channels, seconds, voicemail }) {
     sid, channels, seconds, voicemail ? 1 : 0, now(), now(), id).changes);
 }
 /** Twilio made no recording of this call (it was too short, or nobody spoke after the tone). */
-function noRecording(id) {
-  if (!q.run(`UPDATE phone_calls SET recording_state = 'absent', updated_at = ? WHERE id = ? AND (recording_state IS NULL OR recording_state = 'waiting')`, now(), id).changes) return;
+function noRecording(id, said = null) {
+  if (!q.run(`UPDATE phone_calls SET recording_state = 'absent', recording_next_at = NULL, updated_at = ? WHERE id = ? AND (recording_state IS NULL OR recording_state = 'waiting')`, now(), id).changes) return;
   const pc = phoneCall(id);
+  // A call that has already told its recruiter it is waiting on the phone service keeps its entry, with the last word on it.
+  if (said && pc.call_id) q.run(`UPDATE calls SET error = ?, updated_at = ? WHERE id = ? AND status = 'failed' AND audio_file IS NULL`, said, now(), pc.call_id);
   if (pc.status === 'ended' || pc.status === 'failed') dropEmptyOracleCall(pc);
 }
 
 // ---------- telling the recruiter the notes are ready ----------
+/**
+ * E-mail the recruiter that their phone call has been written out, or that it could not be. Someone who called
+ * while walking has no screen to see either on. The call is only marked as told once the mail provider has taken
+ * the message; until then the sweep tries again, a little later each time, for three days.
+ */
+const telling = new Set();
 async function tellRecruiter(callId) {
-  const call = q.get(`SELECT * FROM calls WHERE id = ? AND source = 'phone' AND status = 'ready' AND notified_at IS NULL`, callId);
+  if (telling.has(callId)) return;
+  const call = q.get(`SELECT * FROM calls WHERE id = ? AND source = 'phone' AND status IN ('ready', 'failed') AND audio_file IS NOT NULL AND notified_at IS NULL`, callId);
   if (!call) return;
+  /** Nobody is to be told about this one: it is not looked at again. */
+  const leave = () => q.run('UPDATE calls SET notify_tries = ? WHERE id = ?', NOTIFY_STEPS.length + 1, callId);
   const user = call.created_by ? q.get(`SELECT name, email FROM users WHERE id = ? AND ${AGENCY_USER}`, call.created_by) : null;
-  if (!user) return;
-  // Marked first, so the notes being written again later does not send a second e-mail.
-  if (!q.run('UPDATE calls SET notified_at = ? WHERE id = ? AND notified_at IS NULL', now(), callId).changes) return;
+  if (!user) return leave();
+  // Anybody can ring The Book's number and leave a message, so messages from numbers that are nobody's only earn a
+  // few e-mails a day. The rest are still in The Oracle's list.
+  if (call.voicemail && !call.candidate_id
+    && q.get(`SELECT COUNT(*) AS n FROM calls WHERE source = 'phone' AND voicemail = 1 AND candidate_id IS NULL AND notified_at > ?`, ago(DAY)).n >= STRANGER_MAILS_PER_DAY) return leave();
   const who = candidateOf(call.candidate_id);
   const other = who?.name || displayNumber(call.phone_number) || 'a withheld number';
   const job = call.application_id ? q.get(
     `SELECT j.title, cl.name AS client FROM applications a JOIN jobs j ON j.id = a.job_id JOIN clients cl ON cl.id = j.client_id WHERE a.id = ?`, call.application_id) : null;
   const length = lengthWords(call.duration_ms).slice(2);
   const what = call.voicemail ? `The message ${other} left on The Book's number` : `Your phone call with ${other}`;
-  const lines = [
+  const where = who ? `It is on ${who.name}'s profile${job ? ` (${job.title}, ${job.client})` : ''}.` : 'It is not on a candidate yet. Open it to add it to one.';
+  const written = call.status === 'ready';
+  const lines = written ? [
     `Hi ${firstName(user.name) || 'there'},`, '',
     `${what}${length ? ` (${length})` : ''} has been written out${call.notes ? ', and the notes are ready' : ''}:`,
-    `${appUrl()}/oracle/${call.id}`, '',
-    who ? `It is on ${who.name}'s profile${job ? ` (${job.title}, ${job.client})` : ''}.` : 'It is not on a candidate yet. Open it to add it to one.',
-    '', agencyName() || 'The Book', '',
+    `${appUrl()}/oracle/${call.id}`, '', where, '', agencyName() || 'The Book', '',
+  ] : [
+    `Hi ${firstName(user.name) || 'there'},`, '',
+    `${what}${length ? ` (${length})` : ''} was recorded, but it could not be written out:`,
+    call.error || 'The transcription did not work.', '',
+    'The recording is safe. Open the call to listen to it, or to try the transcription again:',
+    `${appUrl()}/oracle/${call.id}`, '', where, '', agencyName() || 'The Book', '',
   ];
-  await notify({ to: user.email, subject: call.notes ? `Your call notes for ${other} are ready` : `Your call with ${other} has been written out`, body: lines.join('\n') });
+  const subject = !written ? `Your call with ${other} could not be written out` : call.notes ? `Your call notes for ${other} are ready` : `Your call with ${other} has been written out`;
+  telling.add(callId);
+  try {
+    if (await notify({ to: user.email, subject, body: lines.join('\n') })) {
+      q.run('UPDATE calls SET notified_at = ? WHERE id = ? AND notified_at IS NULL', now(), callId);
+    } else {
+      // Not sent (the mail provider failed, or mail is not connected yet): tried again by the sweep.
+      const tries = call.notify_tries + 1;
+      q.run('UPDATE calls SET notify_tries = ?, notify_next_at = ? WHERE id = ?', tries, later((NOTIFY_STEPS[tries - 1] ?? 720) * NOTIFY_BASE), callId);
+    }
+  } finally {
+    telling.delete(callId);
+  }
 }
 
 // ---------- who takes a call that comes in ----------
@@ -758,15 +972,11 @@ export function registerPhoneWebhooks(api) {
     const dialStatus = text(p.DialCallStatus, 20);
     const connected = dialStatus === 'completed' && text(p.DialBridged, 10) !== 'false';
     const inbound = pc.direction === 'inbound';
+    const talk = Number(text(p.DialCallDuration, 10)) || null;
+    // The call was already closed without this (the news that it ended overtook it): better late than never.
+    if (pc.outcome && UNSETTLED.includes(pc.reason) && !inbound) learnDialResult(pc.id, dialStatus, connected, talk);
     if (!pc.outcome) {
-      const talk = Number(text(p.DialCallDuration, 10)) || null;
-      const [outcome, reason] = connected ? ['completed', null]
-        : inbound ? ['no_answer', 'missed']
-        : dialStatus === 'busy' ? ['busy', null]
-        : dialStatus === 'no-answer' ? ['no_answer', null]
-        : dialStatus === 'completed' ? ['no_answer', 'hung_up_first']   // answered, then hung up while the notice played
-        : dialStatus === 'canceled' ? ['cancelled', null]
-        : ['failed', null];
+      const [outcome, reason] = !connected && inbound ? ['no_answer', 'missed'] : dialOutcome(dialStatus, connected);
       // An inbound call nobody took carries on: the caller is asked to leave a message, and that may be recorded.
       const expect = pc.record && (connected || inbound) ? 'waiting' : null;
       q.run(`UPDATE phone_calls SET status = ?, outcome = ?, reason = ?, ended_at = COALESCE(ended_at, ?), talk_sec = ?, child_sid = COALESCE(child_sid, ?),
@@ -777,7 +987,13 @@ export function registerPhoneWebhooks(api) {
     }
     const settled = phoneCall(pc.id);
     if (settled.outcome === 'completed') return xml(HANGUP);
-    if (inbound) return pc.record ? leaveMessage(pc, 'Sorry, nobody could take your call. Please leave a message after the tone.') : xml(`${say('Sorry, nobody could take your call. Please try again later.')}${HANGUP}`);
+    if (inbound) {
+      // No message is taken when there is nearly no room left to keep one: the room is for calls being recorded.
+      if (pc.record && !diskIsLow()) return leaveMessage(pc, 'Sorry, nobody could take your call. Please leave a message after the tone.');
+      q.run(`UPDATE phone_calls SET recording_state = NULL WHERE id = ? AND recording_state = 'waiting' AND recording_sid IS NULL`, pc.id);
+      dropEmptyOracleCall(settled);
+      return xml(`${say('Sorry, nobody could take your call. Please try again later.')}${HANGUP}`);
+    }
     return xml(`${say(sentence(settled))}${HANGUP}`); // the recruiter hears why, since they may have no screen in front of them
   }));
   hooks.post('/voicemail-done', twiml('voicemail-done', (p, pc) => {
@@ -809,7 +1025,8 @@ export function registerPhoneWebhooks(api) {
     const sid = text(req.twilio.RecordingSid, 40);
     if (id && !callOf(req) && text(req.twilio.RecordingStatus, 20) === 'completed' && /^RE[0-9a-f]{32}$/i.test(sid)
       && id <= (q.get(`SELECT seq FROM sqlite_sequence WHERE name = 'phone_calls'`)?.seq ?? 0)) {
-      deleteAtTwilio(sid).then((gone) => { if (gone) console.log('A recording arrived for a phone call that has been erased, so it was deleted from the phone service.'); });
+      // Noted first, then deleted: if Twilio cannot be reached this minute the sweep keeps trying until it is gone.
+      try { oweRecording(sid); } catch (err) { console.error('Could not note a recording to delete:', err?.message ?? err); return res.status(500).type('text/plain').send('error'); }
       return res.status(204).end();
     }
     recording(req, res);
@@ -837,8 +1054,17 @@ export function registerPhoneWebhooks(api) {
     // One of the team, ringing in from their saved mobile: the switchboard.
     const member = from ? q.get(`SELECT * FROM users WHERE phone = ? AND ${AGENCY_USER}`, from) : null;
     if (member) {
-      if (member.phone_locked_until && member.phone_locked_until > t) return xml(`${say('The switchboard is locked for this phone after three wrong PINs. Try again in a quarter of an hour.')}${HANGUP}`);
+      if (member.phone_locked_until && member.phone_locked_until > t) return xml(`${say('The switchboard is locked for this phone after wrong PINs. Try again later, or choose a new PIN in The Book.')}${HANGUP}`);
       if (!member.phone_pin_hash) return xml(`${say('To place calls from this phone, first choose a PIN in The Book, in Settings under Your account. Goodbye.')}${HANGUP}`);
+      if (!known) {
+        // One call at a time from each phone, and a ceiling on how often it may ring in: a caller's number can be
+        // faked, so the PIN prompt itself must not be something that can be held open or hammered.
+        const ringIns = q.get(`SELECT COUNT(*) AS n FROM phone_calls WHERE user_id = ? AND direction = 'switchboard' AND started_at > ?`, member.id, ago(HOUR)).n;
+        if (ringIns >= RING_INS_PER_HOUR) return xml('<Reject reason="busy"/>');
+        if (q.get(`SELECT 1 AS x FROM phone_calls WHERE user_id = ? AND direction = 'switchboard' AND ${LIVE} AND started_at > ?`, member.id, ago(4 * HOUR))) {
+          return xml(`${say('A call from this phone is already under way on The Book. Goodbye.')}${HANGUP}`);
+        }
+      }
       const id = known?.id ?? q.insert(
         `INSERT INTO phone_calls (user_id, direction, status, user_number, call_sid, started_at, updated_at) VALUES (?, 'switchboard', 'waiting_for_you', ?, ?, ?, ?)`,
         member.id, from, sid, t, t);
@@ -847,12 +1073,14 @@ export function registerPhoneWebhooks(api) {
     }
 
     // Anybody else: a candidate, or a number nobody knows. Put through to a recruiter, with a limit on how many an hour.
-    if (!known) {
-      const fromThem = q.get(`SELECT COUNT(*) AS n FROM phone_calls WHERE direction = 'inbound' AND started_at > ? AND to_number IS ?`, ago(HOUR), from).n;
-      const inAll = q.get(`SELECT COUNT(*) AS n FROM phone_calls WHERE direction = 'inbound' AND started_at > ?`, ago(HOUR)).n;
-      if (fromThem >= INBOUND_PER_NUMBER || inAll >= INBOUND_PER_HOUR) return xml('<Reject reason="busy"/>');
-    }
     const matches = candidatesWithNumber(from);
+    if (!known) {
+      const since = (span, extra = '', ...params) => q.get(`SELECT COUNT(*) AS n FROM phone_calls WHERE direction = 'inbound' AND started_at > ?${extra}`, ago(span), ...params).n;
+      if (since(HOUR, ' AND to_number IS ?', from) >= INBOUND_PER_NUMBER || since(HOUR) >= INBOUND_PER_HOUR || since(DAY) >= INBOUND_PER_DAY) return xml('<Reject reason="busy"/>');
+      // A number that is not a candidate's (or is withheld) gets a much smaller share: every such call rings a
+      // recruiter's phone and may leave a recording to store, write out and send e-mail about, and anyone can make one.
+      if (!matches.length && (since(HOUR, ' AND candidate_id IS NULL') >= STRANGERS_PER_HOUR || since(DAY, ' AND candidate_id IS NULL') >= STRANGERS_PER_DAY)) return xml('<Reject reason="busy"/>');
+    }
     const candidate = matches.length === 1 ? matches[0] : null; // put on a candidate only when the number is one person's
     const recruiter = recruiterFor(matches.map((match) => match.id), from);
     const greeting = NOTICE_ON ? noticeWords(true) : `Thanks for calling${agencyName() ? ` ${agencyName()}` : ''}.`;
@@ -866,7 +1094,9 @@ export function registerPhoneWebhooks(api) {
     if (!known) touch(pc, 'inbound', p);
     if (!recruiter) {
       // Nobody on the team has a mobile saved: straight to a message, so the call is not lost.
-      q.run(`UPDATE phone_calls SET status = 'ended', outcome = 'no_answer', reason = 'missed', ended_at = ?, recording_state = 'waiting' WHERE id = ? AND outcome IS NULL`, t, id);
+      const message = !diskIsLow();
+      q.run(`UPDATE phone_calls SET status = 'ended', outcome = 'no_answer', reason = 'missed', ended_at = ?, recording_state = ? WHERE id = ? AND outcome IS NULL`, t, message ? 'waiting' : null, id);
+      if (!message) return xml(`${say(`${greeting} Nobody can take your call right now. Please try again later.`)}${HANGUP}`);
       return leaveMessage(pc, `${greeting} Nobody can take your call right now. Please leave a message after the tone.`);
     }
     return xml(`${say(greeting)}${dial(pc, recruiter.phone, { callerId: FORWARD_SHOWS_CALLER ? null : BOOK_NUMBER, timeout: RING_FORWARD })}`);
@@ -879,27 +1109,47 @@ export function registerPhoneWebhooks(api) {
     if (!pc || pc.direction !== 'switchboard' || over(pc)) return xml(HANGUP);
     const member = pc.user_id ? q.get(`SELECT * FROM users WHERE id = ? AND ${AGENCY_USER}`, pc.user_id) : null;
     if (!member || member.phone !== pc.user_number || !member.phone_pin_hash) return xml(HANGUP);
-    if (member.phone_locked_until && member.phone_locked_until > now()) return xml(`${say('The switchboard is locked for this phone. Try again in a quarter of an hour.')}${HANGUP}`);
+    if (member.phone_locked_until && member.phone_locked_until > now()) return xml(`${say('The switchboard is locked for this phone. Try again later.')}${HANGUP}`);
     if (pc.pin_ok) return askNumber(pc);
     const keyed = text(p.Digits, 12);
-    if (!/^\d+$/.test(keyed)) return askPin(pc, 'No PIN was entered.'); // nothing keyed in is not a wrong guess
+    if (!/^\d+$/.test(keyed)) {
+      // Nothing keyed in (or only a star) is not a wrong guess, but it is an ask, and a call gets three: the prompt cannot be held open for ever.
+      q.run('UPDATE phone_calls SET tries = tries + 1 WHERE id = ?', pc.id);
+      return pc.tries + 1 >= MAX_ASKS ? xml(`${say('No PIN was entered. Goodbye.')}${HANGUP}`) : askPin(pc, 'No PIN was entered.');
+    }
     if (pinMatches(keyed, member.phone_pin_hash)) {
-      q.run('UPDATE users SET phone_pin_fails = 0 WHERE id = ?', member.id);
+      q.run('UPDATE users SET phone_pin_fails = 0, phone_lock_level = 0 WHERE id = ?', member.id);
       q.run('UPDATE phone_calls SET pin_ok = 1, tries = 0 WHERE id = ?', pc.id);
       return askNumber(pc);
     }
     // Wrong PINs are counted on the person, not the call, so hanging up and ringing again does not start the count over.
     const fails = member.phone_pin_fails + 1;
+    const fresh = !member.phone_pin_wrong_since || member.phone_pin_wrong_since < ago(DAY);
+    const today = (fresh ? 0 : member.phone_pin_wrong) + 1;
+    const hello = `Hi ${firstName(member.name) || 'there'},`;
+    const putRight = 'choose a new PIN in The Book: Settings, Your account, Your mobile number';
+    if (today >= MAX_PIN_WRONG_A_DAY) {
+      // Somebody is guessing. The PIN is switched off, so no number of further guesses can find it.
+      q.run('UPDATE users SET phone_pin_hash = NULL, phone_pin_fails = 0, phone_pin_wrong = 0, phone_pin_wrong_since = NULL, phone_lock_level = 0, phone_locked_until = NULL WHERE id = ?', member.id);
+      q.run(`UPDATE phone_calls SET reason = 'pin_off' WHERE id = ?`, pc.id);
+      notify({
+        to: member.email, subject: 'Your PIN for The Book\'s switchboard has been switched off',
+        body: `${hello}\n\n${MAX_PIN_WRONG_A_DAY} wrong PINs were keyed in within a day on calls to The Book's number from your mobile, so your PIN has been switched off and calls cannot be placed from your phone.\n\nTo place calls from your phone again, ${putRight}. Calls from the app are not affected.\n\n${agencyName() || 'The Book'}\n`,
+      }).catch(() => {});
+      return xml(`${say('That PIN is not right. After this many wrong PINs, the PIN for this phone has been switched off. Choose a new one in The Book. Goodbye.')}${HANGUP}`);
+    }
     if (fails >= MAX_PIN_FAILS) {
-      q.run('UPDATE users SET phone_pin_fails = 0, phone_locked_until = ? WHERE id = ?', later(LOCK_MINUTES * MINUTE), member.id);
-      q.run(`UPDATE phone_calls SET reason = 'locked' WHERE id = ?`, pc.id);
+      const level = Math.min(member.phone_lock_level, LOCK_STEPS.length - 1);
+      q.run('UPDATE users SET phone_pin_fails = 0, phone_lock_level = ?, phone_pin_wrong = ?, phone_pin_wrong_since = ?, phone_locked_until = ? WHERE id = ?',
+        level + 1, today, fresh ? now() : member.phone_pin_wrong_since, later(LOCK_STEPS[level]), member.id);
+      q.run(`UPDATE phone_calls SET reason = ? WHERE id = ?`, `locked:${level}`, pc.id);
       notify({
         to: member.email, subject: 'Your phone was locked out of The Book\'s switchboard',
-        body: `Hi ${firstName(member.name) || 'there'},\n\nThree wrong PINs were keyed in on a call to The Book's number from your mobile, so calls cannot be placed from it for ${LOCK_MINUTES} minutes.\n\nIf that was not you, choose a new PIN in The Book: Settings, Your account, Your mobile number.\n\n${agencyName() || 'The Book'}\n`,
+        body: `${hello}\n\nThree wrong PINs were keyed in on a call to The Book's number from your mobile, so calls cannot be placed from it for ${LOCK_WORDS[level]}. Each time this happens again the lock is longer, and after ${MAX_PIN_WRONG_A_DAY} wrong PINs in a day the PIN is switched off.\n\nIf that was not you, ${putRight}.\n\n${agencyName() || 'The Book'}\n`,
       }).catch(() => {});
-      return xml(`${say('That PIN is not right. The switchboard is now locked for this phone for fifteen minutes. Goodbye.')}${HANGUP}`);
+      return xml(`${say(`That PIN is not right. The switchboard is now locked for this phone for ${LOCK_WORDS[level]}. Goodbye.`)}${HANGUP}`);
     }
-    q.run('UPDATE users SET phone_pin_fails = ? WHERE id = ?', fails, member.id);
+    q.run('UPDATE users SET phone_pin_fails = ?, phone_pin_wrong = ?, phone_pin_wrong_since = ? WHERE id = ?', fails, today, fresh ? now() : member.phone_pin_wrong_since, member.id);
     return askPin(pc, 'That PIN is not right.');
   }));
   hooks.post('/number', twiml('number', (p, pc) => {
@@ -910,7 +1160,9 @@ export function registerPhoneWebhooks(api) {
       return pc.tries + 1 >= MAX_ASKS ? xml(`${say(`${why} Goodbye.`)}${HANGUP}`) : askNumber(pc, `${why} `);
     };
     const check = callable(text(p.Digits, 30));
-    if (check.error) return again(check.error);
+    if (check.error) return again(check.spoken || check.error);
+    // The same two brakes as a call placed from the app: one call at a time each, and so many in an hour.
+    if (otherLiveCall(pc.user_id, pc.id)) return xml(`${say('You already have a call under way. Hang up first, or wait for it to end. Goodbye.')}${HANGUP}`);
     const limit = overLimit(pc.user_id);
     if (limit) return xml(`${say(`${limit} Goodbye.`)}${HANGUP}`);
     const matches = candidatesWithNumber(check.number);
@@ -934,6 +1186,11 @@ function overLimit(userId) {
   return placed >= CALLS_PER_HOUR ? `That is ${CALLS_PER_HOUR} calls in an hour, which is the most one person can place. Try again a little later.` : null;
 }
 
+/** Does this person have a call they placed (from the app or from their phone) still under way, other than `exceptId`? */
+const otherLiveCall = (userId, exceptId = 0) => Boolean(q.get(
+  `SELECT 1 AS x FROM phone_calls WHERE user_id = ? AND id != ? AND ${LIVE} AND started_at > ? AND (direction = 'outbound' OR (direction = 'switchboard' AND to_number IS NOT NULL))`,
+  userId, exceptId, ago(4 * HOUR)));
+
 // ---------- the routes the app calls ----------
 export function registerPhone(api, { agencyOnly, bad, clean, int, loadApp, ...shared }) {
   logActivity = shared.logActivity;
@@ -955,9 +1212,14 @@ export function registerPhone(api, { agencyOnly, bad, clean, int, loadApp, ...sh
 
   api.get('/phone/status', agencyOnly, (req, res) => {
     const on = phoneConfigured();
+    const { missing, problem } = whatIsMissing();
     res.json({
       configured: on, number: on ? BOOK_NUMBER : null, number_display: on ? displayNumber(BOOK_NUMBER) : null,
       my_phone: req.user.phone ?? null, my_pin_set: Boolean(req.user.phone_pin_hash), notice: NOTICE_ON, countries: COUNTRIES,
+      // For whoever sets the phone line up: which settings are still missing, in one sentence, and the two addresses
+      // that have to be entered on the number at Twilio before ringing in and calls coming in can work.
+      missing, problem,
+      webhooks: appUrl() ? { inbound: `${appUrl()}/api/phone/twilio/inbound`, status: `${appUrl()}/api/phone/twilio/status` } : null,
     });
   });
 
@@ -975,12 +1237,14 @@ export function registerPhone(api, { agencyOnly, bad, clean, int, loadApp, ...sh
     }
     const set = ['phone = ?'], p = [phone];
     // A different phone starts with a clean slate: a lock belongs to the phone that earned it.
-    if (phone !== (req.user.phone ?? null)) set.push('phone_pin_fails = 0', 'phone_locked_until = NULL');
+    const clean_slate = ['phone_pin_fails = 0', 'phone_locked_until = NULL', 'phone_lock_level = 0', 'phone_pin_wrong = 0', 'phone_pin_wrong_since = NULL'];
+    if (phone !== (req.user.phone ?? null)) set.push(...clean_slate);
     if (b.pin !== undefined) {
       const pin = b.pin.trim();
       if (pin && !/^\d{4,6}$/.test(pin)) bad('A PIN is 4 to 6 digits.');
-      if (pin && easyPin(pin)) bad('Choose a PIN that is harder to guess: not one digit repeated, and not a run like 1234.');
-      set.push('phone_pin_hash = ?', 'phone_pin_fails = 0');
+      if (pin && easyPin(pin)) bad('Choose a PIN that is harder to guess: at least three different digits, and not a run like 1234, a year, or 2580.');
+      // A new PIN is a new secret: whatever the old one earned in wrong guesses and locks goes with it.
+      set.push('phone_pin_hash = ?', ...clean_slate.filter((part) => !set.includes(part)));
       p.push(pin ? hashPin(pin) : null);
     }
     q.run(`UPDATE users SET ${set.join(', ')} WHERE id = ?`, ...p, req.user.id);
@@ -1020,6 +1284,8 @@ export function registerPhone(api, { agencyOnly, bad, clean, int, loadApp, ...sh
     if (b.record !== undefined && typeof b.record !== 'boolean') bad('record must be true or false.');
     const eventKey = b.event_key == null || b.event_key === '' ? null : typeof b.event_key === 'string' && /^[\w.~-]{1,200}$/.test(b.event_key) ? b.event_key : bad('That calendar event could not be read.');
     if (!req.user.phone) bad('Save your own mobile number first, so The Book knows which phone to ring.');
+    // What the call is called when it is with nobody on file: the name of the calendar event it was placed from.
+    const title = b.title == null ? null : typeof b.title === 'string' ? clean(b.title, 120) : bad('The name of the call could not be read.');
 
     // Who is being called: a candidate (through one of their applications, or on their own), or a number typed in.
     let candidate = null, applicationId = null, typed;
@@ -1044,9 +1310,7 @@ export function registerPhone(api, { agencyOnly, bad, clean, int, loadApp, ...sh
       if (matches.length === 1) { candidate = matches[0]; applicationId = bestApplication(candidate.id); }
     }
     // One call at a time each, and a ceiling on calls in an hour, so neither a slip nor a script can run up the bill.
-    if (q.get(`SELECT 1 AS x FROM phone_calls WHERE user_id = ? AND direction = 'outbound' AND ${LIVE} AND started_at > ?`, req.user.id, ago(4 * HOUR))) {
-      bad('You already have a call under way. Hang up first, or wait for it to end.', 409);
-    }
+    if (otherLiveCall(req.user.id)) bad('You already have a call under way. Hang up first, or wait for it to end.', 409);
     const limit = overLimit(req.user.id);
     if (limit) bad(limit, 429);
 
@@ -1054,9 +1318,9 @@ export function registerPhone(api, { agencyOnly, bad, clean, int, loadApp, ...sh
     const t = now();
     const { id, callId } = tx(() => {
       const made = q.insert(
-        `INSERT INTO phone_calls (user_id, direction, status, to_number, user_number, candidate_id, application_id, record, event_key, started_at, updated_at)
-         VALUES (?, 'outbound', 'ringing_you', ?, ?, ?, ?, ?, ?, ?, ?)`,
-        req.user.id, check.number, req.user.phone, candidate?.id ?? null, applicationId, record ? 1 : 0, eventKey, t, t);
+        `INSERT INTO phone_calls (user_id, direction, status, to_number, user_number, candidate_id, application_id, record, event_key, title, started_at, updated_at)
+         VALUES (?, 'outbound', 'ringing_you', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        req.user.id, check.number, req.user.phone, candidate?.id ?? null, applicationId, record ? 1 : 0, eventKey, title, t, t);
       return { id: made, callId: record ? newOracleCall(phoneCall(made)) : null };
     });
 
@@ -1099,8 +1363,16 @@ export function registerPhone(api, { agencyOnly, bad, clean, int, loadApp, ...sh
         const ended = await twilio('POST', `/Calls/${pc.call_sid}.json`, new URLSearchParams({ Status: 'completed' }));
         if (FINAL.has(ended?.status)) closeCall(pc.id, ended.status, Number(ended.duration) || null);
       } catch (err) {
+        // Twilio refuses to change a call it has already finished. Ask how it stands: if it is over, so are we.
+        let finished = null;
+        if (err.status >= 400 && err.status < 500 && err.status !== 404) {
+          finished = await twilio('GET', `/Calls/${pc.call_sid}.json`).catch(() => null);
+        }
         if (err.status === 404) closeCall(pc.id, 'failed');
-        else {
+        else if (FINAL.has(finished?.status)) {
+          q.run('UPDATE phone_calls SET hangup_at = NULL WHERE id = ?', pc.id); // it ended by itself, not because of this press
+          closeCall(pc.id, finished.status, Number(finished.duration) || null);
+        } else {
           q.run('UPDATE phone_calls SET hangup_at = NULL WHERE id = ?', pc.id);
           console.error(`Phone call ${pc.id} could not be hung up: ${err.message}`);
           bad('The phone service did not hang up the call. Hang up on your phone, or try again.', 502);

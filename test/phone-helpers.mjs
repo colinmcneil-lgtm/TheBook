@@ -20,21 +20,27 @@ export const BOOK_NUMBER = '+16475550100';
  */
 export async function mailSink(port = PHONE_PORTS.mail) {
   const sent = [];
+  const sink = { failures: 0, refused: 0 }; // `failures`: how many of the next messages the provider answers 500 to, taking nothing
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk) => { raw += chunk; });
     req.on('end', () => {
+      if (sink.failures > 0) {
+        sink.failures--; sink.refused++;
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ message: 'Internal server error' }));
+      }
       try { sent.push(JSON.parse(raw)); } catch { /* not a message */ }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ id: `mail_${sent.length}` }));
     });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
-  return {
+  return Object.assign(sink, {
     sent, url: `http://127.0.0.1:${port}/emails`,
     env: () => ({ RESEND_API_KEY: 're_test', RESEND_API_URL: `http://127.0.0.1:${port}/emails`, MAIL_FROM: 'The Book <book@agency.example>' }),
     stop: () => new Promise((resolve) => { server.closeAllConnections?.(); server.close(resolve); }),
-  };
+  });
 }
 
 /** PUT with a JSON body, as the signed-in person `who` (a session from oracle-helpers). */
