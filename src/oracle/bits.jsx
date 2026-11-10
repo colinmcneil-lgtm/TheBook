@@ -1,0 +1,255 @@
+// Pieces shared by The Oracle's pages and the Calls tab on a candidate's profile.
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Check, Copy, Info, LoaderCircle, Search, UserPlus, X } from 'lucide-react';
+import { api, url, fmtDate, photoUrl } from '../lib.js';
+import { useApp, useApi } from '../state.jsx';
+import { Avatar, Badge, Button, Input, Modal, useAction, useToast, cx } from '../ui.jsx';
+import { AddCandidateModal } from '../components/CandidateModals.jsx';
+
+// ---- words for a call ---------------------------------------------------------------------------------------------------
+const STATUS = {
+  recording: { label: 'Recording', tone: 'red' },
+  uploaded: { label: 'Saved', tone: 'gray' },
+  transcribing: { label: 'Transcribing', tone: 'amber' },
+  ready: { label: 'Ready', tone: 'green' },
+  failed: { label: 'Could not be transcribed', tone: 'red' },
+};
+export function CallStatus({ status }) {
+  const s = STATUS[status] || STATUS.uploaded;
+  return <Badge tone={s.tone} icon={status === 'transcribing' ? Spinner : undefined}>{s.label}</Badge>;
+}
+const Spinner = ({ className }) => <LoaderCircle className={cx(className, 'animate-spin')} />;
+
+/** What to call a call: its own title, else who it was with, else the day it was recorded. */
+export const callName = (call) => call.title || (call.candidate_name ? `Call with ${call.candidate_name}` : `Call on ${fmtDate(call.created_at)}`);
+
+/** "45 sec", "12 min", "1 h 05 min". Empty while the length is not known yet. */
+export function fmtLength(ms) {
+  if (!ms || ms < 0) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} sec`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+}
+
+/** A position in the recording, "2:07" or "1:02:07". */
+export function fmtClock(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const pad = (n) => String(n).padStart(2, '0');
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}` : `${Math.floor(s / 60)}:${pad(s % 60)}`;
+}
+
+// ---- loading that can repeat ----------------------------------------------------------------------------------------------
+/**
+ * Like useApi, with two additions these screens need: `reload()` after a change, and checking again every few seconds
+ * while `poll(data)` says something is still in progress (a call being transcribed).
+ */
+export function useLive(path, poll, everyMs = 4000) {
+  const { version } = useApp();
+  const [state, setState] = useState({ path: null, data: null, error: null });
+  const latest = useRef(path);
+  latest.current = path;
+  const load = useCallback(() => {
+    if (!path) return Promise.resolve();
+    return api.get(path)
+      .then((data) => { if (latest.current === path) setState({ path, data, error: null }); })
+      .catch((err) => {
+        // A failed re-check keeps what is on screen; a failed first load says why in plain words.
+        const message = err.status ? err.message : 'The Book could not be reached. Check your connection and try again.';
+        if (latest.current === path) setState((s) => (s.path === path && s.data ? s : { path, data: null, error: message }));
+      });
+  }, [path]);
+  useEffect(() => { load(); }, [load, version]);
+  const fresh = state.path === path;
+  const again = Boolean(fresh && state.data && poll?.(state.data));
+  useEffect(() => {
+    if (!again) return undefined;
+    const timer = setInterval(load, everyMs);
+    return () => clearInterval(timer);
+  }, [again, load, everyMs]);
+  const set = useCallback((data) => setState({ path, data, error: null }), [path]);
+  return { data: fresh ? state.data : null, error: fresh ? state.error : null, reload: load, set };
+}
+
+// ---- choosing the candidate -----------------------------------------------------------------------------------------------
+/** The few facts about an application that the picker shows and hands back. */
+export const pickOf = (row) => row && ({
+  application_id: row.application_id ?? row.id, candidate_id: row.candidate_id, name: row.name ?? row.candidate_name,
+  photo: row.photo ?? row.candidate_photo ?? null, job_title: row.job_title, client_name: row.client_name,
+});
+
+/**
+ * "Who is this call with?" Search people by name and choose one. Someone being considered for several jobs is listed
+ * once with each job underneath, because a call is added to one job's application.
+ */
+export function CandidatePicker({ value, onChange, label = 'Who is this call with?', hint, autoFocus }) {
+  const [text, setText] = useState('');
+  const [query, setQuery] = useState('');
+  useEffect(() => { const t = setTimeout(() => setQuery(text.trim()), 250); return () => clearTimeout(t); }, [text]);
+  const searching = query.length >= 2;
+  const { data: rows, loading, error } = useApi(searching ? url('/applications', { q: query, status: 'all' }) : null);
+
+  if (value) {
+    return (
+      <div>
+        <span className="mb-1 block text-[13px] font-medium text-stone-700">{label}</span>
+        <div className="flex items-center gap-3 rounded-lg border border-brand-200 bg-brand-50/60 px-3 py-2">
+          <Avatar name={value.name} size={32} src={photoUrl(value.candidate_id, value.photo)} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-stone-900">{value.name}</span>
+            <span className="block truncate text-[13px] text-stone-600">{[value.job_title, value.client_name].filter(Boolean).join(' · ')}</span>
+          </span>
+          <Button size="sm" variant="ghost" icon={X} onClick={() => { onChange(null); setText(''); }}>Change</Button>
+        </div>
+      </div>
+    );
+  }
+
+  // One entry per person, in the order the search returned them, each with the jobs they are in.
+  const people = [];
+  for (const row of (searching && rows) || []) {
+    let person = people.find((p) => p.candidate_id === row.candidate_id);
+    if (!person) people.push(person = { ...row, jobs: [] });
+    person.jobs.push(row);
+  }
+  const who = (p) => [p.current_title, p.current_company].filter(Boolean).join(' at ') || p.email || '';
+  const where = (row) => [row.job_title, row.client_name].filter(Boolean).join(' · ');
+  const standing = (row) => (row.status === 'active' ? row.stage_name : row.status === 'hired' ? 'Hired' : row.status === 'rejected' ? 'Rejected' : 'Withdrawn');
+
+  return (
+    <div>
+      <label className="block">
+        <span className="mb-1 block text-[13px] font-medium text-stone-700">{label}</span>
+        <span className="relative block">
+          <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-stone-400" />
+          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search candidates by name" className="pl-9" autoFocus={autoFocus} autoComplete="off" />
+        </span>
+      </label>
+      {searching ? (
+        <div className="mt-1.5 max-h-64 overflow-y-auto rounded-lg border border-line bg-white" role="listbox" aria-label="Matching candidates">
+          {error ? <p className="px-3 py-2.5 text-sm text-red-700">{error}</p>
+            : !rows && loading ? <p className="px-3 py-2.5 text-sm text-stone-500">Searching…</p>
+            : !people.length ? <p className="px-3 py-2.5 text-sm text-stone-500">Nobody in The Book matches “{query}”.</p>
+            : (
+              <ul className="divide-y divide-line">
+                {people.slice(0, 12).map((p) => (p.jobs.length === 1 ? (
+                  <li key={p.candidate_id}>
+                    <button type="button" role="option" aria-selected="false" onClick={() => onChange(pickOf(p))} className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-stone-50">
+                      <Avatar name={p.name} size={30} src={photoUrl(p.candidate_id, p.photo)} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm text-stone-500"><span className="font-medium text-stone-900">{p.name}</span>{who(p) ? ` · ${who(p)}` : ''}</span>
+                        <span className="block truncate text-[13px] text-stone-600">For {where(p)}</span>
+                      </span>
+                    </button>
+                  </li>
+                ) : (
+                  <li key={p.candidate_id} className="px-3 py-2">
+                    <span className="flex items-center gap-3">
+                      <Avatar name={p.name} size={30} src={photoUrl(p.candidate_id, p.photo)} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm text-stone-500"><span className="font-medium text-stone-900">{p.name}</span>{who(p) ? ` · ${who(p)}` : ''}</span>
+                        <span className="block truncate text-[13px] text-stone-600">Being considered for {p.jobs.length} jobs. Which one is this call about?</span>
+                      </span>
+                    </span>
+                    <span className="mt-1.5 flex flex-col gap-1 pl-[42px]">
+                      {p.jobs.map((row) => (
+                        <button key={row.id} type="button" role="option" aria-selected="false" onClick={() => onChange(pickOf(row))}
+                          className="flex items-center justify-between gap-3 rounded-md border border-line px-2.5 py-1.5 text-left text-[13px] hover:border-brand-300 hover:bg-brand-50/50">
+                          <span className="min-w-0 truncate font-medium text-stone-800">{where(row)}</span>
+                          <span className="shrink-0 text-xs text-stone-500">{standing(row)}</span>
+                        </button>
+                      ))}
+                    </span>
+                  </li>
+                )))}
+              </ul>
+            )}
+        </div>
+      ) : hint ? <span className="mt-1 block text-xs text-stone-500">{hint}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * Add a call to a candidate after it was recorded (or move it to someone else). When the person is not in The Book
+ * yet, the usual Add candidate dialog opens and the call is added to them once they are saved.
+ */
+export function AttachModal({ call, current, onClose, onDone }) {
+  const toast = useToast();
+  const [picked, setPicked] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const attach = async (applicationId, name) => {
+    const updated = await api.patch(`/oracle/calls/${call.id}`, { application_id: applicationId });
+    toast(name ? `Call added to ${name}` : 'Call added to the candidate');
+    onDone(updated);
+  };
+  const [save, busy] = useAction(async () => { await attach(picked.application_id, picked.name); onClose(); });
+  const [afterAdding] = useAction(async (applicationId) => attach(applicationId));
+
+  if (adding) return <AddCandidateModal onClose={onClose} onAdded={afterAdding} />;
+  return (
+    <Modal title={current ? 'Move this call to another candidate' : 'Add this call to a candidate'} subtitle={callName(call)} size="sm" onClose={onClose} onSubmit={save}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={!picked}>{current ? 'Move call' : 'Add call'}</Button></>}>
+      <CandidatePicker value={picked} onChange={setPicked} autoFocus hint="Type at least two letters of their name." />
+      {current && call.submission && <Notice tone="warn">The submission draft was written for the job this call is on now, so it is removed when the call moves.</Notice>}
+      <p className="text-[13px] text-stone-600">
+        Not in The Book yet?{' '}
+        <button type="button" onClick={() => setAdding(true)} className="inline-flex items-center gap-1 font-medium text-brand-700 hover:underline"><UserPlus className="size-3.5" />Add them as a new candidate</button>
+        {' '}and the call is added to them.
+      </p>
+    </Modal>
+  );
+}
+
+// ---- small things -----------------------------------------------------------------------------------------------------------
+/** A quiet explanation box. */
+export function Notice({ tone = 'info', className, children }) {
+  const tones = { info: 'border-line bg-stone-50 text-stone-600', warn: 'border-amber-200 bg-amber-50 text-amber-950', bad: 'border-red-200 bg-red-50 text-red-900' };
+  return (
+    <div className={cx('flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-[13px] leading-relaxed', tones[tone], className)}>
+      <Info className="mt-0.5 size-4 shrink-0 opacity-70" />
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
+/** Copy text to the clipboard and say so on the button for a moment. */
+export function CopyButton({ text, label = 'Copy', ...props }) {
+  const toast = useToast();
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setDone(true);
+      setTimeout(() => setDone(false), 1800);
+    } catch { toast('Copying is blocked in this browser. Select the text and copy it yourself.', 'error'); }
+  };
+  return <Button size="sm" icon={done ? Check : Copy} onClick={copy} {...props}>{done ? 'Copied' : label}</Button>;
+}
+
+/**
+ * Notes as the server writes them: plain text where a short line followed by "- " lines is a heading and "- " lines
+ * are bullets. Anything else is an ordinary paragraph.
+ */
+export function NotesText({ text }) {
+  const lines = String(text || '').split('\n').map((l) => l.trimEnd());
+  const isBullet = (l) => /^\s*[-•]\s+/.test(l || '');
+  const blocks = [];
+  lines.forEach((line, i) => {
+    if (!line.trim()) return;
+    if (isBullet(line)) {
+      if (blocks.at(-1)?.type !== 'list') blocks.push({ type: 'list', items: [] });
+      blocks.at(-1).items.push(line.replace(/^\s*[-•]\s+/, ''));
+    } else {
+      const next = lines.slice(i + 1).find((l) => l.trim());
+      blocks.push({ type: isBullet(next) && line.length <= 80 ? 'heading' : 'text', text: line.trim() });
+    }
+  });
+  return (
+    <div className="space-y-1.5 text-sm leading-relaxed text-stone-800">
+      {blocks.map((b, i) => (b.type === 'heading' ? <h4 key={i} className="pt-2 font-semibold text-stone-900 first:pt-0">{b.text}</h4>
+        : b.type === 'list' ? <ul key={i} className="list-disc space-y-1 pl-5 marker:text-stone-400">{b.items.map((item, j) => <li key={j}>{item}</li>)}</ul>
+        : <p key={i}>{b.text}</p>))}
+    </div>
+  );
+}

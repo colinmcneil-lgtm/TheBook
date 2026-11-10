@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
-import { LayoutDashboard, Inbox, Briefcase, Users, CalendarDays, ChartColumn, Building2, Settings, ChevronsUpDown, Check, LogOut, Menu as MenuIcon, X } from 'lucide-react';
+import { LayoutDashboard, Inbox, Briefcase, Users, CalendarDays, AudioLines, ChartColumn, Building2, Settings, ChevronsUpDown, Check, LogOut, Menu as MenuIcon, X } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate } from '../state.jsx';
 import { url } from '../lib.js';
 import { Avatar, ClientDot, Menu, cx } from '../ui.jsx';
 import { Logo } from '../pages/Login.jsx';
 import CandidateDrawer from './CandidateDrawer.jsx';
+import { RecorderStrip, useRecorder } from '../oracle/RecorderProvider.jsx';
 
 function ScopeSwitcher() {
   const { clients, scope, scopeClient, setScope, isAgency } = useApp();
@@ -37,6 +38,7 @@ export default function Layout({ children }) {
   const [params] = useSearchParams();
   const openCandidate = useOpenCandidate();
   const { data: counts } = useApi(url('/nav', { client_id: scope }));
+  const recording = useRecorder().live;
   useEffect(() => setOpen(false), [location.pathname]);
 
   const inboxCount = counts ? (isAgency ? counts.new_applicants : counts.pending_review) : 0;
@@ -46,6 +48,7 @@ export default function Layout({ children }) {
     { to: '/jobs', label: 'Jobs', icon: Briefcase },
     { to: '/candidates', label: 'Candidates', icon: Users },
     { to: '/interviews', label: 'Interviews', icon: CalendarDays, count: counts?.scorecards_due },
+    isAgency && { to: '/oracle', label: 'The Oracle', icon: AudioLines, recording },
     { to: '/reports', label: 'Reports', icon: ChartColumn },
     isAgency && { to: '/clients', label: 'Clients', icon: Building2 },
     { to: '/settings', label: 'Settings', icon: Settings, count: counts?.pending_accounts },
@@ -75,6 +78,7 @@ export default function Layout({ children }) {
             <item.icon className="size-[18px] opacity-80" />
             <span className="flex-1">{item.label}</span>
             {item.count > 0 && <span className="tabular rounded-full bg-gold px-1.5 text-xs font-semibold text-brand-950">{item.count}</span>}
+            {item.recording && <span className="size-2 rounded-full bg-red-500 ring-2 ring-red-500/30" role="img" aria-label="Recording" />}
           </NavLink>
         ))}
       </nav>
@@ -92,10 +96,12 @@ export default function Layout({ children }) {
   );
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full flex-col">
+    {isAgency && <RecorderStrip />}
+    <div className="flex min-h-0 flex-1">
       <aside className="no-print hidden w-60 shrink-0 lg:block">{sidebar}</aside>
       {open && (
-        <div className="no-print fixed inset-0 z-40 flex lg:hidden">
+        <div className="no-print fixed inset-0 z-40 flex lg:hidden" style={{ top: 'var(--recording-bar, 0px)' }}>
           <div className="animate-fade-in w-64">{sidebar}</div>
           <button type="button" aria-label="Close menu" className="flex-1 bg-stone-950/40" onClick={() => setOpen(false)} />
         </div>
@@ -111,6 +117,7 @@ export default function Layout({ children }) {
         <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
       </div>
       {params.get('c') && <CandidateDrawer key={params.get('c')} id={params.get('c')} onClose={() => openCandidate(null)} />}
+    </div>
     </div>
   );
 }

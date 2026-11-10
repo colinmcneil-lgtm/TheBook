@@ -31,6 +31,7 @@ function Account() {
 
 function AiCard() {
   const { data: status } = useApi('/jobs/autofill/status');
+  const { data: oracle } = useApi('/oracle/status');
   if (!status) return null;
   const code = (text) => <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">{text}</code>;
   return (
@@ -44,6 +45,20 @@ function AiCard() {
             <p>New jobs can be filled in from a job description or intake call. Without AI, only details a job description states outright are picked up (title, location, salary, requirement lists).</p>
             <p>To have the whole job and recruiter brief drafted, including from a call transcript, create an API key at console.anthropic.com and set {code('ANTHROPIC_API_KEY')} where the app is hosted, then restart it. Documents are then sent to Anthropic when a recruiter uses autofill, and each use is billed to that account.</p>
           </>
+        )}
+        {oracle && (
+          <div className="mt-3 space-y-2 border-t border-line pt-3">
+            <p className="flex flex-wrap items-center gap-2 font-medium text-stone-900">
+              The Oracle
+              <Badge tone={oracle.transcription ? 'green' : 'amber'}>{oracle.transcription ? 'Transcripts connected' : 'Transcripts not connected'}</Badge>
+              <Badge tone={oracle.ai ? 'green' : 'amber'}>{oracle.ai ? 'Notes and drafts connected' : 'Notes and drafts not connected'}</Badge>
+            </p>
+            <p>
+              The Oracle uses two connections. Recorded calls are sent to Deepgram to be transcribed{oracle.transcription ? '' : <> (create an API key at deepgram.com and set {code('DEEPGRAM_API_KEY')})</>},
+              and each transcript is sent to Claude to write the notes summary and draft submissions{oracle.ai ? '' : <> (the {code('ANTHROPIC_API_KEY')} above)</>}.
+              {' '}Without them, calls are still recorded and saved, and a transcript can be pasted in. Both are billed to your own accounts per use.
+            </p>
+          </div>
         )}
       </div>
     </Card>

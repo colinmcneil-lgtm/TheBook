@@ -15,6 +15,9 @@ import Reports from './pages/Reports.jsx';
 import Clients from './pages/Clients.jsx';
 import ClientDetail from './pages/ClientDetail.jsx';
 import Settings from './pages/Settings.jsx';
+import Oracle from './pages/Oracle.jsx';
+import OracleCall from './pages/OracleCall.jsx';
+import { RecorderProvider } from './oracle/RecorderProvider.jsx';
 import { Careers, CareersJob } from './pages/Careers.jsx';
 
 const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
@@ -54,8 +57,12 @@ function Workspace() {
   if (me === undefined) return <Loading className="h-full" />;
   if (!me) return <Login onDone={reloadMe} />;
 
+  // The call recorder sits above the pages, so a recording carries on while the recruiter moves around the workspace.
+  // Client hiring teams have no part in The Oracle, so they get no recorder and no routes to it.
+  const Recorder = ctx.isAgency ? RecorderProvider : React.Fragment;
   return (
     <AppContext.Provider value={ctx}>
+      <Recorder>
       <Layout>
         <Routes>
           <Route path="/" element={<Dashboard />} />
@@ -64,6 +71,8 @@ function Workspace() {
           <Route path="/jobs/:id" element={<JobDetail />} />
           <Route path="/candidates" element={<Candidates />} />
           <Route path="/interviews" element={<Interviews />} />
+          {ctx.isAgency && <Route path="/oracle" element={<Oracle />} />}
+          {ctx.isAgency && <Route path="/oracle/:id" element={<OracleCall />} />}
           <Route path="/reports" element={<Reports />} />
           {ctx.isAgency && <Route path="/clients" element={<Clients />} />}
           {ctx.isAgency && <Route path="/clients/:id" element={<ClientDetail />} />}
@@ -71,6 +80,7 @@ function Workspace() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
+      </Recorder>
     </AppContext.Provider>
   );
 }
