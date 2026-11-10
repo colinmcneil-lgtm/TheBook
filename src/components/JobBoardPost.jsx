@@ -1,0 +1,262 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { CircleAlert, CircleCheck, Copy, ExternalLink, EyeOff, ShieldCheck, Sparkles, TriangleAlert } from 'lucide-react';
+import { api, ago, copyText, fmtDate, plural, salaryRange, WORK_MODES, EMPLOYMENT } from '../lib.js';
+import { useApp, useApi, Pending } from '../state.jsx';
+import { Badge, Button, Card, CardHeader, Checkbox, Field, Input, Textarea, useAction, useToast } from '../ui.jsx';
+import { PostView, inkOn } from '../pages/Board.jsx';
+
+// The job's Confidential post tab: the agency's own advert for this job, for its public job board. What is typed
+// here is all the public is ever shown; nothing is taken from the client. The check below the form is what keeps
+// the client's name out, and the post cannot be public while it finds anything.
+
+const LOG = { published: 'Went public', taken_down: 'Came down', overruled: 'A word was overruled', overrule_withdrawn: 'An overrule was withdrawn', new_address: 'Given a new address' };
+/** The post's fields as the form holds them and as the check and the save are sent them. */
+const fieldsOf = (p) => ({ enabled: p.enabled, title: p.title, location: p.location, description: p.description, show_salary: p.show_salary, round_salary: p.round_salary, hide_from_careers: p.hide_from_careers });
+/** What the check looks at: everything but the switch. */
+const checkedOf = ({ enabled, ...fields }) => JSON.stringify(fields);
+
+export default function JobBoardPost({ job }) {
+  const { isAdmin, bump } = useApp();
+  const toast = useToast();
+  const { data: loaded, error } = useApi(`/jobs/${job.id}/board`);
+  const [view, setView] = useState(null);       // what the server last said, after a save or an overrule
+  const [form, setForm] = useState(null);
+  const [checked, setChecked] = useState(null); // the check, run on what is in the form now
+  const [drafted, setDrafted] = useState(null); // what the last draft took out, for the recruiter to read
+  const current = view ?? loaded;
+  useEffect(() => { setView(null); }, [loaded]);
+  // The form starts from the saved post, and starts again only when the saved post is different: the workspace
+  // re-reads its data whenever anything is saved anywhere, and that must not wipe what is being typed here.
+  const savedPost = current && JSON.stringify(current.post), savedCheck = current && JSON.stringify(current.check);
+  useEffect(() => {
+    if (!current) return;
+    setForm(fieldsOf(current.post));
+  }, [savedPost]);
+  // The other names the agency has listed for this client, one to a line, and whether the list in the box has been changed.
+  const savedNames = current && current.other_names.join('\n');
+  const [names, setNames] = useState('');
+  useEffect(() => { if (current) setNames(savedNames); }, [savedNames]);
+
+  // The check is run again a moment after the recruiter stops typing, so they see what it finds before they save.
+  const typed = form && checkedOf(form);
+  const latest = useRef(typed);
+  useEffect(() => {
+    latest.current = typed;
+    if (!form || !current) return undefined;
+    if (typed === checkedOf(fieldsOf(current.post))) { setChecked(current.check); return undefined; }
+    const timer = setTimeout(async () => {
+      try {
+        const result = await api.post(`/jobs/${job.id}/board/check`, form);
+        if (latest.current === typed) setChecked(result);
+      } catch { /* the next keystroke, or the save, checks again */ }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [typed, savedCheck]);
+
+  const [save, saving] = useAction(async () => {
+    const next = await api.put(`/jobs/${job.id}/board`, form);
+    setView(next);
+    setDrafted(null);
+    toast(next.state.live ? 'Saved. The post is public.' : form.enabled ? 'Saved, but the post is not public yet.' : 'Saved', next.state.live || !form.enabled ? 'ok' : 'error');
+    bump();
+  });
+  const [draft, drafting] = useAction(async () => {
+    // A title the recruiter has already changed from the job's own is theirs, and is left alone: the draft only
+    // replaces a title that is still the client's, which is the one that could be matched with the client's page.
+    const ownTitle = Boolean(form.title.trim()) && form.title.trim() !== job.title.trim();
+    if (form.description.trim() && !window.confirm(ownTitle ? 'Replace the advert text with a new draft? Your title is kept.' : 'Replace the advert text and the title with a new draft?')) return;
+    const result = await api.post(`/jobs/${job.id}/board/draft`);
+    setForm((f) => ({ ...f, title: ownTitle ? f.title : result.title, description: result.description }));
+    setDrafted({ removed: result.removed, title: ownTitle ? null : result.title });
+    toast('Drafted. Read it through before you save.');
+  });
+  const [newAddress, readdressing] = useAction(async () => {
+    if (!window.confirm('Give this post a new address?\n\nThe old link stops working, wherever it has been shared. Do this when something that pointed to the client was public at the old address, so that copies of it kept by search engines no longer lead to this post.')) return;
+    setView(await api.post(`/jobs/${job.id}/board/address`));
+    toast('The post has a new address');
+    bump();
+  });
+  const [saveNames, savingNames] = useAction(async () => {
+    const next = await api.put(`/jobs/${job.id}/board/names`, { names });
+    setView(next);
+    toast('Names saved. Every post for this client has been checked again.');
+    if (next.board_notice) toast(next.board_notice, 'error');
+    bump();
+  });
+  const [overrule, overruling] = useAction(async (problem) => {
+    if (!window.confirm(`Overrule “${problem.found}” in “${problem.phrase}”?\n\nOnly do this when it is plainly not the client: a common word that happens to be in their name. It is recorded with your name. The same word anywhere else in the post is still found.`)) return;
+    setView(await api.post(`/jobs/${job.id}/board/overrules`, { word: problem.word, key: problem.key }));
+    toast('Overruled, and recorded');
+    bump();
+  });
+  const [withdraw] = useAction(async (item) => {
+    setView(await api.del(`/jobs/${job.id}/board/overrules/${item.id}`));
+    toast('Overrule withdrawn');
+    bump();
+  });
+
+  if (!current || !form || !checked) return <Card><Pending error={error} /></Card>;
+  const { post, state, board } = current;
+  const dirty = JSON.stringify(form) !== JSON.stringify(fieldsOf(post));
+  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  // The job's salary range as the post can show it: as it is on the job, or rounded outwards.
+  const range = (which) => (current.salary ? salaryRange(current.salary[which].min, current.salary[which].max, job.currency) : '');
+  const salary = range('exact');
+  // Where people are sent: the post on the agency's own website when the board is shown there, or else on The Book.
+  const address = current.link || (post.token ? `${window.location.origin}/board/${post.token}` : null);
+  const preview = {
+    title: form.title, location: form.location, description: form.description, work_mode: job.work_mode, employment_type: job.employment_type,
+    salary: form.show_salary && current.salary ? { ...current.salary[form.round_salary ? 'rounded' : 'exact'], currency: job.currency } : null,
+  };
+
+  return (
+    <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="space-y-6">
+        <Card>
+          <CardHeader title="Confidential post" action={state.live ? <Badge tone="green" icon={CircleCheck}>Public</Badge> : <Badge tone={post.enabled ? 'amber' : 'gray'}>Not public</Badge>} />
+          <div className="space-y-4 p-4">
+            <p className="text-sm leading-relaxed text-stone-600">
+              Your own advert for this job, on your website, in your agency’s name. The public sees only what is on this page: nothing is taken from {job.client_name}, and applicants are not told who the employer is.
+            </p>
+            {state.live ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm text-brand-900">
+                <span className="min-w-0 flex-1 basis-56">Public on your website{post.posted_at ? ` since ${fmtDate(post.posted_at)}` : ''}.</span>
+                <Button size="sm" icon={Copy} onClick={() => copyText(address, toast, 'Link copied')}>Copy link</Button>
+                <a href={address} target="_blank" rel="noreferrer"><Button size="sm" icon={ExternalLink}>Open</Button></a>
+                <button type="button" disabled={readdressing} onClick={newAddress} className="basis-full text-left text-xs text-brand-900/80 underline hover:text-brand-900">Give it a new address, so the old link stops working</button>
+              </div>
+            ) : post.enabled && state.says ? (
+              <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950"><TriangleAlert className="mt-0.5 size-4 shrink-0" />{state.says}</p>
+            ) : null}
+            <Checkbox checked={form.enabled} onChange={(e) => set('enabled', e.target.checked)} label="Post on our website (confidential)"
+              hint="Goes public when you save, as long as the job is open and the check below finds nothing." />
+            <Field label="Title" hint="As the public should see it."><Input value={form.title} onChange={(e) => set('title', e.target.value)} /></Field>
+            <Field label="Location" hint="As it should be shown: an area, not an address."><Input value={form.location} onChange={(e) => set('location', e.target.value)} placeholder="e.g. Greater Toronto Area" /></Field>
+            <div className="space-y-2 rounded-lg bg-stone-50 px-3 py-2.5 text-sm text-stone-600">
+              <p><span className="font-medium text-stone-800">{[WORK_MODES[job.work_mode], EMPLOYMENT[job.employment_type]].join(' · ')}</span> are shown as they are on the job. Change them with Edit, above.</p>
+              <Checkbox checked={form.show_salary && Boolean(salary)} disabled={!salary} onChange={(e) => set('show_salary', e.target.checked)}
+                label={salary ? `Show the salary range (${salary})` : 'Show the salary range'} hint={salary ? undefined : 'This job has no salary range.'} />
+              {form.show_salary && Boolean(salary) && (
+                <Checkbox checked={form.round_salary} onChange={(e) => set('round_salary', e.target.checked)} label={`Round it (${range('rounded')})`}
+                  hint="The exact figures are the client’s. Rounded, they say what a candidate needs to know and are harder to match with anything the client has published." />
+              )}
+            </div>
+            <Checkbox checked={form.hide_from_careers} onChange={(e) => set('hide_from_careers', e.target.checked)} label={`Keep this job off ${job.client_name}’s careers page`}
+              hint={`While this post is switched on, the job is not listed on ${job.client_name}’s own careers page, so nobody can put the two adverts side by side. Untick it only if the client needs the job on their page as well: the check then compares the two.`} />
+            <Field label="Advert text" hint="Plain text; line breaks are kept. Describe the employer in general terms only (“a Series B health-tech company”).">
+              <Textarea rows={16} value={form.description} onChange={(e) => set('description', e.target.value)}
+                placeholder={'Our client is a …\n\nWhat you will do\n• …\n\nWhat we are looking for\n• …'} />
+            </Field>
+            {current.ai ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <Button icon={Sparkles} busy={drafting} onClick={draft}>{drafting ? 'Drafting…' : 'Draft it for me'}</Button>
+                <span className="min-w-0 flex-1 basis-56 text-[13px] text-stone-500">Rewrites the job’s own advert with everything that points to the employer taken out. The job’s advert and the client’s name are sent to the AI service to do it.</span>
+              </div>
+            ) : (
+              <p className="text-[13px] text-stone-500">AI drafting is not connected, so write the advert yourself. Leave out the client’s name and anything made from it, products and brand names, founders and other named people, addresses and neighbourhoods, exact headcount or funding figures, awards, slogans and links.</p>
+            )}
+            {drafted && (
+              <div className="rounded-lg bg-violet-50 px-3 py-2.5 text-[13px] leading-relaxed text-violet-950">
+                <p className="font-medium">This is a draft. Read it through: the check below is what counts, and it has been run on it.</p>
+                {drafted.title && <p className="mt-1.5">The title was replaced as well: “{drafted.title}”.</p>}
+                {drafted.removed.length > 0 && <p className="mt-1.5 font-medium">Taken out or made general:</p>}
+                {drafted.removed.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-5">{drafted.removed.map((r, i) => <li key={i}>{r}</li>)}</ul>}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
+              <Button variant="primary" busy={saving} disabled={!dirty} onClick={save}>{form.enabled && !state.live ? 'Save and post' : 'Save'}</Button>
+              {dirty && <span className="text-[13px] text-stone-500">You have changes that are not saved.</span>}
+              {!dirty && post.updated_at && <span className="text-[13px] text-stone-500">Saved {ago(post.updated_at)}{post.updated_by_name ? ` by ${post.updated_by_name}` : ''}.</span>}
+            </div>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader title="Confidentiality check" action={checked.ok ? <Badge tone="green" icon={ShieldCheck}>Nothing found</Badge> : <Badge tone="red" icon={CircleAlert}>{plural(checked.problems.length, 'thing')} to fix</Badge>} />
+          <div className="space-y-4 p-4 text-sm leading-relaxed">
+            {checked.problems.length > 0 && (
+              <ul className="space-y-2">
+                {checked.problems.map((p, i) => (
+                  <li key={i} className="flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-red-950">
+                    <span className="min-w-0 flex-1 basis-64">{p.message}</span>
+                    {p.can_overrule && isAdmin && <Button size="sm" busy={overruling} disabled={dirty} title={dirty ? 'Save the post first' : undefined} onClick={() => overrule(p)}>Overrule</Button>}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {checked.problems.length > 0 && (
+              <p className="text-[13px] text-stone-500">
+                The post cannot be public until these are gone.
+                {checked.problems.some((p) => p.can_overrule) && (isAdmin
+                  ? ` A single word that is plainly a false alarm (a client called North, in “North America”) can be overruled${dirty ? ' once the post is saved' : ''}.`
+                  : ' An admin can overrule a single word that is plainly a false alarm (a client called North, in “North America”).')}
+              </p>
+            )}
+            {checked.ok && <p className="text-stone-600">Nothing in the title, location or text gives {job.client_name} away, as far as the check can tell. It cannot know everything: read the advert as a stranger would before you post it.</p>}
+            {checked.overruled.length > 0 && (
+              <div>
+                <h3 className="text-[13px] font-semibold text-stone-900">Overruled</h3>
+                <ul className="mt-1.5 space-y-1.5">
+                  {checked.overruled.map((o) => (
+                    <li key={o.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 rounded-lg bg-stone-50 px-3 py-2 text-[13px] text-stone-700">
+                      <span className="min-w-0 flex-1 basis-64">“{o.found}” in “{o.phrase}”: said not to be the client by {o.by || 'somebody who has left'}, {fmtDate(o.at, true)}.</span>
+                      {isAdmin && <button type="button" onClick={() => withdraw(o)} className="text-xs font-medium text-stone-500 hover:text-red-700">Withdraw</button>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {checked.warnings.map((w, i) => (
+              <p key={i} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-950"><TriangleAlert className="mt-0.5 size-4 shrink-0" /><span>{w.message}</span></p>
+            ))}
+            {checked.client_advert_public && job.status === 'open' && job.careers_page && (
+              <p className="text-[13px] text-stone-500">
+                <a href={`/careers/${job.client_slug}/${job.id}`} target="_blank" rel="noreferrer" className="font-medium text-brand-700 hover:underline">Open {job.client_name}’s advert</a> and compare the two as a stranger would.
+              </p>
+            )}
+            <div className="space-y-2 border-t border-line pt-4">
+              <Field label={`Other names for ${job.client_name}`} hint="One on each line: brands, products, short names and anything else people call this client. The check looks for them in every post for this client, as it looks for the name.">
+                <Textarea rows={3} value={names} onChange={(e) => setNames(e.target.value)} spellCheck={false} placeholder={'e.g. a product’s name\na short name people use'} />
+              </Field>
+              <Button size="sm" busy={savingNames} disabled={names.trim() === savedNames} onClick={saveNames}>Save names</Button>
+            </div>
+            <details className="text-[13px] text-stone-500">
+              <summary className="font-medium text-stone-700">What the check looks for</summary>
+              <ul className="mt-1.5 list-disc space-y-0.5 pl-5">{checked.looked_for.map((x, i) => <li key={i}>{x}</li>)}</ul>
+              <p className="mt-1.5">Capitals and accents make no difference, and a name broken up with dots, dashes or spaces, written with look-alike letters or tucked inside a longer word is still found. It is run before the post goes public and again whenever the post, the job or the client is changed; a post that fails comes down until it is fixed.</p>
+            </details>
+          </div>
+        </Card>
+      </div>
+
+      <div className="space-y-6">
+        <Card className="overflow-hidden">
+          <CardHeader title="Preview" action={<span className="text-xs text-stone-500">Exactly what the public sees</span>} />
+          <div className="bg-white">
+            <div className="flex items-center gap-2 px-5 py-3 text-sm font-semibold" style={{ background: board.color, color: inkOn(board.color) }}><EyeOff className="size-4 opacity-80" />{board.name}</div>
+            <div className="px-5 py-6"><PostView board={board} post={preview} /></div>
+          </div>
+        </Card>
+        <Card className="p-4 text-sm text-stone-600">
+          <h3 className="text-sm font-semibold text-stone-900">Applications</h3>
+          <p className="mt-1">
+            {current.applied ? `${plural(current.applied, 'person has', 'people have')} applied through this post.` : 'Nobody has applied through this post yet.'}
+            {' '}They land in this job like any other applicant, with the source “Our website” and no owner until a recruiter takes them, and they are sent your own confirmation e-mail, which does not name {job.client_name}.
+          </p>
+          <p className="mt-2 text-[13px] text-stone-500">The board’s name, colour and the websites it can be shown on are under <Link to="/settings?tab=agency#board" className="font-medium text-brand-700 hover:underline">Settings, Agency, Jobs on our website</Link>.</p>
+        </Card>
+        {current.log.length > 0 && (
+          <Card className="p-4">
+            <h3 className="text-sm font-semibold text-stone-900">History</h3>
+            <ul className="mt-2 space-y-1.5 text-[13px] text-stone-600">
+              {current.log.map((l, i) => (
+                <li key={i}><span className="font-medium text-stone-800">{LOG[l.kind] || l.kind}</span>{l.detail ? `: ${l.detail}` : ''} <span className="text-stone-400">· {l.user_name || 'The Book'}, {ago(l.created_at)}</span></li>
+              ))}
+            </ul>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}

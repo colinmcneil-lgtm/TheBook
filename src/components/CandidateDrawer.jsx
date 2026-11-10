@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines, LoaderCircle, Plus,
+  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines, LoaderCircle, Plus, EyeOff,
 } from 'lucide-react';
-import { api, url, ago, since, extUrl, photoUrl, telHref, fmtDate, fmtDateTime, fmtWhen, money, firstName, NO_JOB, SOURCES, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
+import { api, url, ago, since, extUrl, photoUrl, telHref, fmtDate, fmtDateTime, fmtWhen, money, firstName, NO_JOB, sourceName, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Avatar, Badge, Button, Card, Checkbox, Drawer, Empty, Loading, Menu, Select, Stars, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import ResumeViewer from './ResumeViewer.jsx';
@@ -304,6 +304,7 @@ function Overview({ data, onOffer, onFee, onResume }) {
   const [removeNote] = useAction(async (id) => { await api.del(`/notes/${id}`); bump(); });
   const { data: owners } = useApi(isAgency ? url('/owners', { client_id: client?.id }) : null);
   const [assign] = useAction(async (ownerId) => { await api.patch(`/applications/${app.id}`, { owner_id: ownerId || null }); bump(); });
+  const [setKnown, savingKnown] = useAction(async (known) => { await api.put(`/applications/${app.id}/client-known`, { known }); bump(); });
   const stage = data.stages.find((s) => s.id === app.stage_id);
   const row = (label, value) => (
     <div className="flex items-start justify-between gap-4 py-1.5 text-sm">
@@ -373,7 +374,7 @@ function Overview({ data, onOffer, onFee, onResume }) {
             {general ? row('Job', <NoJobBadge />) : row('Stage', stage?.name)}
             {!general && row('In stage', since(app.stage_entered_at))}
             {row(general ? 'Added' : 'Applied', fmtDate(app.applied_at, true))}
-            {row('Source', SOURCES[app.source] || app.source)}
+            {row('Source', sourceName(app.source, isAgency))}
             {!general && row('Rating', <Stars value={app.rating} onChange={rate} />)}
             {row('Owner', isAgency ? (
               <select aria-label="Owner" value={app.owner_id ?? ''} onChange={(e) => assign(e.target.value)} className="max-w-36 cursor-pointer rounded-md border border-line bg-white py-0.5 pr-6 pl-1.5 text-right text-sm font-medium">
@@ -385,6 +386,17 @@ function Overview({ data, onOffer, onFee, onResume }) {
             ) : app.owner_name || 'Unassigned')}
           </dl>
         </Card>
+        {/* Only the agency is sent this: the candidate came through its confidential post. */}
+        {data.board && (
+          <Card className="space-y-2 p-4">
+            <h3 className="flex items-center gap-1.5 text-sm font-semibold text-stone-900"><EyeOff className="size-4 text-violet-700" />Confidential post</h3>
+            <p className="text-[13px] leading-relaxed text-stone-600">Applied through your website, as “{data.board.title}”. They were not told who the employer is.</p>
+            <Checkbox checked={data.board.client_known} disabled={savingKnown} onChange={(e) => setKnown(e.target.checked)} label="Knows who the client is"
+              hint={data.board.client_known
+                ? `Ticked${data.board.client_known_by_name ? ` by ${data.board.client_known_by_name}` : ''}, ${fmtDate(data.board.client_known_at)}. They are now written to like any other candidate.`
+                : `Until this is ticked, nothing The Book sends them by itself names ${client.name}, and you are warned before sending a message that does.`} />
+          </Card>
+        )}
         {app.resume_file ? (
           <div className="flex items-center gap-1 rounded-xl border border-line bg-white pr-2 text-sm hover:border-brand-300">
             <button type="button" onClick={onResume} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl px-4 py-3 text-left">

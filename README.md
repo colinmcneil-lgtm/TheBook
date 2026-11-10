@@ -13,6 +13,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | --- | --- |
 | **Clients** | Each company you embed in has its own jobs, candidates, hiring-team logins, brand colour and engagement terms (retainer, fee per hire, or both). A switcher scopes the whole workspace to one client or all of them. |
 | **Careers pages** | Every client gets a public, branded careers page at `/careers/<client>` listing open roles, each with an application form (résumé upload, custom screening questions, consent). Link to it from the client's website. Add `?src=linkedin`, `?src=job_board` or `?src=referral` to an apply link to track where applicants came from. |
+| **Jobs on our website** | Your agency's own public job board, in your name, for the jobs you choose to advertise yourselves without saying who the employer is. Each post is written for the purpose and checked for anything that would give the client away before it can go public. Link to the board, show it inside a page of your own website, or read it as data. See [Jobs on our website (confidential posts)](#jobs-on-our-website-confidential-posts). |
 | **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **Otterview** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [Otterview](#otterview) and [Metaview in Otterview](#metaview-in-otterview). |
@@ -172,6 +173,40 @@ candidate in the app, and put on a job later when the right role comes up.
   an interview is edited, is an e-mail like any other sent after they joined the job: the job's hiring team can
   read it and the line in the history that says what was changed, and both become the agency's own, with the rest,
   if they later go on another job.
+- **Jobs on our website.** A confidential post (see "Jobs on our website" below) and The Book are kept apart the
+  same way a client's careers page and The Book are.
+  - *Somebody in The Book who applies through a post, or on a client's careers page,* is answered exactly as anybody
+    is: the same answer from the form and the same confirmation, so the form cannot be used to find out who is in
+    The Book. Nothing is joined: the client gets a record of its own made from what they typed, their entry in The
+    Book is not touched, and each profile points to the other for the agency ("Also in The Book without a job").
+    The hiring team is shown what they sent and nothing the agency holds. If you then join the entry to the
+    application they made, the rule above applies: their note, their consent and their résumé stay on the
+    application as theirs, and the entry's notes, history, e-mails and résumé are kept where only the agency
+    reads. They are still somebody who came through the post and has not been told who the client is.
+  - *One address is sent three e-mails an hour at most* by the public forms, as before. What the agency sent
+    somebody while they were in The Book counts towards that, wherever it is kept now.
+  - *Put on a job that has a confidential post from The Book,* somebody is on it like anyone the agency adds:
+    the board has no record of them, the post's count of applicants does not include them, and what The Book sends
+    them is in the client's name. If they then apply through the post themselves, the form answers as it does for
+    anybody, and they are in the job once.
+  - *Somebody who came through a post and goes back to The Book* (they were in The Book before and are removed
+    from the job, or the job is deleted): what the board noted about their application belonged to that job and
+    goes with it, namely the post, the title they saw and the "Knows who the client is" tick. The agency's own note
+    on their entry says which post it was and whether they had been told ("They applied through your confidential
+    post ... and had not been told who the client is"), with the note they wrote and the consent they gave; the
+    source becomes "Agency sourced". Put on another client's job, that client's hiring team is shown none of it,
+    the tick is not offered, and e-mails are about the new job in the new client's name. **If you put them back on
+    the same job**, they are on it like anyone you add: The Book no longer holds back e-mails that name the client,
+    so read the note first.
+  - *E-mails.* An automatic e-mail that is held back because it would name the client, and a hand-written one
+    that is refused until you have seen the warning, are recorded nowhere: not on the application and not in the
+    agency's own table. One you send anyway makes the tick when it is delivered, on the application that came
+    through the post; if the person has left that job by the time the mail provider answers, nothing is ticked and
+    the record is the agency's own, as for any e-mail from before a job. An e-mail sent to somebody in The Book
+    while their entry is being joined to an application they made through a post is recorded there for the agency
+    only, and they still count as not having been told.
+  - *"Our website" is only ever an application made on the board.* It cannot be chosen when saving somebody to
+    The Book or when adding somebody to another of a client's jobs, and nobody in The Book carries it.
 
 The first start after this was added changes the database in place: three columns stop being required, one empty
 column is added to applications, three empty tables are added (earlier résumés, and the history lines and e-mails
@@ -179,27 +214,64 @@ only the agency reads), and nothing else about existing people or applications c
 lines and e-mails that are there already are not touched. The two tables that are rebuilt for this keep
 every index and trigger they had, including ones an earlier version made and this one no longer makes.
 `test/pool-upgrade.test.mjs` builds a database with the code from before, fills it, upgrades it and compares every
-row, id, counter, index, trigger and foreign key. "Before" is four releases, each kept word for word under
+row, id, counter, index, trigger and foreign key. "Before" is five releases, each kept word for word under
 `test/fixtures/`: the one this was first built on (`before-pool/`, commit 5f16829), the one after it
 (`before-pool-3f7b1a4/`), the one with Metaview and the reports in and phone calls and the calendar out
 (`before-pool-6f279a9/`), whose database is one the release before it made and that it then opened and used, with
-Metaview conversations and recorded report moments hanging off the two rebuilt tables, and the newest one without
-this change (`before-pool-d1b664a/`: the To do page and interview editing), whose database is that one again with
-people's to-do lists hanging off the rebuilt applications table. What a
-database must end up as is not written out by hand: a copy is opened by the newest release without this change,
-and this change's own differences are applied to what that leaves, so a database last opened by any of the four
-gets the releases it missed and this change in one start, and ends up the same whichever way it came. What that
-start adds is also listed by name and checked against the list: from the newest release, this change's own three
-tables, five indexes and one column and nothing else; from an older one, those and what the releases in between
-added (the To do table and its six indexes; before that the reports' and Metaview's). Every test
-is also run on a database whose tables began at the first release, and a database made by the first release's own
-code (`first-release/`) that nothing since has opened is upgraded too. The start is also cut off before each of
-its steps in turn: every time nothing is lost or renumbered, no index or trigger is missing, and the next start
-finishes the job. (That found two older steps which a cut at the wrong moment left undone for good: the one that
-gives each candidate an owner, and the one that says which interview stages are the agency's own when the reports'
-tick first arrives. Each is now saved in one piece. A database that has already been through a step is not put
-through it again.) All of this was run on made-up databases, not on a copy of a live one, so take a back-up of
+Metaview conversations and recorded report moments hanging off the two rebuilt tables, the one with the To do page
+and interview editing (`before-pool-d1b664a/`), whose database is that one again with people's to-do lists
+hanging off the rebuilt applications table, and the one that is live, with jobs on the agency's website
+(`before-pool-09368bb/`), whose database is that one once more with confidential posts and what the board notes
+about the people who applied through one, which hangs off applications too.
+
+What a database must end up as is not written out by hand, and neither is what other features add. It comes from
+three places:
+
+1. **The releases from before, run as they are.** A copy is opened by the newest of them (the one that is live),
+   which shows what the releases in between do to the database: the tables, indexes, triggers and columns they
+   add, the rows they add and the values they change.
+2. **This change, by name.** Its own differences are applied to what that leaves: three columns that stop being
+   required, one column, three tables and five indexes. So a database last opened by any of the five gets the
+   releases it missed and this change in one start, and ends up the same whichever way it came. Everything the
+   live release knows has to be exactly that afterwards: every table, index and trigger as it was written, every
+   column, foreign key and id counter, and every row under its id with every value.
+3. **A general rule for anything else.** Whatever today's code adds besides belongs to a feature newer than the
+   live release, and may only be this: a table, made as it is in a database made new today, that is empty or
+   holds only the rows the same table starts with in a database made new today; a column, after the ones that were
+   there, that is empty or holds its declared default on every row from before; a row a database made new today
+   also starts with; an index or a trigger. Nothing that was there may be altered. The tests' output names what
+   was accepted under this rule. (An addition by this change that is missing from its own list would be taken for
+   such a feature's: held to the same rule and named, not refused.)
+
+Every test is also run on a database whose tables began at the first release, and a database made by the first
+release's own code (`first-release/`) that nothing since has opened is upgraded too. The start is also cut off
+before each of its steps in turn: every time nothing is lost or renumbered, no index or trigger is missing, and the
+next start finishes the job. (That found two older steps which a cut at the wrong moment left undone for good: the
+one that gives each candidate an owner, and the one that says which interview stages are the agency's own when the
+reports' tick first arrives. Each is now saved in one piece. A database that has already been through a step is not
+put through it again.) All of this was run on made-up databases, not on a copy of a live one, so take a back-up of
 `DATA_DIR` before the first deploy.
+
+**When another release goes live before this one ships,** add it as the newest "before". Nothing has to be listed:
+
+1. Copy its database code word for word: `mkdir test/fixtures/before-pool-<commit>`, then
+   `git show <commit>:server/db.js > test/fixtures/before-pool-<commit>/db.js` and the same for `links.js` (and
+   for any other file its `db.js` imports).
+2. Add one entry at the end of `BEFORES` in `test/pool-upgrade.test.mjs`: its name, the folder, the full commit,
+   and `after:` the folder of the entry before it. If the release brought tables of its own, give it a `use`
+   function that fills them (above all those that hang off candidates or applications, with a row removed again so
+   that an id counter is ahead of its rows) and say in `leaves` the highest id each has then given out; with no
+   tables of its own, `use: () => {}` and `leaves: {}`.
+3. Run `npm test`. From then on what that release adds is held to exactly what its own code does (1), and no
+   longer to the general rule (3). A test "the database code kept from before is the code that was released"
+   compares the copy with git.
+
+One thing to look at when merging such a release: if it adds a column to `candidates` or `applications`, see that
+its `addColumn` comes before this change's own (`general_until`) in `server/db.js`, which is the order the two
+arrive in on a database that release has already opened. The other way round, the order of the columns would
+depend on which release opened the database first, and the tests say so ("the columns of applications").
+
+Until that is done the tests still pass, with the newer feature held to the general rule.
 
 **Before the first deploy, and if you ever go back.**
 
@@ -235,7 +307,10 @@ through it again.) All of this was run on made-up databases, not on a copy of a 
   - If you must go back for longer than it takes to fix a start, the safe order is: on this version, remove the
     people who came from The Book from their jobs (they return to The Book, which the old version shows to
     nobody), then roll back.
-`test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview, on four ports: the fifteenth,
+  - Somebody who came through a confidential post and has since gone back to The Book, or on to another job, has
+    no record on the board any more, so the old version does not take them for an applicant of that post either.
+`test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview (and, where this meets the
+agency's jobs page, a stand-in for the mail provider), on four ports: the fifteenth,
 sixteenth, eleventh and twelfth from `ORACLE_TEST_PORT`, or four in a row from `POOL_TEST_PORT` when that is set
 (`test/oracle-helpers.mjs` lists which test file uses which port, and a unit test checks that no two share one). `npm test` uses thirty ports in a row from `ORACLE_TEST_PORT` (3610 unless
 set): `ORACLE_TEST_PORT=5080 npm test`. Node refuses to fetch from a few ports whatever is listening on them
@@ -322,6 +397,239 @@ window under 1100 wide (a phone, a tablet, a small laptop window) the lists come
 picker opens behind **Add jobs** or **Add people**.
 
 Deleting a job or a candidate removes their items from every list. Merging two records of one person keeps them.
+
+## Jobs on our website (confidential posts)
+
+A client's careers page (`/careers/<client>`) advertises a job in the client's name. **Jobs on our website** is the other
+public face: a board in your agency's name, at `/board`, listing the jobs you have chosen to advertise yourselves
+without saying who the employer is. The two are kept apart on purpose. Nothing on the board comes from the client,
+and nothing on a client's careers page mentions the board.
+
+### A confidential post
+
+Every job has a **Confidential post** tab (agency only; the client's hiring team has no such tab and is sent nothing
+about it). On it you switch on **Post on our website (confidential)** and fill in what the public will see:
+
+- a **title**, which starts as the job's title;
+- a **location as it should be shown**, such as "Greater Toronto Area". It starts empty and is never copied from
+  the client;
+- the **working pattern and contract**, which are the job's own;
+- whether to **show the salary range**, and whether to **round it** (85,000 to 105,000 is shown as 80,000 to
+  110,000), which is how a new post starts;
+- the **advert text**, written for the purpose;
+- whether to **keep the job off the client's careers page** while the post is switched on. A new post starts with
+  this ticked: the job is then advertised on your board only, and there is no second advert to compare it with.
+
+That is everything the public is ever given about the job. The tab shows a preview drawn by the same code as the
+public page, the post's public link, how many people have applied through it, and a history of when it went public
+or came down and why. **Jobs, Jobs on our website** lists every post with whether it is public.
+
+A post is public while three things are true: it is switched on, its job is open, and the check below finds
+nothing. Switching it off, pausing or closing the job, or ending the work with the client takes it down, and its
+address stays the same if it comes back. A post that **the check** took down comes back at a **new address**: what
+was public at the old one had something in it that should not have been, and the old address then answers like one
+that was never a post, so a copy kept by a search engine or a link preview no longer leads to the post. A recruiter
+can also give a post a new address by hand ("Give it a new address"), for when a person spotted what the check
+could not.
+
+When the check takes a public post down, the admins and whoever last saved the post are **told by e-mail**, the
+Dashboard shows how many posts are switched on but not public, and whoever made the change is told on the spot. A
+client's own users are told nothing.
+
+### Drafting the advert
+
+With an AI key connected (the same `ANTHROPIC_API_KEY` as job autofill), **Draft it for me** sends the job's own
+advert to the AI service and asks for it to be written again with everything that could identify the employer taken
+out: the name and anything made from it, products and brand names, founders and other named people, addresses and
+neighbourhoods, exact headcount or funding figures, awards, slogans, links, and unusual phrases that could be
+searched for. The employer is described only in general terms ("a Series B health-tech company"), a step more
+generally than the client's advert does; how big the employer is (customers, sites, staff, revenue) is left out, not
+rounded; and an unusual title is replaced by the common one for the same job. A title you have already changed
+from the job's own is kept. The client's name,
+website and the names of its people are sent too, so that the service knows what to keep out. The draft lands in the
+form, with a list of what was taken out; nothing is saved until you save it. A draft that has not come back after two
+and a half minutes is given up on (`BOARD_AI_TIMEOUT_MS` changes how long). Without a key, you write the advert
+yourself.
+
+**The draft is a help, not the safeguard.** It is checked like anything you type.
+
+### The check
+
+Before a post can go public, and again whenever the post, the job or the client is changed, the title, the location
+and the text are searched for:
+
+- the client's **name**, and each **distinctive word** of it. Words that say what kind of company it is ("Health",
+  "Logistics", "Group", "Inc") are not looked for on their own; the whole name always is. A word of two letters
+  ("TD", "GM", "3M") is found where it is written in capitals or as the name has it. Also found: the name **without
+  its last words** ("Royal Bank" for Royal Bank of Canada, "Canada Health" for Canada Health Group), its
+  **initials** in capitals ("RBC", "TTC", "EY", and "TD" for Toronto-Dominion Bank), and a name without its final s
+  ("Loblaw" for Loblaws);
+- **other names you list for the client** on the tab (brands, products, short names). The list belongs to the
+  client: every post for that client is checked against it, at once;
+- the client's **careers address** (the part after `/careers/`), its **website** and the name in the website's
+  address;
+- the names of **everybody with a login at the client**, whether or not they still work there. The job's hiring
+  manager is among them, unless the hiring manager is one of your own team, whose name gives no client away. A full name is found however it is written; a first name or surname on its own is found where it
+  is written with a capital, because "may", "will" and "grace" are also ordinary words;
+- the **domains of their e-mail addresses** (not the public ones such as gmail.com);
+- **any link, e-mail address, phone number, hashtag or social-media handle at all**, whoever it belongs to.
+
+Capitals and accents make no difference ("LUMEN", "Lümen"), a name broken up with punctuation or spaces is still
+found ("L.u.m.e.n", "Lumen-Health", "L u m e n"), and so is a word of the name at the start or the end of a longer
+one ("Lumens", "TeamLumen", "teamlumen") and, when it is six letters or more, anywhere inside one
+("#lifeatbrambleworth"). Characters that cannot be seen (joiners, soft hyphens) are taken out of a post before it is
+stored, so what is checked is what is shown. Look-alike letters from the Cyrillic and Greek alphabets and small
+capitals are read as the letters they look like, and a word that mixes two alphabets is refused outright. Each
+thing found is shown in a sentence that says what it is and where, and the check also lists what it looked for.
+
+**A post that fails cannot go public, and a public post that starts to fail comes down** until it is fixed: a
+client is renamed to a word that is in the advert, somebody whose name is in it joins the client's hiring team. This
+does not depend on every screen remembering to ask: before anything is shown to the public, the posts that are
+switched on are checked again if anything at all has been saved since the last look.
+
+**Overruling a false alarm.** A client called North will be found in "North America". An admin can overrule a
+word of a name, a short form of it or its initials where that is plainly a false alarm. It is recorded with their name and the date, shown on the tab,
+and holds for that word with the same words either side of it only: "North" anywhere else in the post is found
+again. A whole name spelt out, a link or an address can never be overruled.
+
+**What the check cannot do.** It finds names and addresses. It cannot tell that "the company behind the city's
+blue rental bikes" gives a client away, or that a street name does. Read each advert as a stranger would.
+
+**Matching the two adverts.** A client's careers page and your board are at the same web address, so anybody who
+suspects a client can put its careers page beside your board. A new post therefore keeps its job **off the
+client's careers page** for as long as the post is switched on: the job is not listed there, and its address and
+form there answer as they do for a job that is not open. The job page in the workspace says "Not listed on the
+careers page", to your team and to the client's alike, and nothing more. Untick the box only when the client needs
+the job on its own page too. The check then compares the two adverts, and **stops the post** when the title is the
+same or when both show a salary range (the same figures, or yours rounded: the client's range sits inside it). It
+**warns** when a sentence is shared word for word, and always that both are public: working pattern and contract
+are the job's own on both, and both come down at the same moment when the job closes.
+
+**Clients' careers pages and search engines.** While any post is switched on, clients' careers pages are sent
+with a request to search engines not to list them, so that a search of your workspace's address does not set your
+clients out beside the board. The pages work as ever for anybody given their link. An admin can switch this off in
+Settings, Agency, Jobs on our website. `/robots.txt` lets search engines read the pages and the board's own data, and
+nothing else under `/api`.
+
+### The public board
+
+- `/board` lists the public posts, newest first, with a search box and filters for location and working pattern.
+  `/board/<token>` is one post, with its application form.
+- A post's address is a **random token**. It is not the job's number and cannot be turned into it; no public route
+  takes a job's number and returns a post, or the other way round.
+- The pages and the feed are built from a **list of allowed fields**: the token, title, location, working pattern,
+  contract, the salary range if you chose to show it (rounded, if you chose that), the day it was posted, and the
+  text. Never the client, its
+  colour or careers address, the job's number, who wrote the post, how many applied, or any other date.
+- An address that was never a post, a post that is switched off, one that came down and one whose job was deleted
+  all answer the same: "This role is no longer open."
+- The pages tell search engines and link previews the board's name and the role, and each post carries job-posting
+  data that gives **your agency as the organisation hiring** and says the employer is confidential.
+
+### Applying, and what the candidate is sent
+
+The form asks for a name, e-mail address, phone, LinkedIn profile, résumé and a note, and for agreement that your
+agency may hold the person's details and share the application with the employer. Your **agency's privacy notice**
+is linked beside it. The client's own screening questions and privacy notice are never shown there.
+
+- The application lands on the job like any other, with the source **Our website**, owned by nobody until a
+  recruiter takes it, and it is in the Inbox. "Our website" appears wherever sources are listed and in the reports
+  (to the client's hiring team it reads "Agency website"), and it is only ever an application made on the board.
+- **The client's hiring team sees the applicant on their job as they see any other**, as soon as they apply, and
+  nothing about the post. Bear that in mind for a search the client's own staff are not meant to know about.
+- The candidate's confirmation is **your agency's own** ("Thanks for applying through ..."), under the title on the
+  post, and names nobody else. It is the template "Application received (our website)" in Settings; if an edit
+  ever makes it name the client, the original wording is sent instead.
+- Each such candidate has a tick on their profile, **Knows who the client is**, which starts off. While it is off:
+  - what The Book sends by itself (the interview invitation, the "not moving forward" e-mail) uses the title they
+    applied under and says "our client" where the company's name would be. If the finished e-mail would name the
+    client all the same (an interview's location, an edited template), it is **not sent**, and whoever clicked is
+    told why;
+  - an e-mail a recruiter writes by hand shows a warning beside the send button when it names the client ("This
+    candidate applied through your confidential post. This message names ..."), and the button becomes "Send
+    anyway". Sent that way and delivered, the tick is made for you.
+- Somebody already in the job who applies again on the board is answered exactly as a new applicant would be,
+  confirmation included. Somebody who came through the board and then applies for the same job on the client's
+  careers page (when it is on both) is answered there as a new applicant the first time, and as somebody who has
+  already applied after that, exactly as for any other job. A different answer, or a different number of e-mails,
+  would tell them which employer the post was for.
+- Where a template says "The {{company}} hiring team" or starts a sentence with the company, the e-mail reads "Our
+  client’s hiring team" and "Our client ...", in what The Book sends and in the e-mail window alike.
+- Somebody who is in The Book without a job and applies here is answered like anybody else, and what is noted
+  about an applicant here (the title they saw, the tick) stays with the job they applied for: it does not follow
+  them back to The Book or on to another client's job. "People in The Book without a job" above says how the two
+  are kept apart.
+
+### Getting it onto your own website
+
+The Book cannot put a page on a website it does not run, so the board is offered three ways. All three are under
+**Settings, Agency, Jobs on our website**, each with a copy button.
+
+1. **Link to it.** The board's own address, `https://<your workspace>/board`.
+2. **Show it inside a page of your website.** A snippet to paste where the jobs should appear: a frame that shows
+   the board, and a short script that sizes the frame to its contents, so the page scrolls as one. Visitors
+   search, open a post and apply without leaving your page. No cookies are involved. The script also gives **each
+   role an address on your own website**: your page's address with `?role=<token>` on the end opens that role, and
+   the address in the browser follows the visitor from the list to a role and back, so a role can be bookmarked,
+   shared and linked to. It brings the role, or the application form, into view clear of a menu fixed to the top
+   of your page. And if the board has said nothing after eight seconds (your website is not on the list), it puts
+   a plain link, "See our open roles", in place of the blank space.
+3. **Read it as data.** `https://<your workspace>/board/feed.json`: every public post as plain JSON (`id`, `url`,
+   `title`, `location`, `working_pattern`, `contract`, `salary`, `posted`, `text`), for a web developer who wants to
+   draw the list themselves. Any website may read it. People apply at each post's `url`.
+
+Once the board is showing inside a page of your website, paste that page's address into **Address of the jobs page
+on your website** in the same setting. From then on a role's address is on your website: it is what "Copy link" on
+a post gives, what the feed's `url` holds, and what search engines and link previews are told is the address of the
+board and of each role.
+
+The board's pages, and only they, may be shown inside another website's page, and only by the websites listed in
+that setting (`otterbrook.ca` and `www.otterbrook.ca` to begin with). Every other page of The Book still refuses to
+be shown inside any page. A page opened at a board address shows the board and nothing else, wherever a link in it
+leads.
+
+**The owner's steps**, once this version is live:
+
+1. Open **Settings, Agency, Jobs on our website**. Check the name, add your logo and colour, paste the link to your
+   agency's candidate privacy notice, and check that the list of websites holds the address of your website as
+   visitors see it (with and without `www`). Save.
+2. If the workspace is reached at a domain of your own rather than the host's, set `APP_URL` to it where The Book
+   is hosted, so that links use it. (Railway's own address is detected by itself.)
+3. On each job you want to advertise: open its **Confidential post** tab, write the advert or have it drafted,
+   give it a location, list any other names the client goes by, deal with whatever the check finds, tick **Post on
+   our website (confidential)** and save. Leave **Keep this job off the client's careers page** ticked unless the
+   client needs the job on its own page as well. Read the preview as a stranger would.
+4. On your website, add a page (or open your careers page) and either link to the board or paste the snippet:
+   in Squarespace into a **Code** block, in Webflow into an **Embed** element, in WordPress into a **Custom HTML**
+   block, in plain HTML anywhere in the page. Publish the page and look at the published page, not the editor's
+   preview: the board should appear, and grow and shrink as you search and open a post.
+5. Paste the address of that page into **Address of the jobs page on your website** and save, so that each role
+   has an address on your website.
+6. Send one application through it yourself and check that it arrives in the Inbox with the source "Our website"
+   and that the confirmation e-mail reads as you want.
+
+**A blank space, or only a link saying "See our open roles", where the jobs should be?** The page's website is not
+in the list, so the board refused to show there. Open the published page, look at the address bar, and add the
+first part of that address (for example `www.otterbrook.ca`) to the list. Site builders show a page from an address
+of their own while it is being edited, so the board may not show in the editor. **Wix** shows pasted code from an
+address of Wix's own at all times: on Wix, link to the board (way 1) instead.
+
+### Before you rely on it
+
+- The snippet was tried in Chromium, at computer and phone widths, pasted into a plain page with a menu fixed to
+  its top, served from another address standing in for otterbrook.ca: the board showed, sized itself, listed,
+  opened a role with its top in view, gave the role an address on that page which opened the role again when the
+  page was reloaded, brought the form into view below the menu, and took an application inside the frame; the same
+  page at an address that was not on the list showed the link in place of the board after eight seconds. **It has not been tried on Squarespace, Wix,
+  Webflow or WordPress, on the real otterbrook.ca, or in Safari or Firefox.**
+- "Draft it for me" was only run against a stand-in for the AI service, so read the first real drafts closely.
+- A job on your board and on its client's careers page at once can still be compared by anybody who has both pages
+  open: the working pattern, the contract and what the job is are the same. Keeping the job off the careers page,
+  which is how a post starts, is the only thing that rules it out.
+- Your board and your clients' careers pages share one web address. Somebody who knows a client's careers address
+  there can see that it is a client of yours, as they could before the board existed.
+- Whether search engines list the posts, and how link previews look in a given app, was not checked: the details
+  are in the pages, in the form those services document.
 
 ## Reporting
 
@@ -789,7 +1097,7 @@ npm run seed
 npm run dev
 ```
 
-Open http://localhost:3000. `npm run seed` loads a demo agency with three fictional clients; skip it to start
+Open http://localhost:3000. `npm run seed` loads a demo agency with four fictional clients; skip it to start
 empty, in which case the first visit asks you to create your owner account.
 
 Settings are read from real environment variables, or from a `.env` file in the project folder if you create one
@@ -804,6 +1112,9 @@ Demo sign-ins (password `demo1234` for all):
 | Client hiring manager | `maya@lumenhealth.example` | Lumen Health only |
 
 Public careers page for the demo: http://localhost:3000/careers/lumen-health
+
+The demo's own job board: http://localhost:3000/board. It has two confidential posts. One is for a client called
+North, whose advert says "North America": the job's Confidential post tab shows the word overruled by an admin.
 
 To wipe the database and reload the demo: `npm run seed -- --reset`. This deletes every record, invitation link and uploaded résumé
 in `DATA_DIR`, so it refuses to run when `NODE_ENV=production` unless you add `--force`.
@@ -889,6 +1200,7 @@ server/
   api.js     All API routes: auth, careers pages, jobs, pipeline, interviews, reports
   reporting.js  The Individual and Clients reports: the record of submissions, first interviews, placements and searches, and the day counting starts
   todos.js   To do: each person's own lists of jobs to work on and people to prep and debrief, and what interviews add to them
+  board.js   Jobs on our website: the agency's confidential posts, the check that keeps the client out of them, the public board and its feed
   autofill.js  Drafting a job and its brief from a job description and intake notes
   oracle.js  Otterview: recording and uploading calls, transcription, notes and submission drafts
   metaview.js         Metaview in Otterview: the key, reading the list in the background, bringing calls in
@@ -905,14 +1217,15 @@ src/
   App.jsx, state.jsx, lib.js, ui.jsx   App shell, data hooks, helpers, shared components
   components/                           Candidate profile, modals, forms, layout
   oracle/                               What Otterview's screens share with the rest of the app (the recorder)
-  pages/                                One file per screen, plus the public careers pages
+  pages/                                One file per screen, plus the public careers pages and the agency's public job board
 ```
 
 Security basics in place: salted scrypt password hashing, HTTP-only same-site session cookies, every
 request checked against the signed-in user's client, rate limiting per visitor on sign-in, sign-up,
 invitations and public applications, a content security policy, résumé uploads restricted by type and size and only
 ever served back as downloads, length limits on everything the public form accepts, and a honeypot field on
-application forms. The code was reviewed by independent reviewers across authorization, web security, server
+application forms. No page may be shown inside another website's page, except the agency's job board inside the
+websites the agency lists. The code was reviewed by independent reviewers across authorization, web security, server
 logic, front end and deployment, and the confirmed findings were fixed.
 
 Candidate privacy: each application records when consent was given, each client can link its own privacy
@@ -954,4 +1267,9 @@ they made at that client, their résumé files, and their recorded calls with th
   `test/pool.test.mjs` against the real server, with an edited interview's invitation and history line; the page
   was driven in Chrome on the demo data at 1280 wide with a mouse and at 390 wide with touch input, and with the
   keyboard alone at both widths. It has not been tried on a real phone, or in Safari or Firefox.
+  Jobs on our website is tested through a story acted out against the real server with stand-ins for the AI and mail
+  services (everything the check must and must not find, posts coming down, the exact fields the public is given,
+  applying, every e-mail's whole text, which websites may frame which pages, and starting on a database made by the
+  version before it); the agency's screens, the public board and the board inside a stand-in for the agency's
+  website were driven in Chrome at 1280 and 390 wide on the demo data.
   The other screens were verified by hand.

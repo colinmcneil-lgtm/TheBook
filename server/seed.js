@@ -8,6 +8,7 @@ import path from 'node:path';
 import { db, q, tx, setSetting, createStages, DATA_DIR, UPLOAD_DIR } from './db.js';
 import { reportStart } from './reporting.js';
 import { catchUp } from './todos.js';
+import { savePost, overrule } from './board.js';
 
 const reset = process.argv.includes('--reset');
 if (process.env.NODE_ENV === 'production' && !process.argv.includes('--force')) {
@@ -21,9 +22,10 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   }
   console.log(`Wiping ${DATA_DIR} ...`);
   tx(() => {
-    for (const t of ['todos', 'report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'agency_emails', 'agency_activities', 'earlier_resumes', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
+    for (const t of ['board_applications', 'board_log', 'board_overrules', 'board_posts', 'todos', 'report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'agency_emails', 'agency_activities', 'earlier_resumes', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
       db.exec(`DELETE FROM ${t}`);
     db.exec(`DELETE FROM settings WHERE key LIKE 'metaview_%'`); // the demo is not connected to Metaview
+    db.exec(`DELETE FROM settings WHERE key LIKE 'board_%'`);    // the demo's job board starts as a new one does
     db.exec('DELETE FROM sqlite_sequence'); // a wiped database starts numbering from 1 again
   });
   for (const file of fs.readdirSync(UPLOAD_DIR)) fs.rmSync(path.join(UPLOAD_DIR, file), { recursive: true, force: true }); // résumés, photos and call audio of the rows just deleted
@@ -564,9 +566,102 @@ tx(() => {
   }
   const firstPrep = q.get(`SELECT id FROM todos WHERE user_id = ? AND kind = 'prep' AND done_at IS NULL ORDER BY position LIMIT 1`, priya);
   if (firstPrep) q.run('UPDATE todos SET note = ? WHERE id = ?', 'Send the interview pack and confirm the time', firstPrep.id);
+
+  // Jobs on our website: two confidential posts, so the agency's public board (/board) has something on it. Each is saved
+  // the way the form saves it, so each has been through the check.
+  //   - Lumen's senior engineer, written again so that nothing points to Lumen, with two people who applied through it.
+  //   - A job at a fourth client, called North. "North" is also an ordinary word, so the check stops at "North
+  //     America" in the advert. Alex, an admin, has overruled it there, and that is on record.
+  setSetting('board_privacy_url', 'https://harbourtalent.example/privacy');
+  const post = (jobId, fields, days) => {
+    const { id, state } = savePost(jobId, fields, true, alex);
+    for (const p of state.result.problems.filter((x) => x.can_overrule)) overrule(id, p.word, p.key, alex);
+    // As if it had been public for a few days.
+    q.run('UPDATE board_posts SET posted_at = ?, created_at = ?, updated_at = ? WHERE id = ?', ago(days), ago(days + 0.1), ago(days), id);
+    q.run('UPDATE board_log SET created_at = ? WHERE post_id = ?', ago(days), id);
+    q.run('UPDATE board_overrules SET created_at = ? WHERE post_id = ?', ago(days), id);
+    return id;
+  };
+  const cameThroughThePost = (jobId, postId, name, days, note) => {
+    const meta = q.get('SELECT j.client_id, p.title FROM jobs j JOIN board_posts p ON p.job_id = j.id WHERE j.id = ?', jobId);
+    const email = `${name.toLowerCase().replace(/[^a-z ]/g, '').replace(/ /g, '.')}@mail.example`;
+    const at = ago(days);
+    const candId = q.insert('INSERT INTO candidates (client_id, name, email, phone, linkedin, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      meta.client_id, name, email, demoPhone(), `https://www.linkedin.com/in/${email.split('@')[0].replace(/\./g, '-')}`, at);
+    const stage = q.get(`SELECT id FROM stages WHERE job_id = ? AND kind = 'applied'`, jobId).id;
+    const appId = q.insert(
+      `INSERT INTO applications (candidate_id, job_id, stage_id, source, cover_note, consent_at, applied_at, stage_entered_at, updated_at) VALUES (?, ?, ?, 'our_website', ?, ?, ?, ?, ?)`,
+      candId, jobId, stage, note, at, at, at, at);
+    q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage, at);
+    act(appId, null, 'applied', 'Applied via the agency’s website', at);
+    q.run('INSERT INTO board_applications (application_id, post_id, public_title) VALUES (?, ?, ?)', appId, postId, meta.title);
+    q.run(`INSERT INTO emails (application_id, to_email, subject, body, delivery, created_at) VALUES (?, ?, ?, ?, 'not_configured', ?)`, appId, email,
+      'Thanks for applying through Harbour Talent Partners',
+      `Hi ${name.split(' ')[0]},\n\nThanks for applying through Harbour Talent Partners for the ${meta.title} role. We have your application and one of our recruiters will read it shortly.\n\nWe are recruiting for this role on behalf of a client, and the employer’s name is kept confidential at this stage. If your experience looks like a match, we will be in touch to talk it through and tell you more.\n\nBest,\nHarbour Talent Partners`, at);
+  };
+
+  const engineerPost = post(jobs[0].id, {
+    title: 'Senior Software Engineer (Backend)', location: 'Central London', show_salary: true,
+    description: `Our client is a growing health-technology company whose software helps clinics run to time. Its product is used by several hundred clinics, and the engineering team is expanding this year.
+
+They are looking for a senior backend engineer to take ownership of the services behind a high-volume booking system.
+
+What you will do
+• Design, build and run backend services in TypeScript and Postgres
+• Make busy APIs faster and more reliable
+• Mentor other engineers and set the standard in code review
+
+What we are looking for
+• Five or more years building and running backend systems in production
+• Confident with SQL and data modelling
+• Used to working closely with product and design colleagues
+
+What is on offer
+• A competitive salary with equity
+• Hybrid working, with two days a week in the office
+• A generous budget for learning`,
+  }, 6);
+  cameThroughThePost(jobs[0].id, engineerPost, 'Rowan Achterberg', 2.2, 'Eight years in backend engineering, the last three leading a small team on a booking platform. Happy to talk whenever suits.');
+  cameThroughThePost(jobs[0].id, engineerPost, 'Thandiwe Mokoena', 0.2, null);
+
+  const north = client('North', 'north', '#1d4d3a', 'Outdoor clothing', 'Leeds',
+    'Outdoor clothing made to be repaired, not replaced.',
+    'North designs outdoor clothing in Leeds and sells it online and through independent shops. Every jacket we make can be sent back to our workshop to be mended.',
+    'per_hire', 0, 20, 30);
+  const hana = user('hana@north.example', 'Hana Sorensen', 'client', north, 'Operations Director');
+  const planner = job(north, 'Supply Chain Planner', 'Operations', 'Leeds', 'hybrid', 42000, 50000, hana, 'open', 9,
+    ['Recruiter screen', 'Hiring manager interview', 'Final interview'], ['Planning', 'Attention to detail', 'Communication', 'Ownership'],
+    describe('Plan the stock behind North’s growing range, from the first purchase order to the customer’s door.',
+      ['Forecast demand with our sales and product teams', 'Place and chase purchase orders', 'Keep the Leeds warehouse stocked through peak season'],
+      ['2+ years in supply chain or inventory planning', 'Confident in spreadsheets and an ERP system']),
+    'Hana wants somebody calm who has lived through a peak season.');
+  q.run(`INSERT INTO report_events (kind, job_id, client_id, at) SELECT 'search_opened', id, client_id, opened_at FROM jobs WHERE id = ?`, planner); // its kickoff, like the other searches above
+  const plannerPost = post(planner, {
+    title: 'Supply Chain Planner', location: 'West Yorkshire', show_salary: false,
+    description: `Our client makes outdoor clothing that is built to be repaired rather than replaced. It sells online and through stockists across Europe and North America, and it is growing quickly.
+
+They need a planner to keep stock moving between suppliers, the warehouse and customers.
+
+What you will do
+• Work out what will sell, with the sales and product teams
+• Raise purchase orders and keep suppliers to their dates
+• Hold stock at the right level through the busiest months
+
+What we are looking for
+• Two or more years in supply chain, merchandising or stock planning
+• At home in spreadsheets and with a stock system
+• Organised, calm and good with suppliers
+
+What is on offer
+• Hybrid working
+• A staff discount and an allowance for repairs
+• Twenty-eight days of holiday`,
+  }, 3);
+  cameThroughThePost(planner, plannerPost, 'Ffion Castellanos', 1.1, 'I plan stock for a cycling brand at the moment and would like a bigger range to look after.');
 });
 
 console.log(`Demo data loaded.
   Agency owner:  alex@harbourtalent.example / ${PASSWORD}
   Recruiter:     priya@harbourtalent.example / ${PASSWORD}
-  Client user:   maya@lumenhealth.example / ${PASSWORD}  (sees Lumen Health only)`);
+  Client user:   maya@lumenhealth.example / ${PASSWORD}  (sees Lumen Health only)
+  Job board:     /board  (two confidential posts)`);

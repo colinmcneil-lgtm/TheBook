@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FileUp, LoaderCircle } from 'lucide-react';
+import { FileUp, LoaderCircle, TriangleAlert } from 'lucide-react';
 import { api, url, firstName, sameName, watchForUpdate, renderTemplate, toLocalInput, fmtDateTime, jobLine, profilePath, INTERVIEW_KINDS, JOB_STATUS, RECOMMENDATIONS, REJECT_REASONS, SOURCES , photoUrl, squarePhoto } from '../lib.js';
 import { useApp, useApi, useOpenCandidate } from '../state.jsx';
 import { Button, Checkbox, Field, Input, Modal, Select, Textarea, Avatar, UpdateNotice, useAction, useToast, cx } from '../ui.jsx';
@@ -10,6 +10,26 @@ const useForm = (initial) => {
   const bind = (key) => ({ value: form[key] ?? '', onChange: (e) => setForm((f) => ({ ...f, [key]: e.target.value })) });
   return [form, setForm, bind];
 };
+
+/** Somebody who applied through the agency's confidential post and has not been told who the client is. Only the agency is sent this. */
+const inTheDark = (data) => Boolean(data.board && !data.board.client_known);
+/**
+ * A template filled in with "our client" where the company's name would be, put right where that reads badly: "The
+ * our client hiring team" becomes "Our client’s hiring team", and a sentence does not start with a small letter.
+ * The server does the same to the e-mails it sends by itself (ourClientWording in server/board.js).
+ */
+const ourClientWording = (text) => String(text)
+  .replace(/\b([Tt])he our client\b/g, (m, t) => (t === 'T' ? 'Our client’s' : 'our client’s'))
+  .replace(/(^|[.!?]\s+|\n\s*)our client/g, (m, lead) => `${lead}Our client`);
+/** Said beside a tick that sends one of the automatic e-mails to such a candidate. */
+function ConfidentialNote({ data }) {
+  if (!inTheDark(data)) return null;
+  return (
+    <p className="rounded-lg bg-violet-50 px-3 py-2 text-xs text-violet-950">
+      {firstName(data.candidate.name)} applied through your confidential post and has not been told who the client is. The e-mail uses the title they applied under (“{data.board.title}”) and says “our client” in place of {data.client.name}. If it would name {data.client.name} all the same, it is not sent.
+    </p>
+  );
+}
 
 function MailNote() {
   const { mailConfigured } = useApp();
@@ -28,8 +48,9 @@ export function RejectModal({ data, onClose }) {
   const [other, setOther] = useState('');
   const [sendEmail, setSendEmail] = useState(false);
   const [save, busy] = useAction(async () => {
-    await api.post(`/applications/${data.application.id}/reject`, { reason: reason === 'Other' ? other || 'Other' : reason, send_email: sendEmail });
+    const answer = await api.post(`/applications/${data.application.id}/reject`, { reason: reason === 'Other' ? other || 'Other' : reason, send_email: sendEmail });
     toast(`${firstName(data.candidate.name)} was rejected`);
+    if (answer.notice) toast(answer.notice, 'error'); // the e-mail was held back
     bump();
     onClose();
   });
@@ -43,6 +64,7 @@ export function RejectModal({ data, onClose }) {
       <Checkbox checked={sendEmail && Boolean(data.candidate.email)} disabled={!data.candidate.email} onChange={(e) => setSendEmail(e.target.checked)} label="Send the “Not moving forward” email"
         hint={data.candidate.email ? 'Uses the template in Settings. Reasons are never shared with the candidate.' : 'There is no email address on file for this candidate.'} />
       {sendEmail && <MailNote />}
+      {sendEmail && <ConfidentialNote data={data} />}
     </Modal>
   );
 }
@@ -65,9 +87,9 @@ export function ScheduleModal({ data, interview, onClose }) {
   const [save, busy] = useAction(async () => {
     const starts = new Date(form.starts_at);
     const details = { ...form, starts_at: starts.toISOString(), panel, notify, time_label: `${fmtDateTime(starts)} (${Intl.DateTimeFormat().resolvedOptions().timeZone})` };
-    if (interview) await api.patch(`/interviews/${interview.id}`, details);
-    else await api.post('/interviews', { ...details, application_id: data.application.id });
+    const answer = interview ? await api.patch(`/interviews/${interview.id}`, details) : await api.post('/interviews', { ...details, application_id: data.application.id });
     toast(interview ? 'Interview updated' : 'Interview scheduled');
+    if (answer.notice) toast(answer.notice, 'error'); // the invitation was held back
     bump();
     onClose();
   });
@@ -106,6 +128,7 @@ export function ScheduleModal({ data, interview, onClose }) {
       <Checkbox checked={notify && Boolean(data.candidate.email)} disabled={!data.candidate.email} onChange={(e) => setNotify(e.target.checked)} label={interview ? 'Email the updated invitation to the candidate' : 'Email the invitation to the candidate'}
         hint={data.candidate.email ? 'Uses the “Interview invitation” template with this time, format and location.' : 'There is no email address on file for this candidate.'} />
       {notify && <MailNote />}
+      {notify && <ConfidentialNote data={data} />}
     </Modal>
   );
 }
@@ -164,32 +187,71 @@ export function EmailModal({ data, onClose }) {
   const { data: templates } = useApi('/templates');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
+  // Somebody who applied through the confidential post and has not been told who the client is: templates are
+  // filled in with the title they applied under and "our client", the way the automatic e-mails are.
+  const dark = inTheDark(data);
   // Someone who is not on a job has no job title or company to fill in: those merge fields are left as they are in a
   // template, and the message cannot be sent until the recruiter has replaced them (see `unfilled`).
-  const vars = { candidate_first_name: firstName(data.candidate.name), candidate_name: data.candidate.name, job_title: data.job?.title, company: data.client?.name, sender_name: user.name };
+  const vars = { candidate_first_name: firstName(data.candidate.name), candidate_name: data.candidate.name, job_title: dark ? data.board.title : data.job?.title,
+    company: dark ? 'our client' : data.client?.name, sender_name: user.name };
+  const [applied, setApplied] = useState(null); // the text a template put in, to tell "this template" from "this message"
+  const fill = (text) => (dark ? ourClientWording(renderTemplate(text, vars)) : renderTemplate(text, vars));
   const apply = (id) => {
     const t = templates?.find((x) => String(x.id) === id);
     if (!t) return;
-    setSubject(renderTemplate(t.subject, vars));
-    setBody(renderTemplate(t.body, vars));
+    setSubject(fill(t.subject));
+    setBody(fill(t.body));
+    setApplied(`${fill(t.subject)}\n${fill(t.body)}`);
   };
-  const unfilled = `${subject}\n${body}`.match(/\{\{\s*\w+\s*\}\}/g);
+  // Asked a moment after the recruiter stops typing: does this message name the client? The server asks itself again when it is sent.
+  const [names, setNames] = useState(false);
+  const message = `${subject}\n${body}`;
+  useEffect(() => {
+    if (!dark) return undefined;
+    let live = true;
+    const timer = setTimeout(async () => {
+      try { const answer = await api.post(`/applications/${data.application.id}/emails/check`, { subject, body }); if (live) setNames(answer.names_client); } catch { /* the server checks again on sending */ }
+    }, 350);
+    return () => { live = false; clearTimeout(timer); };
+  }, [message, dark]);
+  const unfilled = message.match(/\{\{\s*\w+\s*\}\}/g);
   const [send, busy] = useAction(async () => {
-    const result = await api.post(`/applications/${data.application.id}/emails`, { subject, body });
+    let result;
+    try {
+      result = await api.post(`/applications/${data.application.id}/emails`, { subject, body, names_client_ok: names });
+    } catch (err) {
+      if (err.data?.code === 'names_client') setNames(true); // typed and sent before the warning could show: it shows now, and nothing was sent
+      throw err;
+    }
     toast(result.delivery === 'sent' ? 'Email sent' : result.delivery === 'failed' ? 'Saved, but delivery failed' : 'Saved to the record (delivery not connected)', result.delivery === 'failed' ? 'error' : 'ok');
     bump();
     onClose();
   });
   return (
     <Modal title={`Email ${data.candidate.name}`} subtitle={data.candidate.email || 'No email address on file'} onClose={onClose} onSubmit={send}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={Boolean(unfilled) || !data.candidate.email}>Send email</Button></>}>
+      footer={<>
+        {dark && names && (
+          <p role="alert" className="flex basis-full items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[13px] text-amber-950">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <span>This candidate applied through your confidential post. This {applied === message ? 'template' : 'message'} names {data.client.name}. Send it only if you mean to tell them who the client is.</span>
+          </p>
+        )}
+        <Button onClick={onClose}>Cancel</Button>
+        <Button type="submit" variant="primary" busy={busy} disabled={Boolean(unfilled) || !data.candidate.email}>{dark && names ? 'Send anyway' : 'Send email'}</Button>
+      </>}>
       {!data.candidate.email && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">Add an email address for this candidate first (More actions, Edit details).</p>}
       <MailNote />
+      {dark && (
+        <p className="rounded-lg bg-violet-50 px-3 py-2 text-xs text-violet-950">
+          {firstName(data.candidate.name)} applied through your confidential post (“{data.board.title}”) and has not been told who the client is. Templates say “our client” in place of {data.client.name}. Once they know, tick “Knows who the client is” on their profile.
+        </p>
+      )}
       <Field label="Start from a template">
         <Select defaultValue="" onChange={(e) => apply(e.target.value)}>
           <option value="">Blank message</option>
-          {/* The interview invitation is sent from the Schedule dialog, where the time and place are known. */}
-          {(templates || []).filter((t) => t.key !== 'interview_invite').map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          {/* The interview invitation is sent from the Schedule dialog, where the time and place are known. The
+              confirmation for the agency's own job board goes out by itself when somebody applies there. */}
+          {(templates || []).filter((t) => t.key !== 'interview_invite' && t.key !== 'board_application_received').map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </Select>
       </Field>
       <Field label="Subject"><Input value={subject} onChange={(e) => setSubject(e.target.value)} required /></Field>

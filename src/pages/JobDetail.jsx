@@ -8,6 +8,7 @@ import { JobStatusBadge, ReviewBadge } from '../components/bits.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
 import JobForm from '../components/JobForm.jsx';
 import JobBrief from '../components/JobBrief.jsx';
+import JobBoardPost from '../components/JobBoardPost.jsx';
 
 // The tab each person used last, remembered per person: on a shared computer the next one starts on their own.
 const tabKey = (user) => `thebook.jobtab.${user.id}`;
@@ -148,7 +149,7 @@ export default function JobDetail() {
   const [params, setParams] = useSearchParams();
   const [modal, setModal] = useState(null);
   // The address decides the tab, then whichever tab this person used last; recruiters start on the brief, clients on the pipeline.
-  const allowed = isAgency ? ['brief', 'pipeline', 'all', 'details'] : ['pipeline', 'all', 'details'];
+  const allowed = isAgency ? ['brief', 'pipeline', 'all', 'details', 'post'] : ['pipeline', 'all', 'details'];
   const tab = [params.get('tab'), lastTab(user), allowed[0]].find((t) => allowed.includes(t));
   const setTab = (t) => {
     try { localStorage.setItem(tabKey(user), t); } catch { /* storage unavailable */ }
@@ -160,7 +161,12 @@ export default function JobDetail() {
   const { data: apps, error: appsError } = useApi(url('/applications', { job_id: id, status: 'all' }));
   const inPlay = useMemo(() => (apps || []).filter((a) => a.status === 'active' || a.status === 'hired'), [apps]);
 
-  const [setStatus] = useAction(async (status) => { await api.patch(`/jobs/${id}/status`, { status }); toast(`Job is now ${JOB_STATUS[status].label.toLowerCase()}`); bump(); });
+  const [setStatus] = useAction(async (status) => {
+    const answer = await api.patch(`/jobs/${id}/status`, { status });
+    toast(`Job is now ${JOB_STATUS[status].label.toLowerCase()}`);
+    if (answer.board_notice) toast(answer.board_notice, 'error'); // the job's confidential post came down with it
+    bump();
+  });
   const [remove] = useAction(async () => {
     // People who were in The Book before they were put on this job are not deleted with it: the workspace sends them back.
     if (!window.confirm('Delete this job and every candidate in it? Anyone who was in The Book before they were added to this job goes back to The Book without a job, with their notes, résumé and calls. Everyone else in the job is deleted. This cannot be undone.')) return;
@@ -189,12 +195,14 @@ export default function JobDetail() {
       subtitle={[job.client_name, job.location, WORK_MODES[job.work_mode], salaryRange(job.salary_min, job.salary_max, job.currency)].filter(Boolean).join(' · ')}
       actions={
         <>
-          {job.status === 'open' && (
+          {job.status === 'open' && job.careers_page && (
             <>
               <Button icon={Copy} onClick={copyLink}>Copy apply link</Button>
               <a href={careersUrl} target="_blank" rel="noreferrer"><Button icon={ExternalLink}>View advert</Button></a>
             </>
           )}
+          {/* A job the agency advertises on its own board only. Everybody is told that it is not on the careers page; only the agency has the tab that says why. */}
+          {job.status === 'open' && !job.careers_page && <span className="self-center text-[13px] text-stone-500">Not listed on the careers page</span>}
           {isAgency && (
             <>
               <Menu
@@ -215,11 +223,14 @@ export default function JobDetail() {
       <Link to="/jobs" className="no-print -mt-3 mb-3 inline-flex items-center gap-1 text-[13px] text-stone-500 hover:text-stone-800"><ArrowLeft className="size-3.5" />All jobs</Link>
       <Tabs className="mb-4" value={tab} onChange={setTab}
         tabs={[isAgency && { id: 'brief', label: 'Brief' }, { id: 'pipeline', label: 'Pipeline', count: inPlay.length }, { id: 'all', label: 'All candidates', count: apps.length },
-          { id: 'details', label: isAgency ? 'Advert and setup' : 'Job details' }].filter(Boolean)} />
+          { id: 'details', label: isAgency ? 'Advert and setup' : 'Job details' },
+          // The agency's own advert for this job, on its public job board. The client's hiring team has no such tab.
+          isAgency && { id: 'post', label: 'Confidential post' }].filter(Boolean)} />
       {tab === 'brief' && <JobBrief job={job} stages={stages} />}
       {tab === 'pipeline' && <Board stages={stages} apps={inPlay} />}
       {tab === 'all' && <ApplicationsTable rows={apps} showJob={false} empty="Nobody has applied yet. Share the apply link or add candidates you have sourced." />}
       {tab === 'details' && <Details job={job} stages={stages} />}
+      {tab === 'post' && isAgency && <JobBoardPost job={job} />}
       {modal === 'edit' && <JobForm job={job} stages={stages} onClose={() => setModal(null)} />}
       {modal === 'add' && <AddCandidateModal jobId={job.id} onClose={() => setModal(null)} onAdded={openCandidate} />}
     </Page>

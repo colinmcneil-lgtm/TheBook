@@ -9,7 +9,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 
-const MODEL = process.env.AUTOFILL_MODEL || 'claude-opus-5-5';
+export const MODEL = process.env.AUTOFILL_MODEL || 'claude-opus-5-5';
 export const aiConfigured = () => Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
 let client = null;
 const anthropic = () => (client ||= new Anthropic());

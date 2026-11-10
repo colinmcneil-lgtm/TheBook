@@ -221,8 +221,8 @@ test('no two groups of tests are given the same port, so the files can run at th
   }
   // And the ports the files are handed are the plan's: each name starts its own group, or sits inside one.
   const base = PORTS.main;
-  assert.deepEqual([PORTS.pool - base, PORTS.poolMail - base, PORTS.todos - base, PORTS.reporting - base, PORTS.workspace - base, PORTS.metaview - base],
-    ['pool', 'poolMail', 'todos', 'reporting', 'workspace', 'metaview'].map((group) => PORT_PLAN[group][0]));
+  assert.deepEqual([PORTS.pool - base, PORTS.poolMail - base, PORTS.todos - base, PORTS.reporting - base, PORTS.workspace - base, PORTS.metaview - base, PORTS.board - base],
+    ['pool', 'poolMail', 'todos', 'reporting', 'workspace', 'metaview', 'board'].map((group) => PORT_PLAN[group][0]));
   for (const [name, port] of Object.entries(PORTS)) assert.ok(taken.has(port - base), `${name} is a port of the plan`);
   // The four the tests of people saved without a job use, and the two the to-do tests use, share none.
   const pool = [PORTS.pool, PORTS.pool + 1, PORTS.poolMail, PORTS.poolMail + 1], todos = [PORTS.todos, PORTS.todos + 1];

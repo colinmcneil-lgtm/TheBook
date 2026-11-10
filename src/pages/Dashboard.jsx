@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarDays, Briefcase, Inbox, Hourglass, ClipboardCheck, ArrowRight, UserPlus, CalendarCheck, ArrowUpRight, ThumbsUp, Handshake, Trophy } from 'lucide-react';
+import { CalendarDays, Briefcase, Inbox, Hourglass, ClipboardCheck, ArrowRight, UserPlus, CalendarCheck, ArrowUpRight, ThumbsUp, Handshake, Trophy, EyeOff } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, ago, daysSince, firstName, fmtDay, photoUrl, plural } from '../lib.js';
 import { Card, CardHeader, Empty, Page, Stat, Avatar } from '../ui.jsx';
@@ -82,8 +82,10 @@ export default function Dashboard() {
         <Stat Link={Link} to="/reports" label="Hires" value={s.hires_90d} hint="last 90 days" />
       </div>
 
-      {(nav?.scorecards_due > 0 || nav?.pending_accounts > 0 || s.pending_review > 0 || (isAgency && s.new_applicants > 0)) && (
+      {(nav?.scorecards_due > 0 || nav?.pending_accounts > 0 || nav?.board_down > 0 || s.pending_review > 0 || (isAgency && s.new_applicants > 0)) && (
         <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {/* A confidential post that is switched on but not on the board: the check took it down, or its job is no longer open. */}
+          {nav?.board_down > 0 && <Nudge icon={EyeOff} to="/jobs?view=board">{plural(nav.board_down, 'confidential post is', 'confidential posts are')} switched on but not public</Nudge>}
           {nav?.pending_accounts > 0 && <Nudge icon={UserPlus} to="/settings?tab=team">{plural(nav.pending_accounts, 'person', 'people')} waiting for you to approve their account</Nudge>}
           {isAgency && s.new_applicants > 0 && <Nudge icon={Inbox} to="/inbox">{plural(s.new_applicants, 'new applicant')} to review</Nudge>}
           {s.pending_review > 0 && (

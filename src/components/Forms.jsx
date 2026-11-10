@@ -16,8 +16,10 @@ export function ClientForm({ client, onClose, onSaved }) {
   }));
   const bind = (key) => ({ value: form[key] ?? '', onChange: (e) => setForm((f) => ({ ...f, [key]: e.target.value })) });
   const [save, busy] = useAction(async () => {
-    const id = client ? (await api.put(`/clients/${client.id}`, form), client.id) : (await api.post('/clients', form)).id;
+    const saved = client ? await api.put(`/clients/${client.id}`, form) : await api.post('/clients', form);
+    const id = client ? client.id : saved.id;
     toast(client ? 'Client saved' : `${form.name} added`);
+    if (saved.board_notice) toast(saved.board_notice, 'error'); // a new name or address is now in one of this client's confidential posts
     await reloadMe();
     bump();
     onClose();
