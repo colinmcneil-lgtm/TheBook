@@ -9,6 +9,7 @@ import { registerAutofill } from './autofill.js';
 import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, moveCalls, forgetSavedNote } from './oracle.js';
 import { registerPhone, registerPhoneWebhooks } from './phone.js';
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
+import { registerCalendar } from './calendar.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -472,6 +473,8 @@ registerAutofill(api, { agencyOnly, bad, clean, text, takeHit, briefFields: (b) 
 registerOracle(api, { agencyOnly, bad, clean, int, takeHit, logActivity, loadApp: (id, user) => loadApp(id, user) });
 // Phone calls (click to call, the switchboard, calls coming in to The Book's number) live in their own module as well.
 registerPhone(api, { agencyOnly, bad, clean, int, logActivity, loadApp: (id, user) => loadApp(id, user) });
+// Your calendar in The Oracle (a saved calendar link, the day's events and who they are with) is a module of its own as well.
+registerCalendar(api, { agencyOnly, bad, takeHit, loadApp: (id, user) => loadApp(id, user) });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);

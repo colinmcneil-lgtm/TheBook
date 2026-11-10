@@ -21,6 +21,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
 | **Shortlist hand-off** | Submit a candidate to the hiring team with your write-up. They approve (the candidate moves to the next interview stage) or decline with a reason, so you can calibrate. |
 | **Interviews** | Schedule with a panel, download a calendar file, and collect a structured scorecard from each interviewer against the criteria set on the job. Outstanding scorecards are chased in the sidebar and dashboard. |
+| **Your calendar** | Each recruiter can connect their own calendar to The Oracle with a private link. Their day is shown with The Book's interviews in it, each event says which candidate it is probably with, and "+ Add" marks the ones to record. Agency only. See [Your calendar in The Oracle](#your-calendar-in-the-oracle). |
 | **Email** | Templates with merge fields; every message is recorded on the candidate. Application confirmations, interview invitations and rejections can be sent automatically. |
 | **Reports** | Funnel conversion, source effectiveness, weekly application volume, time to hire, open-role ageing and hires. Printable for client reviews. Your retainer and placement-fee revenue is shown to your agency only. |
 | **Access** | Agency admins and recruiters see every client. Client users see only their own company, and never see your fees, internal brief or agency-only notes. |
@@ -372,6 +373,125 @@ checks on real calls between the team's own phones, in this order:
 - Talking through the browser with a headset instead of your own phone.
 - Ringing several recruiters at once for a call that comes in, and text messages.
 
+## Your calendar in The Oracle
+
+A recruiter's day, in the same place they record their calls: the events from their own calendar and The Book's
+interviews in one list, each with the candidate it is probably with, a button to join or call, and "+ Add" to mark
+the ones to record. Nothing has to be set up on the server, and nobody registers an app with Google or Microsoft:
+each recruiter pastes one private link from their calendar.
+
+### Getting your link
+
+The steps below are as Google, Microsoft and Apple describe them. They were not tried while this was built (see
+[Before you rely on it](#before-you-rely-on-the-calendar)).
+
+- **Google Calendar** (on a computer, not the phone app): open Google Calendar, click the gear, then **Settings**.
+  In the left column, under **Settings for my calendars**, click your calendar's name, then **Integrate calendar**.
+  Copy the link under **Secret address in iCal format**. If your agency uses Google Workspace and that field is not
+  there, an administrator has to change one setting first: Admin console, Apps, Google Workspace, Calendar,
+  **Sharing settings**, **External sharing options for primary calendars**, and choose "Share all information, but
+  outsiders cannot change calendars". Google says this can take up to 24 hours to appear. Changing it publishes
+  nothing by itself: a calendar can only be read by someone who has its secret link.
+- **Outlook / Microsoft 365** (Outlook on the web): click the gear, then **Calendar**, then **Shared calendars**.
+  Under **Publish a calendar** choose your calendar and **Can view all details**, then **Publish**. Click the **ICS**
+  link that appears and choose **Copy link**. With a lower level of detail every event is just called "Busy". If
+  "Publish a calendar" is missing, your Microsoft 365 administrator has switched it off (Exchange admin center,
+  Organization, Individual Sharing: the sharing policy needs the domain "Anonymous"). Outlook publishes three months
+  back and three months ahead, and its published link very probably leaves out the guest list, so events from
+  Outlook are matched to candidates by name and phone number, not by e-mail address.
+- **Apple iCloud**: at icloud.com/calendar, click the sharing control beside the calendar, turn on **Public
+  Calendar** and copy the link (it starts `webcal://`, which is fine). On an iPhone: Calendar, Calendars, the (i)
+  beside the calendar, Public Calendar, Share Link.
+
+Paste the link into The Oracle. The Book reads the calendar once before accepting the link, and says plainly what
+is wrong if it cannot. One calendar per person; to use another, paste its link in place of the first.
+
+**Treat the link like a password.** Anyone who has it can read that calendar. The Book stores it sealed, never
+shows it again (not to you, not to an admin) and never writes it to a log. To take access away, remove the link in
+The Oracle, and to be sure, also reset it where it came from: **Reset** beside the secret address in Google,
+**Unpublish** in Outlook, or turn Public Calendar off in iCloud.
+
+### What the day shows
+
+- The events of the chosen day on the recruiter's own clock, wherever the server runs, including the days when the
+  clocks change. Cancelled events, and single dates of a repeating event that were cancelled or deleted, are left out.
+- **The Book's own interviews** for that person (candidates they own, interviews they scheduled or sit on the
+  panel of), with the candidate already known. When a calendar event is plainly the same meeting as one of those
+  (same candidate, within ten minutes), it is shown once, as the interview, with the calendar's link to join.
+- **The link to join**, when the event has one for Google Meet, Zoom, Microsoft Teams or Webex. No other kind of
+  link is ever offered, so an invitation cannot put an arbitrary link behind a button.
+- **A phone number**, when the event names a person's number. Numbers that belong to a meeting's dial-in
+  instructions are recognised and ignored.
+- **Who it is with.** In this order: a guest's e-mail address that is a candidate's; a phone number in the event
+  that is a candidate's; a candidate's exact full name in the title or as a guest's name (accents and capitals do
+  not matter). Anything weaker is only offered as a suggestion and never chosen: "Call Kevin" with two Kevins on
+  file asks which one, and with one Kevin on file still only offers him. The same goes for two candidates among the
+  guests, two people with one name, and one person on file at two clients and in progress at both. The recruiter
+  can always choose the candidate themselves, and their choice wins.
+- **"+ Add"** marks an event to be recorded. The mark stays with the event when it is renamed or moved, and a call
+  recorded from an event is shown on it afterwards.
+
+A recruiter only ever sees and changes their own day. Client users see none of this.
+
+### How fresh it is
+
+The Book reads a calendar at most once every five minutes while its owner is looking at their day, and the day can
+be asked to read it again at once. If the calendar cannot be reached, the last copy is shown for up to six hours with a line
+saying why and how old it is. How quickly Google, Outlook and iCloud put a new event into their links is theirs to
+decide and could not be measured here.
+
+### What is kept, and where
+
+- The link, sealed with a key that the server makes on first use and keeps in `DATA_DIR/server-secret`. Back the
+  data folder up as a whole. If that file is lost, saved links can no longer be opened and are pasted in again;
+  nothing else is affected.
+- For each event a person has been shown: its key (meaningless outside The Book and different for each person),
+  the day it was on, and whether it was added, given a candidate or recorded. No titles, guests, descriptions or
+  times from the calendar are stored. Events nobody did anything with are forgotten after 30 days.
+- The calendar itself is held in memory only, and dropped when its link is removed. Descriptions and locations
+  never leave the server; the day view sends titles, times, guests, the link to join and the phone number.
+- Removing the link removes all of the above for that person's calendar events.
+
+### Safety
+
+A pasted link makes the server fetch an address somebody typed, so the reader is strict: https only, the standard
+port only, no private, loopback or link-local addresses (checked for every address the name has, again on every
+redirect, and the connection is made to exactly the address that was checked), at most five redirects, no cookies,
+10 MB and 15 seconds at most, and what comes back has to be a calendar. Saving a link can be tried twelve times an
+hour per person. Everything inside an event is text a stranger may have written (anyone can send an invitation):
+it is cut to length before it is looked at, shown as text only, and large calendars are read on a thread of their
+own so that reading one never holds up anybody else.
+
+### Limits
+
+- A day shows at most 150 events from the calendar; a calendar over 10 MB is not read.
+- A repeating event changed "from this date onwards" keeps its marks when the calendar gives the later dates a new
+  identity but the same title and time (as Google does). If the time changed too, the mark on a later date is lost.
+  Calendars that write such a change in the standard's other form (rare) are only read for the first changed
+  date, and the day says so.
+- A time zone that is neither a real one nor properly defined in the calendar is shown exactly as written, with a
+  line saying so.
+- Dates added to a repeating event one by one (the standard's `RDATE`) are not shown.
+- The reader connects directly and ignores any outbound proxy.
+
+### Before you rely on the calendar
+
+No real Google, Outlook or iCloud link could be fetched from where this was built: those services were not
+reachable, and no account was available. The reader was tested against calendar files written to look like what
+they publish, and against local servers playing every trick the reader has to refuse. So, with the first real link:
+
+1. Create an event with a guest and a Meet or Teams link, paste the calendar's link into The Oracle, and check
+   that the event appears with its guest, its link to join and the right time. Note how long a new event takes to
+   show up when the day is read again.
+2. If the guests are missing (expected for Outlook), matching will rest on names and phone numbers.
+3. If the day shows a line about a time zone it does not know, send that event's details to whoever maintains this.
+4. Whether Railway's network reaches Google and Microsoft over IPv6 as well as IPv4 does not matter to the reader
+   (it tries every address a name has), but a live IPv6 connection was never exercised.
+
+The calendar tests are part of `npm test`. They start servers on five ports from `CALENDAR_TEST_PORT` (3640 unless
+set). To let the real API be tested on calendar files, the server reads links to `https://calendar.test/<name>.ics`
+from the folder named in `CALENDAR_TEST_FILES`; that setting is refused when `NODE_ENV` is `production`.
+
 ## Chrome extension
 
 `extension/` is a Chrome extension for sourcing. On a LinkedIn profile (or a GitHub profile, or a company's team
@@ -506,6 +626,12 @@ server/
   db.js      SQLite schema and helpers (Node's built-in node:sqlite, no native modules)
   links.js   How profile links are stored, and which ones identify a person
   mail.js    Optional SMTP delivery; every email is logged either way
+  calendar.js         Your calendar in The Oracle: the saved link, the day's events and who they are with
+  calendar-fetch.js   Reads a pasted calendar link without being led into the server's own network
+  calendar-day.js     One day's events out of a calendar file, on the recruiter's clock
+  calendar-worker.js  Runs that reading on a thread of its own
+  calendar-links.js, calendar-match.js, calendar-time.js   Links to join and phone numbers, names, time zones
+  secret.js  The server's own secret, kept in the data folder; seals saved calendar links
   seed.js    Demo data
 src/
   App.jsx, state.jsx, lib.js, ui.jsx   App shell, data hooks, helpers, shared components
@@ -526,7 +652,11 @@ they made at that client, their résumé files, and their recorded calls with th
 
 ## Not built yet
 
-- Calendar integration (Google or Microsoft) for live availability and automatic invites; today you get a calendar file to download.
+- Calendar integration (Google or Microsoft) for live availability and automatic invites; today you get a calendar file to
+  download. The Oracle reads a recruiter's own calendar from a private link, but writes nothing to it, and is not told
+  the moment something changes.
+- A reminder when an added event is about to start, and a sign-in to Google or Microsoft in place of the pasted link
+  (which would also bring guest lists for Outlook).
 - Self-service password reset by email. Until then, an agency user deactivates the account and invites the person
   again at the same address (see "Accounts and getting back in").
 - Declining many account requests at once; each is declined on its own, and unanswered ones expire after 14 days.
