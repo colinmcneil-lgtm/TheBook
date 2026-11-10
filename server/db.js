@@ -571,7 +571,8 @@ db.exec(`
 -- candidate records keeps them, because the application they hang from is kept.
 CREATE TABLE IF NOT EXISTS report_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind TEXT NOT NULL,                                -- search_opened | submission | first_interview | placement
+  kind TEXT NOT NULL,                                -- search_opened | submission | first_interview | placement, or hired_earlier: a note, never
+                                                     -- counted, that the candidate was hired in this job before anything was written down
   application_id INTEGER REFERENCES applications(id) ON DELETE CASCADE, -- empty for search_opened
   candidate_name TEXT,                               -- as it was at that moment
   job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -583,7 +584,7 @@ CREATE TABLE IF NOT EXISTS report_events (
   salary INTEGER, fee_percent REAL,                  -- what the fee was worked out from
   fee INTEGER, currency TEXT,                        -- the fee, in the client's currency at that moment; empty when it could not be worked out
   fee_edited INTEGER NOT NULL DEFAULT 0,             -- 1 = somebody corrected the fee by hand
-  set_aside_at TEXT                                  -- the hired candidate was rejected or withdrew; not counted until they are returned
+  set_aside_at TEXT                                  -- the hired candidate was moved out of Hired, rejected or withdrew; not counted until they are hired again
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_report_events_once ON report_events(application_id, kind) WHERE application_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_report_events_search ON report_events(job_id) WHERE kind = 'search_opened';

@@ -118,6 +118,9 @@ function Overview() {
                   </React.Fragment>
                 ))}
               </div>
+              <p className="border-t border-line px-4 py-2.5 text-xs text-stone-500">
+                Placement fees are the fees recorded when each candidate was hired, the same figures as on the Clients report. A hire from before counting started is estimated from the client’s terms today.
+              </p>
             </Card>
           )}
 

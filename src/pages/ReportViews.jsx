@@ -32,7 +32,8 @@ export function ReportTabs() {
 
 const Dash = () => <span className="text-stone-400">–</span>;
 const longDay = (ymd) => new Date(`${ymd}T00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-const wholePercent = (n) => `${Math.round(n)}%`;
+/** The server sends percentages already rounded to a whole number; rounding again here could push one a point too high. */
+const wholePercent = (n) => `${n}%`;
 const days = (n) => `${Number.isInteger(n) ? n : n.toFixed(1)} ${n === 1 ? 'day' : 'days'}`;
 /** Fees as written, one figure per currency: "£12,000", or "£12,000 + CA$8,000" when a client has been billed in two. */
 const moneyList = (list, joiner = ' + ') => (list.length ? list.map((m) => money(m.amount, m.currency)).join(joiner) : null);
@@ -71,6 +72,11 @@ function Start({ start, children }) {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl border border-line bg-white px-4 py-3 text-sm">
           <p className="min-w-0 flex-1 basis-64 text-stone-600">
             <span className="font-medium text-stone-900">Counting from {longDay(start.date)}.</span> Nothing before that day is counted, and “lifetime” means since then.
+            {start.recorded_from && (
+              <span className="mt-1 block text-amber-800">
+                The Book began writing these numbers down on {fmtDate(start.recorded_from, true)}, so nothing before then is included.
+              </span>
+            )}
           </p>
           {change}
         </div>
@@ -135,6 +141,9 @@ function useSorting(defaultDir) {
     toggle: (key, now) => set(now.sort === key ? { sort: key, dir: now.dir === 'asc' ? 'desc' : 'asc' } : { sort: key, dir: defaultDir(key) }),
   };
 }
+
+/** How The Book knows a first interview happened. Said on both reports, because a recruiter who skips these steps reads as having none. */
+const HOW_INTERVIEWS_COUNT = 'It is counted when a submitted candidate is moved into an interview stage ticked “Interview with the client” on the job, or an interview is scheduled for them in The Book. A candidate taken straight to Offer or Hired is not counted as interviewed.';
 
 // ---------- Individual ----------
 const PERIODS = [['all', 'Since counting started'], ['month', 'This month'], ['30d', 'Last 30 days'], ['90d', 'Last 90 days'], ['12m', 'Last 12 months']];
@@ -226,7 +235,7 @@ export function IndividualReport() {
           </Card>
           <dl className="mt-4 grid gap-x-8 gap-y-2 text-[13px] leading-relaxed text-stone-500 sm:grid-cols-2">
             <div><dt className="inline font-medium text-stone-700">Submissions. </dt><dd className="inline">Candidates sent to the client’s hiring team for the first time, credited to whoever sent them.</dd></div>
-            <div><dt className="inline font-medium text-stone-700">Interviews. </dt><dd className="inline">Submitted candidates who got their first interview with the client, credited to whoever submitted them.</dd></div>
+            <div><dt className="inline font-medium text-stone-700">Interviews. </dt><dd className="inline">Submitted candidates who got their first interview with the client, credited to whoever submitted them. {HOW_INTERVIEWS_COUNT}</dd></div>
             <div><dt className="inline font-medium text-stone-700">Interview/Submission ratio. </dt><dd className="inline">Interviews divided by submissions, both in the period shown.</dd></div>
             <div><dt className="inline font-medium text-stone-700">Placements. </dt><dd className="inline">Candidates marked hired, credited to the recruiter who owned them at that moment.</dd></div>
           </dl>
@@ -248,8 +257,8 @@ const MONEY_METRICS = ['billings', 'billings_12m', 'avg_fee'];
 function clientValues(r) {
   const under = (text) => <span className="block text-xs font-normal text-stone-500">{text}</span>;
   return {
-    reqs: r.reqs || <Dash />,
-    reqs_12m: r.reqs_12m || <Dash />,
+    reqs: r.reqs,
+    reqs_12m: r.reqs_12m,
     interview_pct: r.interview_pct != null ? <>{wholePercent(r.interview_pct)}{under(`${r.interviews} of ${r.submissions}`)}</> : <Dash />,
     placement_pct: r.placement_pct != null ? <>{wholePercent(r.placement_pct)}{under(`${r.reqs_filled} of ${r.reqs} filled`)}</> : <Dash />,
     time_to_fill: r.time_to_fill != null ? days(r.time_to_fill) : <Dash />,
@@ -311,7 +320,8 @@ export function ClientsReport() {
                     const v = clientValues(r);
                     return (
                       <tr key={r.id} className="align-top">
-                        <td className="px-4 py-2.5 font-medium whitespace-nowrap text-stone-800 print:whitespace-normal"><span className="flex items-center gap-2"><ClientDot color={r.brand_color} />{r.name}</span></td>
+                        {/* A long name wraps, so the eight columns of numbers always fit beside it. */}
+                        <td className="min-w-36 px-4 py-2.5 font-medium text-stone-800"><span className="flex items-start gap-2"><ClientDot color={r.brand_color} className="mt-1.5" /><span className="min-w-0 break-words">{r.name}</span></span></td>
                         {METRICS.map(([id], i) => <td key={id} className={cx('tabular py-2.5 text-right whitespace-nowrap', i === METRICS.length - 1 ? 'pr-4 pl-3' : 'px-3')}>{v[id]}</td>)}
                       </tr>
                     );
@@ -352,13 +362,13 @@ export function ClientsReport() {
               ))}.
             </div>
           )}
-          <p className="mt-4 text-[13px] text-stone-500">Figures as of {fmtDate(data.to, true)}. Billings are placement fees only: monthly retainers are not included. A dash means there is nothing to show yet; those clients are listed last whichever way you sort.</p>
+          <p className="mt-4 text-[13px] text-stone-500">Figures as of {fmtDate(data.to, true)}. Billings are placement fees only: monthly retainers are not included. A dash means there is nothing yet to work the figure out from; those clients are listed last whichever way you sort.</p>
           <dl className="mt-3 grid gap-x-8 gap-y-2 text-[13px] leading-relaxed text-stone-500 sm:grid-cols-2">
             <div><dt className="inline font-medium text-stone-700">Total reqs. </dt><dd className="inline">Searches opened: jobs that became open for the first time since counting started.</dd></div>
-            <div><dt className="inline font-medium text-stone-700">Interview %. </dt><dd className="inline">First interviews with the client divided by submissions, across all of that client’s searches.</dd></div>
-            <div><dt className="inline font-medium text-stone-700">Placement %. </dt><dd className="inline">Searches filled divided by searches opened: the client’s fill rate. A search is filled when every opening on it has been hired into.</dd></div>
-            <div><dt className="inline font-medium text-stone-700">Time to fill. </dt><dd className="inline">The average number of days from a search opening to the accepted offer, or to the hire when no accepted offer was on record.</dd></div>
-            <div><dt className="inline font-medium text-stone-700">Total billings. </dt><dd className="inline">The fees recorded for placements, in the client’s currency.</dd></div>
+            <div><dt className="inline font-medium text-stone-700">Interview %. </dt><dd className="inline">First interviews with the client divided by submissions, across all of that client’s searches. {HOW_INTERVIEWS_COUNT}</dd></div>
+            <div><dt className="inline font-medium text-stone-700">Placement %. </dt><dd className="inline">Searches filled divided by searches opened: the client’s fill rate. A search is filled when every opening on it has been hired into. Only searches opened since counting started are included, so a placement on an older search adds to billings but not here.</dd></div>
+            <div><dt className="inline font-medium text-stone-700">Time to fill. </dt><dd className="inline">The average number of days from a search opening to the accepted offer, or to the hire when no accepted offer was on record. Only placements on searches opened since counting started are included.</dd></div>
+            <div><dt className="inline font-medium text-stone-700">Total billings. </dt><dd className="inline">The fees recorded for placements, in the client’s currency. A client with placements and nothing billed shows 0.</dd></div>
             <div><dt className="inline font-medium text-stone-700">Average fee per placement. </dt><dd className="inline">Total billings divided by the number of placements that have a fee.</dd></div>
           </dl>
         </Start>

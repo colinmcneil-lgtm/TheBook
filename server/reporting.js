@@ -3,7 +3,8 @@
 //
 // Two rules shape everything here.
 //  1. Counting starts on a set day (Monday 16 November 2026 unless an admin changes it), at the start of that day in
-//     Toronto. Nothing that happened before that moment is written down or counted, and "lifetime" means since then.
+//     Toronto. Nothing that happened before that moment is counted, and "lifetime" means since then. Nothing is
+//     written down until counting first begins; from then on everything is, whatever the date is moved to later.
 //  2. The numbers are recorded when things happen, not worked out afterwards from how the records look today. Each
 //     moment is one row in report_events, with the recruiter credited and (for a placement) the fee as they were at
 //     that moment. Reassigning a candidate or editing a client's terms later changes nothing that was recorded.
@@ -33,16 +34,52 @@ if (process.env.REPORTS_TIMEZONE && !validZone(process.env.REPORTS_TIMEZONE)) {
   console.error(`REPORTS_TIMEZONE is not a time zone this server knows, so reports use ${DEFAULT_ZONE}.`);
 }
 
-/** The day counting starts, the zone it is read in, the instant that is, and whether that instant has passed. */
+// When this version first ran on this workspace. Moments are only written down while this code is running, so if it
+// arrives after the start date the days in between were never recorded, and the page has to say so rather than
+// claim to have counted from a day it was not there for.
+const FIRST_RUN = 'reports_first_run';
+if (!getSetting(FIRST_RUN)) setSetting(FIRST_RUN, new Date().toISOString());
+// The moment counting first began here, kept from the first time an admin moves the date after that. Once counting
+// has begun it stays begun: moving the date later, or into the future, only changes what is shown, not what is
+// written down.
+const BEGAN = 'reports_began';
+/** The moment counting first began on this workspace, or null if it has not yet. */
+const began = (at, started) => getSetting(BEGAN) ?? (started ? at : null);
+
+/**
+ * The day counting starts, the zone it is read in, the instant that is, and whether that instant has passed.
+ * `recorded_from` is set only when the numbers do not reach back as far as that day: this version was installed
+ * after it, or an admin has moved the date to before the day counting first began.
+ */
 export function reportStart() {
   const saved = getSetting('reports_start');
   const date = validDay(saved) ? saved : DEFAULT_START;
   const time_zone = reportZone();
   const at = startOfDay(date, time_zone).toISOString();
-  return { date, time_zone, at, started: stamp() >= at };
+  const started = stamp() >= at;
+  const firstRun = getSetting(FIRST_RUN), first = began(at, started);
+  const from = first && firstRun > first ? firstRun : first;
+  return { date, time_zone, at, started, recorded_from: started && from > at ? from : null };
 }
-/** Nothing is written down before the start: a real workspace keeps no record of anything earlier. */
-const counting = () => reportStart().started;
+/**
+ * Is anything being written down yet? Not before counting first begins: a real workspace keeps no record of
+ * anything earlier. After that, always, even while the date is set later than today.
+ */
+function counting() {
+  const start = reportStart();
+  return Boolean(began(start.at, start.started));
+}
+/**
+ * An admin moves the start date. If counting had begun under the old date, that is remembered, so the new date does
+ * not switch it off. If it begins only now, because the new date is already in the past, it begins at this moment:
+ * the days between that date and today were not written down.
+ */
+function moveStart(date) {
+  const old = reportStart();
+  if (!getSetting(BEGAN) && old.started) setSetting(BEGAN, old.at);
+  setSetting('reports_start', date);
+  if (!getSetting(BEGAN) && reportStart().started) setSetting(BEGAN, stamp());
+}
 
 // ---------- writing things down ----------
 const eventOf = (applicationId, kind) => q.get('SELECT * FROM report_events WHERE application_id = ? AND kind = ?', applicationId, kind);
@@ -56,6 +93,9 @@ const record = (kind, app, userId, at) => q.run(
   `INSERT OR IGNORE INTO report_events (kind, application_id, candidate_name, job_id, client_id, user_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
   kind, app.id, app.candidate_name, app.job_id, app.client_id, userId, at);
 const workedOutFee = (salary, percent) => (salary != null && percent > 0 ? Math.round((salary * percent) / 100) : null);
+// Not a number on any report: a note that this candidate was hired in this job before anything was being written
+// down, left when such a candidate is moved out of Hired.
+const HIRED_EARLIER = 'hired_earlier';
 
 /** A search is opened (kickoff) the first time its job becomes open. `before` is the job as it was, or nothing for a new one. */
 export function searchOpened(jobId, status, before) {
@@ -79,15 +119,12 @@ export function submitted(before, userId) {
 }
 
 /**
- * A first interview with the client, for a candidate whose submission was counted. The credit goes to whoever
- * submitted them. Without a counted submission nothing is recorded: the ratio is interviews out of submissions.
+ * A first interview with the client, for a candidate whose submission was recorded. The credit goes to whoever
+ * submitted them. Without a recorded submission nothing is recorded: the ratio is interviews out of submissions.
  */
 function firstInterview(applicationId) {
-  const start = reportStart();
-  if (!start.started) return;
   const submission = eventOf(applicationId, 'submission');
-  if (!submission || submission.at < start.at) return;
-  record('first_interview', context(applicationId), submission.user_id, stamp());
+  if (submission) record('first_interview', context(applicationId), submission.user_id, stamp());
 }
 /** An interview was scheduled for the candidate in The Book. */
 export const interviewScheduled = (applicationId) => firstInterview(applicationId);
@@ -96,10 +133,17 @@ export const interviewScheduled = (applicationId) => firstInterview(applicationI
  * The candidate was marked hired: a placement. The credit goes to the recruiter who owns them in this job right now,
  * or to whoever submitted them when nobody does. The fee is the salary on their offer times the client's fee
  * percentage, both as they stand at this moment.
+ *
+ * A candidate is placed in a job once. If they were hired here before and the card was moved away and put back,
+ * this is the same hire: the placement recorded then counts again exactly as it was (its date, credit and fee), and
+ * a hire from before counting started stays uncounted. `before` is the application as it was before the move.
  */
-function placed(applicationId) {
-  q.run(`DELETE FROM report_events WHERE application_id = ? AND kind = 'placement'`, applicationId); // a new hire replaces whatever an earlier, undone one left
-  if (!counting()) return;
+function placed(applicationId, before) {
+  const earlier = eventOf(applicationId, 'placement');
+  if (earlier) return void q.run('UPDATE report_events SET set_aside_at = NULL WHERE id = ?', earlier.id);
+  // Already hired when this move began (rejected while hired, then dragged back into Hired), or hired before
+  // anything was being written down: not a new placement.
+  if (before?.hired_at || eventOf(applicationId, HIRED_EARLIER) || !counting()) return;
   const app = context(applicationId), at = stamp();
   const offer = q.get('SELECT salary, status, accepted_at FROM offers WHERE application_id = ?', applicationId);
   const accepted = offer?.status === 'accepted' && offer.accepted_at && offer.accepted_at <= at ? offer.accepted_at : null;
@@ -111,13 +155,35 @@ function placed(applicationId) {
 }
 
 /**
- * The candidate arrived in a stage, by any road: moved on the board or the profile, approved by the client, or added
- * straight into it. Hired is a placement. Any other stage undoes one (a hire that fell through), and an interview
- * stage where the client meets them is their first interview if they have been submitted.
+ * A hired candidate was moved out of Hired. Their placement stops counting, but the record is kept: anybody who can
+ * move a card (the client's hiring team included) can drop one in the wrong column, and putting it back must not
+ * change the date, the credit or the fee that were fixed at the hire. The one exception is a hire undone within a
+ * day of being made, with no fee entered by hand: that was the slip, so it is forgotten, and a later hire of the
+ * same candidate is recorded afresh.
  */
-export function arrivedIn(applicationId, stage) {
-  if (stage.kind === 'hired') return placed(applicationId);
-  q.run(`DELETE FROM report_events WHERE application_id = ? AND kind = 'placement'`, applicationId);
+function leftHired(applicationId, before) {
+  const placement = eventOf(applicationId, 'placement');
+  if (!placement) {
+    // Hired, but with nothing recorded: the hire is from before counting started. Note that, so that putting the
+    // card back in Hired is not taken for a new placement.
+    if (before?.hired_at && counting()) record(HIRED_EARLIER, context(applicationId), null, stamp());
+    return;
+  }
+  if (placement.set_aside_at) return;
+  const slip = !placement.fee_edited && new Date(stamp()) - new Date(placement.at) < DAY;
+  if (slip) q.run('DELETE FROM report_events WHERE id = ?', placement.id);
+  else q.run('UPDATE report_events SET set_aside_at = ? WHERE id = ?', stamp(), placement.id);
+}
+
+/**
+ * The candidate arrived in a stage, by any road: moved on the board or the profile, approved by the client, or added
+ * straight into it. Hired is a placement. Any other stage sets one aside (a hire that fell through), and an
+ * interview stage where the client meets them is their first interview if they have been submitted. `before` is
+ * the application as it was before the move; nothing for somebody just added.
+ */
+export function arrivedIn(applicationId, stage, before) {
+  if (stage.kind === 'hired') return placed(applicationId, before);
+  leftHired(applicationId, before);
   if (stage.kind === 'interview' && stage.with_client) firstInterview(applicationId);
 }
 
@@ -137,7 +203,8 @@ export function returned(applicationId) {
 
 /**
  * The offer was saved. Notes when it became accepted (the end of "time to fill"), and fills in the fee of a
- * placement that had none because the offer had no salary yet when the candidate was hired.
+ * placement that had none because the offer had no salary yet when the candidate was hired. That fee uses the
+ * client's fee percentage as it was recorded at the hire, like the currency beside it, not the terms as they are now.
  */
 export function offerSaved(applicationId) {
   const offer = q.get('SELECT id, salary, status, accepted_at FROM offers WHERE application_id = ?', applicationId);
@@ -146,21 +213,37 @@ export function offerSaved(applicationId) {
   if (offer.status !== 'accepted' && offer.accepted_at) q.run('UPDATE offers SET accepted_at = NULL WHERE id = ?', offer.id);
   const placement = eventOf(applicationId, 'placement');
   if (!placement || placement.fee != null || placement.fee_edited || offer.salary == null) return;
-  const { fee_percent } = context(applicationId);
-  q.run('UPDATE report_events SET salary = ?, fee_percent = ?, fee = ? WHERE id = ?', offer.salary, fee_percent, workedOutFee(offer.salary, fee_percent), placement.id);
+  q.run('UPDATE report_events SET salary = ?, fee = ? WHERE id = ?', offer.salary, workedOutFee(offer.salary, placement.fee_percent), placement.id);
 }
 
+/** The placement recorded for this candidate in this job, if it counts: not set aside, and not from before the start date. */
+function countedPlacement(applicationId) {
+  const p = eventOf(applicationId, 'placement');
+  return p && !p.set_aside_at && p.at >= reportStart().at ? p : null;
+}
 /** What a hired candidate's profile shows the agency about their recorded placement; null when none is counted. */
 export function placementOf(applicationId) {
-  const p = eventOf(applicationId, 'placement');
-  if (!p || p.set_aside_at || p.at < reportStart().at) return null;
+  const p = countedPlacement(applicationId);
+  if (!p) return null;
   const credited = p.user_id ? q.get('SELECT name FROM users WHERE id = ?', p.user_id)?.name ?? null : null;
   return { at: p.at, fee: p.fee, currency: p.currency, fee_edited: Boolean(p.fee_edited), salary: p.salary, fee_percent: p.fee_percent, credited_to: credited };
+}
+/**
+ * For the overview's list of hires: the fee and currency recorded for this hire, so that the overview, the Clients
+ * report and the candidate's profile all show one figure. Nothing for a hire with no placement on record (one from
+ * before counting started), which leaves the overview's own estimate from the client's terms today in place.
+ */
+export function recordedFee(applicationId) {
+  const p = countedPlacement(applicationId);
+  return p ? { fee: p.fee ?? 0, currency: p.currency } : {};
 }
 
 // ---------- reading the numbers ----------
 const round1 = (n) => Math.round(n * 10) / 10;
-const percent = (part, whole) => (whole ? round1((part / whole) * 100) : null);
+/** A whole percentage. Rounded here, once: the page shows it as it comes, so 5 of 11 is 45%, not 45.5% rounded again to 46%. */
+const percent = (part, whole) => (whole ? Math.round((part / whole) * 100) : null);
+/** The same as a fraction, unrounded, for putting rows in order: two rows that both show 45% still sort by what is behind it. */
+const share = (part, whole) => (whole ? part / whole : null);
 /** The same clock time twelve months ago, in the reporting zone. */
 function yearAgo(now, zone) {
   const w = wallClock(now, zone);
@@ -179,11 +262,17 @@ function periodFrom(period, start) {
   return iso && iso > start.at ? iso : start.at;
 }
 
-/** Everything that counts: recorded on or after the start, and not a placement that has been set aside. */
+/**
+ * Everything that counts: recorded on or after the start, and not a placement that has been set aside. A first
+ * interview counts only when the submission it follows counts too (the start date can be moved to fall between
+ * them), because the ratio is interviews out of submissions.
+ */
 function countedEvents(start, clientId) {
   return q.all(
-    `SELECT e.* FROM report_events e WHERE e.at >= ? AND e.set_aside_at IS NULL ${clientId ? 'AND e.client_id = ?' : ''} ORDER BY e.at, e.id`,
-    start.at, ...(clientId ? [clientId] : []));
+    `SELECT e.* FROM report_events e WHERE e.at >= ? AND e.set_aside_at IS NULL AND e.kind != '${HIRED_EARLIER}'
+       AND (e.kind != 'first_interview' OR EXISTS (SELECT 1 FROM report_events s WHERE s.application_id = e.application_id AND s.kind = 'submission' AND s.at >= ?))
+       ${clientId ? 'AND e.client_id = ?' : ''} ORDER BY e.at, e.id`,
+    start.at, start.at, ...(clientId ? [clientId] : []));
 }
 
 /**
@@ -202,7 +291,7 @@ function sortRows(rows, valueOf, dir) {
 const direction = (dir, fallback) => (dir === 'asc' || dir === 'desc' ? dir : fallback);
 
 const INDIVIDUAL_SORTS = {
-  name: (r) => r.name, submissions: (r) => r.submissions, interviews: (r) => r.interviews, ratio: (r) => r.ratio, placements: (r) => r.placements,
+  name: (r) => r.name, submissions: (r) => r.submissions, interviews: (r) => r.interviews, ratio: (r) => share(r.interviews, r.submissions), placements: (r) => r.placements,
 };
 /**
  * One row per recruiter for a period. An admin gets everyone on the agency side who has anything recorded since
@@ -212,7 +301,8 @@ function individualReport({ user, period, clientId, sort, dir }) {
   const start = reportStart();
   const chosen = PERIODS.includes(period) ? period : 'all';
   const from = periodFrom(chosen, start);
-  const events = start.started ? countedEvents(start, clientId).filter((e) => e.kind !== 'search_opened') : [];
+  const column = { submission: 'submissions', first_interview: 'interviews', placement: 'placements' };
+  const events = start.started ? countedEvents(start, clientId).filter((e) => column[e.kind]) : [];
   const mine = user.role === 'admin' ? events : events.filter((e) => e.user_id === user.id);
   const rows = new Map();
   const rowFor = (id) => {
@@ -223,7 +313,6 @@ function individualReport({ user, period, clientId, sort, dir }) {
     return rows.get(id);
   };
   if (user.role !== 'admin') rowFor(user.id); // a recruiter always sees their own row, even with nothing in it yet
-  const column = { submission: 'submissions', first_interview: 'interviews', placement: 'placements' };
   for (const e of mine) {
     const row = rowFor(e.user_id ?? null); // listed even when all of theirs is outside the period
     if (e.at >= from) row[column[e.kind]]++;
@@ -252,8 +341,10 @@ function byCurrency(placements, average = false) {
 }
 /** For sorting: the figures added up as written. Nothing to show when there are none. */
 const moneyValue = (list) => (list.length ? list.reduce((n, m) => n + m.amount, 0) : null);
+// Nought is a figure like any other: a client with no searches, or with placements and nothing billed, sorts as 0.
+// Only what cannot be worked out at all (a percentage of nothing, a time to fill with nothing filled) goes last.
 const CLIENT_SORTS = {
-  reqs: (r) => r.reqs || null, reqs_12m: (r) => r.reqs_12m || null, interview_pct: (r) => r.interview_pct, placement_pct: (r) => r.placement_pct,
+  reqs: (r) => r.reqs, reqs_12m: (r) => r.reqs_12m, interview_pct: (r) => share(r.interviews, r.submissions), placement_pct: (r) => share(r.reqs_filled, r.reqs),
   time_to_fill: (r) => r.time_to_fill, billings: (r) => moneyValue(r.billings), billings_12m: (r) => moneyValue(r.billings_12m), avg_fee: (r) => moneyValue(r.avg_fee),
 };
 /** One row per client: searches opened and filled, interviews out of submissions, time to fill, and placement fees. */
@@ -275,7 +366,11 @@ function clientReport({ clientId, sort, dir }) {
     const kickoff = new Map(searches.map((s) => [s.job_id, s.at]));
     const fills = placements.filter((p) => kickoff.has(p.job_id)).map((p) => Math.max(0, new Date(p.filled_at) - new Date(kickoff.get(p.job_id))) / DAY);
     const billed = placements.filter((p) => p.fee != null);
-    if (cl.fee_percent > 0) for (const p of placements.filter((x) => x.fee == null)) missingFees.push({ application_id: p.application_id, candidate_name: p.candidate_name, client_name: cl.name });
+    // Placements with nothing billed are a real nought, in the currency the latest placement was recorded in. With
+    // no placements at all there are no billings to speak of.
+    const billings = (list) => (list.length || !placements.length ? byCurrency(list) : [{ currency: placements.at(-1).currency ?? cl.currency, amount: 0 }]);
+    // A fee still to be entered: none could be worked out, and nobody has said by hand that there is none.
+    if (cl.fee_percent > 0) for (const p of placements.filter((x) => x.fee == null && !x.fee_edited)) missingFees.push({ application_id: p.application_id, candidate_name: p.candidate_name, client_name: cl.name });
     const submissions = of('submission').length, interviews = of('first_interview').length;
     return {
       id: cl.id, name: cl.name, brand_color: cl.brand_color, currency: cl.currency, status: cl.status,
@@ -283,12 +378,12 @@ function clientReport({ clientId, sort, dir }) {
       submissions, interviews, interview_pct: percent(interviews, submissions),
       reqs_filled: filled.length, placement_pct: percent(filled.length, searches.length),
       placements: placements.length, fills: fills.length, time_to_fill: fills.length ? round1(fills.reduce((a, b) => a + b, 0) / fills.length) : null,
-      billings: byCurrency(billed), billings_12m: byCurrency(billed.filter((p) => p.at >= since12)), avg_fee: byCurrency(billed, true),
+      billings: billings(billed), billings_12m: billings(billed.filter((p) => p.at >= since12)), avg_fee: byCurrency(billed, true),
     };
   });
   const sortKey = Object.hasOwn(CLIENT_SORTS, sort) ? sort : 'reqs';
   const sortDir = direction(dir, 'desc');
-  const currencies = new Set(rows.flatMap((r) => r.billings.map((m) => m.currency)));
+  const currencies = new Set(rows.flatMap((r) => r.billings.filter((m) => m.amount).map((m) => m.currency)));
   return {
     start, since_12m: since12, to: stamp(), sort: sortKey, dir: sortDir,
     rows: sortRows(rows, CLIENT_SORTS[sortKey], sortDir),
@@ -306,7 +401,7 @@ export function registerReporting(api, { agencyOnly, adminOnly, bad, int, loadAp
   api.put('/reports/start', adminOnly, (req, res) => {
     const date = req.body?.date;
     if (!validDay(date)) bad('Choose the day counting starts.');
-    setSetting('reports_start', date);
+    moveStart(date);
     res.json(reportStart());
   });
 

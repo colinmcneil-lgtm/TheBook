@@ -20,10 +20,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Two ports the other test files leave free: the ones after the workspace tests' (see workspace.test.mjs).
 const PORT = PORTS.main + 13, UPGRADE_PORT = PORTS.main + 14;
 
-async function startApi({ port, dataDir }) {
+/** `firstRun` says when this version first ran on the workspace; without it the server notes the real time, as it does when installed. */
+async function startApi({ port, dataDir, firstRun }) {
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'test/reporting-server.mjs'], {
     // TZ is passed on, so that running the tests with TZ set shows the start day does not depend on where the server is.
-    cwd: ROOT, env: { PATH: process.env.PATH, HOME: process.env.HOME, NODE_ENV: 'test', PORT: String(port), DATA_DIR: dataDir, ...(process.env.TZ ? { TZ: process.env.TZ } : {}) }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: ROOT, env: { PATH: process.env.PATH, HOME: process.env.HOME, NODE_ENV: 'test', PORT: String(port), DATA_DIR: dataDir, ...(process.env.TZ ? { TZ: process.env.TZ } : {}), ...(firstRun ? { REPORTS_FIRST_RUN: firstRun } : {}) }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk; });
@@ -39,9 +40,11 @@ async function startApi({ port, dataDir }) {
 // Counting starts on Monday 16 November 2026 at midnight in Toronto, which is 05:00 UTC (Toronto is on winter time).
 const START = '2026-11-16T05:00:00.000Z';
 /** Noon in Toronto on the nth day after the start: day(1) is Tuesday 17 November 2026. */
-const day = (n) => new Date(Date.UTC(2026, 10, 16 + n, 17)).toISOString();
+const day = (n) => new Date(Date.UTC(2026, 10, 16, 17) + n * 86400000).toISOString();
 const DAY = 86400000;
 
+// The story's server was installed the week before counting starts, as the real one is meant to be.
+const INSTALLED = '2026-11-09T15:00:00.000Z';
 let server, dataDir;
 let olive, priya, sam, nia, maya, carl;         // the admin, three recruiters, and a hiring manager at Lumen and at Finch
 let lumen, kestrel, finch, dormant;             // clients
@@ -76,7 +79,7 @@ const figures = (report, name) => { const { id, name: _, brand_color, currency, 
 
 before(async () => {
   dataDir = tempDir('reporting');
-  server = await startApi({ port: PORT, dataDir });
+  server = await startApi({ port: PORT, dataDir, firstRun: INSTALLED });
   await clock('2026-11-10T15:00:00.000Z'); // the Tuesday before counting starts
   olive = session(server.base);
   ok(await olive.post('/setup', { agencyName: 'Harbour Talent', name: 'Olive Admin', email: 'olive@agency.example', password: 'demo1234' }));
@@ -106,7 +109,7 @@ after(async () => {
 // ---------- before the start ----------
 
 test('before the start date nothing is recorded, and both reports say when counting begins', async () => {
-  assert.deepEqual(ok(await olive.get('/reports/start')), { date: '2026-11-16', time_zone: 'America/Toronto', at: START, started: false });
+  assert.deepEqual(ok(await olive.get('/reports/start')), { date: '2026-11-16', time_zone: 'America/Toronto', at: START, started: false, recorded_from: null });
 
   // A whole search happens the week before: opened, a candidate submitted, interviewed, offered and hired.
   jobs.old = await openJob(lumen, 'Old search');
@@ -118,6 +121,7 @@ test('before the start date nothing is recorded, and both reports say when count
   await schedule(olive, apps.pat);
   await offer(olive, apps.pat, 90000, 'accepted');
   await move(olive, apps.pat, old.Hired);
+  apps.uma = await add(olive, jobs.old, 'Uma Early', old.Hired); // and one added straight into Hired
   // And one candidate is submitted but goes no further yet.
   apps.quinn = await add(priya, jobs.old, 'Quinn Early');
   await submit(priya, apps.quinn);
@@ -161,7 +165,26 @@ test('what happened before the start is not made up for by doing it again afterw
   ok(await olive.post(`/applications/${apps.pat}/restore`));
   assert.equal(ok(await olive.get(`/applications/${apps.pat}`)).application.status, 'hired');
   assert.equal(ok(await olive.get(`/applications/${apps.pat}`)).placement, null);
+  // Nor does dragging their card out of Hired and back, on the board or the profile, by the agency or the client.
+  for (const who of [olive, maya]) {
+    await move(who, apps.pat, old.Offer);
+    await move(who, apps.pat, old.Hired);
+    assert.equal(ok(await olive.get(`/applications/${apps.pat}`)).placement, null);
+  }
+  // Nor rejecting them and then moving them into Hired, instead of returning them to the pipeline.
+  ok(await olive.post(`/applications/${apps.uma}/reject`, { reason: 'Clicked by mistake' }));
+  await move(olive, apps.uma, old.Hired);
+  assert.equal(ok(await olive.get(`/applications/${apps.uma}`)).application.status, 'hired');
+  assert.equal(ok(await olive.get(`/applications/${apps.uma}`)).placement, null);
+  // Even a day later, and by way of another stage.
+  await clock(day(3));
+  await move(olive, apps.uma, old['Final interview']);
+  await clock(day(5));
+  await move(olive, apps.uma, old.Hired);
+  assert.equal(ok(await olive.get(`/applications/${apps.uma}`)).placement, null);
+  await clock(day(1));
 
+  assert.deepEqual((await individual()).rows.map((r) => r.name), ['Priya Nair']); // nobody has a placement
   assert.deepEqual(line(await individual()), [1, 0, 0, 0]);
   // The submission made at midnight counts for Lumen although its search was opened too early to count as a req.
   assert.deepEqual(figures(await clients(), 'Lumen'), { ...NOTHING, submissions: 1, interview_pct: 0 });
@@ -227,7 +250,7 @@ test('submissions are counted once, for whoever submitted the candidate first', 
   // Cy is added by the browser extension's route straight into a stage with the client, and submitted while sitting
   // there: the interview counts from the submission.
   apps.cy = await add(priya, jobs.designer, 'Cy Three', designer['Hiring manager interview']);
-  assert.deepEqual(line(await individual(), 'Priya Nair'), [3, 1, 33.3, 0]); // in the stage, but not submitted yet
+  assert.deepEqual(line(await individual(), 'Priya Nair'), [3, 1, 33, 0]); // in the stage, but not submitted yet
   await submit(priya, apps.cy);
   // Di is interviewed without ever being submitted: not counted, because the ratio is interviews out of submissions.
   apps.di = await add(priya, jobs.designer, 'Di Four');
@@ -265,14 +288,14 @@ test('submissions are counted once, for whoever submitted the candidate first', 
   const report = await individual();
   assert.deepEqual(report.rows.map((r) => r.name), ['Priya Nair', 'Sam Ode']); // most submissions first; Olive and Nia have nothing recorded
   assert.deepEqual(line(report, 'Priya Nair'), [5, 3, 60, 0]);
-  assert.deepEqual(line(report, 'Sam Ode'), [3, 2, 66.7, 0]);
-  assert.deepEqual(line(report), [8, 5, 62.5, 0]);
+  assert.deepEqual(line(report, 'Sam Ode'), [3, 2, 67, 0]);
+  assert.deepEqual(line(report), [8, 5, 63, 0]);
   const companies = await clients();
   assert.deepEqual(['Lumen', 'Kestrel', 'Finch'].map((n) => { const r = clientRow(companies, n); return [r.submissions, r.interviews, r.interview_pct]; }), [[5, 3, 60], [2, 1, 50], [1, 1, 100]]);
 
   // Each moment was written down when it happened, once, with the candidate's name as it was then.
   const db = new DatabaseSync(path.join(dataDir, 'app.db'), { readOnly: true });
-  const moments = db.prepare(`SELECT candidate_name AS name, kind, at FROM report_events WHERE application_id IS NOT NULL ORDER BY at, id`).all().map((e) => `${e.name}: ${e.kind} ${e.at}`);
+  const moments = db.prepare(`SELECT candidate_name AS name, kind, at FROM report_events WHERE kind IN ('submission', 'first_interview') ORDER BY at, id`).all().map((e) => `${e.name}: ${e.kind} ${e.at}`);
   db.close();
   assert.deepEqual(moments, [
     `Sol Edge: submission ${START}`,
@@ -314,7 +337,7 @@ test('a hire is a placement for whoever owns the candidate at that moment, with 
   // Changing the owner after the fact moves no credit.
   ok(await olive.patch(`/applications/${apps.ana}`, { owner_id: olive_id }));
   assert.equal((await placement(apps.ana)).credited_to, 'Sam Ode');
-  assert.deepEqual(line(await individual(), 'Sam Ode'), [3, 2, 66.7, 2]);
+  assert.deepEqual(line(await individual(), 'Sam Ode'), [3, 2, 67, 2]);
   assert.deepEqual(line(await individual(), 'Priya Nair'), [5, 3, 60, 0]); // her submission and interview for Ana stay hers
 
   // A hired candidate who is rejected stops counting; returned to the pipeline, the same placement counts again.
@@ -344,7 +367,7 @@ test('a hire is a placement for whoever owns the candidate at that moment, with 
   let kestrelNow = await clients();
   assert.equal(clientRow(kestrelNow, 'Kestrel').placements, 2);
   assert.deepEqual(kestrelNow.missing_fees, [{ application_id: apps.gus, candidate_name: 'Gus Seven', client_name: 'Kestrel' }]); // hired with no offer at a client that pays per hire
-  assert.deepEqual(line(await individual(), 'Sam Ode'), [3, 2, 66.7, 4]);
+  assert.deepEqual(line(await individual(), 'Sam Ode'), [3, 2, 67, 4]);
   await clock(day(17));
   await move(sam, apps.gus, sales.Offer);
   kestrelNow = await clients();
@@ -369,7 +392,7 @@ test('a hire is a placement for whoever owns the candidate at that moment, with 
   let report = await clients();
   assert.deepEqual(report.missing_fees, [{ application_id: apps.cy, candidate_name: 'Cy Three', client_name: 'Lumen' }]);
   // The Designer search has two openings and one hire: not filled yet. Backend Engineer (one opening, Ana) is.
-  assert.deepEqual([clientRow(report, 'Lumen').reqs_filled, clientRow(report, 'Lumen').placement_pct, clientRow(report, 'Lumen').placements], [1, 33.3, 2]);
+  assert.deepEqual([clientRow(report, 'Lumen').reqs_filled, clientRow(report, 'Lumen').placement_pct, clientRow(report, 'Lumen').placements], [1, 33, 2]);
   assert.deepEqual(clientRow(report, 'Lumen').billings, [{ currency: 'CAD', amount: 20000 }]);
   // The fee is entered by hand on the hired candidate.
   assert.deepEqual((await put(priya, `/applications/${apps.cy}/placement-fee`, { fee: 15000 })).placement, { at: day(20), fee: 15000, currency: 'CAD', fee_edited: true, salary: null, fee_percent: 20, credited_to: 'Priya Nair' });
@@ -381,10 +404,13 @@ test('a hire is a placement for whoever owns the candidate at that moment, with 
   await clock(day(21));
   apps.jo = await add(priya, jobs.designer, 'Jo Nine', designer.Hired);
   assert.deepEqual(await placement(apps.jo), { at: day(21), fee: null, currency: 'CAD', fee_edited: false, salary: null, fee_percent: 20, credited_to: 'Priya Nair' });
-  // The offer is filled in the next day: the fee that could not be worked out at the hire is worked out now.
+  // The offer is filled in the next day: the fee that could not be worked out at the hire is worked out now, from
+  // the terms recorded at the hire (20%, in Canadian dollars), although the client's terms have been edited since.
   await clock(day(22));
+  await put(olive, `/clients/${lumen}`, { name: 'Lumen', engagement_model: 'per_hire', fee_percent: 30, currency: 'USD' });
   await offer(priya, apps.jo, 50000, 'accepted');
   assert.deepEqual(await placement(apps.jo), { at: day(21), fee: 10000, currency: 'CAD', fee_edited: false, salary: 50000, fee_percent: 20, credited_to: 'Priya Nair' });
+  await put(olive, `/clients/${lumen}`, { name: 'Lumen', engagement_model: 'per_hire', fee_percent: 20, currency: 'CAD' });
 
   // The client's terms are edited afterwards: nothing that was recorded changes.
   await clock(day(23));
@@ -398,22 +424,85 @@ test('a hire is a placement for whoever owns the candidate at that moment, with 
   await put(olive, `/applications/${apps.flo}/placement-fee`, { fee: 30000 });
 });
 
+test('moving a hired card out of Hired and back changes nothing that was recorded', async () => {
+  const backend = await stagesOf(jobs.backend), designer = await stagesOf(jobs.designer), sales = await stagesOf(jobs.sales);
+  const placement = async (appId) => ok(await olive.get(`/applications/${appId}`)).placement;
+  const lumenNow = async () => { const r = clientRow(await clients(), 'Lumen'); return [r.placements, r.reqs_filled, r.time_to_fill, r.billings, r.avg_fee]; };
+  await clock(day(24));
+  // Ana was placed on day 12 by Sam, for 20,000 at the 20% Lumen paid then. Since then she has been reassigned to
+  // Olive and Lumen's terms have gone up to 25%. Her own hiring manager drops her card on Offer and puts it back.
+  const ana = { at: day(12), fee: 20000, currency: 'CAD', fee_edited: false, salary: 100000, fee_percent: 20, credited_to: 'Sam Ode' };
+  const before = await lumenNow();
+  assert.deepEqual(before, [3, 2, 16, [{ currency: 'CAD', amount: 45000 }], [{ currency: 'CAD', amount: 15000 }]]);
+  assert.deepEqual(await placement(apps.ana), ana);
+  await move(maya, apps.ana, backend.Offer);
+  assert.equal(await placement(apps.ana), null); // while she is not hired, the placement does not count
+  assert.deepEqual(await lumenNow(), [2, 1, 19.5, [{ currency: 'CAD', amount: 25000 }], [{ currency: 'CAD', amount: 12500 }]]);
+  assert.deepEqual(line(await individual(), 'Sam Ode'), [3, 2, 67, 2]);
+  await clock(day(24.5));
+  await move(maya, apps.ana, backend.Hired);
+  assert.deepEqual(await placement(apps.ana), ana); // the same date, credit and fee: not Olive's, not 25%, not today
+  assert.deepEqual(await lumenNow(), before);
+  assert.deepEqual(line(await individual(), 'Sam Ode'), [3, 2, 67, 3]);
+  assert.deepEqual(line(await individual(), 'Olive Admin'), undefined);
+
+  // Cy's fee was entered by hand. She is rejected, and then moved into Hired rather than returned to the pipeline.
+  const cy = { at: day(20), fee: 15000, currency: 'CAD', fee_edited: true, salary: null, fee_percent: 20, credited_to: 'Priya Nair' };
+  assert.deepEqual(await placement(apps.cy), cy);
+  ok(await priya.post(`/applications/${apps.cy}/reject`, { reason: 'Clicked by mistake' }));
+  await move(priya, apps.cy, designer.Hired);
+  assert.deepEqual(await placement(apps.cy), cy);
+  // And by way of two other stages, days apart.
+  await move(olive, apps.cy, designer['Final interview']);
+  await move(olive, apps.cy, designer.Offer);
+  assert.equal(await placement(apps.cy), null);
+  await move(olive, apps.cy, designer.Hired);
+  assert.deepEqual(await placement(apps.cy), cy);
+  assert.deepEqual(await lumenNow(), before);
+
+  // The one exception: a hire undone within a day of being made was the slip, and is forgotten. Kim's card is
+  // dropped on Hired by mistake and put back within the hour; she is really hired two hours later.
+  apps.kim = await add(sam, jobs.sales, 'Kim Slip');
+  await move(sam, apps.kim, sales.Hired);
+  assert.equal((await placement(apps.kim)).at, day(24.5));
+  await clock(day(24.52));
+  await move(sam, apps.kim, sales.Offer);
+  assert.equal(await placement(apps.kim), null);
+  await clock(day(24.6));
+  await move(sam, apps.kim, sales.Hired);
+  assert.equal((await placement(apps.kim)).at, day(24.6)); // recorded afresh, at the real hire
+  // Kestrel pays per hire and Kim has no offer on record, so her fee is listed as still to be entered...
+  assert.deepEqual((await clients()).missing_fees, [{ application_id: apps.kim, candidate_name: 'Kim Slip', client_name: 'Kestrel' }]);
+  // ...until somebody says there is none, by saving the fee empty.
+  assert.deepEqual((await put(sam, `/applications/${apps.kim}/placement-fee`, { fee: '' })).placement, { at: day(24.6), fee: null, currency: 'USD', fee_edited: true, salary: null, fee_percent: 15, credited_to: 'Sam Ode' });
+  assert.deepEqual((await clients()).missing_fees, []);
+  // A fee entered by hand is never thrown away, even within the day.
+  await clock(day(24.7));
+  await move(sam, apps.kim, sales.Offer);
+  await move(sam, apps.kim, sales.Hired);
+  assert.deepEqual([(await placement(apps.kim)).at, (await placement(apps.kim)).fee_edited], [day(24.6), true]);
+  // Kim's hire falls through after all, which leaves the story as it was.
+  await move(sam, apps.kim, sales.Offer);
+  assert.equal(clientRow(await clients(), 'Kestrel').placements, 1);
+  assert.deepEqual(line(await individual(), 'Sam Ode'), [3, 2, 67, 3]);
+});
+
 test('the whole picture after five weeks: every number on both reports', async () => {
   await clock(day(25));
   const people = await individual();
   assert.deepEqual(people.rows.map((r) => [r.name, ...line(people, r.name)]), [
     ['Priya Nair', 5, 3, 60, 2],     // submitted Sol, Ana, Ben, Cy, Eli; interviews for Ana, Cy, Ben; placed Cy and Jo
-    ['Sam Ode', 3, 2, 66.7, 3],      // submitted Flo, Gus, Hal; interviews for Hal, Flo; placed Flo, Ana (owned at the hire) and Hal
+    ['Sam Ode', 3, 2, 67, 3],      // submitted Flo, Gus, Hal; interviews for Hal, Flo; placed Flo, Ana (owned at the hire) and Hal
     ['No recruiter', 0, 0, null, 1], // Ivy, hired by the client with nobody at the agency owning her
   ]);
-  assert.deepEqual(line(people), [8, 5, 62.5, 6]);
+  assert.deepEqual(line(people), [8, 5, 63, 6]);
   assert.deepEqual([people.period, people.from, people.to], ['all', START, day(25)]);
 
   const report = await clients();
   assert.deepEqual(figures(report, 'Lumen'), {
     reqs: 3, reqs_12m: 3,                                  // Backend Engineer, Designer, Planned search; not the search opened the week before
     submissions: 5, interviews: 3, interview_pct: 60,
-    reqs_filled: 2, placement_pct: 66.7,                   // Backend Engineer (1 of 1) and Designer (2 of 2); Planned search is unfilled
+    reqs_filled: 2, placement_pct: 67,                   // Backend Engineer (1 of 1) and Designer (2 of 2); Planned search is unfilled
     placements: 3, fills: 3, time_to_fill: 16,             // Ana 9 days (offer accepted day 10), Cy 19 and Jo 20 (no accepted offer when hired)
     billings: [{ currency: 'CAD', amount: 45000 }], billings_12m: [{ currency: 'CAD', amount: 45000 }], avg_fee: [{ currency: 'CAD', amount: 15000 }],
   });
@@ -424,7 +513,8 @@ test('the whole picture after five weeks: every number on both reports', async (
   assert.deepEqual(figures(report, 'Finch'), {
     reqs: 2, reqs_12m: 2, submissions: 1, interviews: 1, interview_pct: 100, reqs_filled: 2, placement_pct: 100, placements: 2, fills: 2,
     time_to_fill: 15.5,                                    // Hal 14 days, Ivy 17
-    billings: [], billings_12m: [], avg_fee: [],           // a retainer client: placements, but no placement fees
+    // A retainer client: placements, but no placement fees. Nought billed, and no average to work out.
+    billings: [{ currency: 'CAD', amount: 0 }], billings_12m: [{ currency: 'CAD', amount: 0 }], avg_fee: [],
   });
   assert.deepEqual(figures(report, 'Dormant'), NOTHING);
   assert.equal(report.mixed_currencies, true);
@@ -433,11 +523,12 @@ test('the whole picture after five weeks: every number on both reports', async (
 
 // ---------- sorting ----------
 
-test('clients sort by any metric, high to low or low to high, with nothing-to-show last either way', async () => {
+test('clients sort by any metric, high to low or low to high; nought sorts as a number and nothing-to-show goes last either way', async () => {
   const order = async (sort, dir) => { const r = await clients(`?sort=${sort}&dir=${dir}`); assert.deepEqual([r.sort, r.dir], [sort, dir]); return names(r); };
   assert.deepEqual(await order('reqs', 'desc'), ['Lumen', 'Finch', 'Kestrel', 'Dormant']);
-  assert.deepEqual(await order('reqs', 'asc'), ['Kestrel', 'Finch', 'Lumen', 'Dormant']);
+  assert.deepEqual(await order('reqs', 'asc'), ['Dormant', 'Kestrel', 'Finch', 'Lumen']); // no searches is a figure: lowest first
   assert.deepEqual(await order('reqs_12m', 'desc'), ['Lumen', 'Finch', 'Kestrel', 'Dormant']);
+  assert.deepEqual(await order('reqs_12m', 'asc'), ['Dormant', 'Kestrel', 'Finch', 'Lumen']);
   assert.deepEqual(await order('interview_pct', 'desc'), ['Finch', 'Lumen', 'Kestrel', 'Dormant']);
   assert.deepEqual(await order('interview_pct', 'asc'), ['Kestrel', 'Lumen', 'Finch', 'Dormant']);
   assert.deepEqual(await order('placement_pct', 'desc'), ['Finch', 'Kestrel', 'Lumen', 'Dormant']); // a tie stays in name order
@@ -445,9 +536,10 @@ test('clients sort by any metric, high to low or low to high, with nothing-to-sh
   assert.deepEqual(await order('time_to_fill', 'desc'), ['Lumen', 'Finch', 'Kestrel', 'Dormant']);
   assert.deepEqual(await order('time_to_fill', 'asc'), ['Kestrel', 'Finch', 'Lumen', 'Dormant']);
   // Mixed currencies: the figures are compared as written (45,000 CAD against 30,000 USD), and the answer says so.
-  assert.deepEqual(await order('billings', 'desc'), ['Lumen', 'Kestrel', 'Dormant', 'Finch']);
-  assert.deepEqual(await order('billings', 'asc'), ['Kestrel', 'Lumen', 'Dormant', 'Finch']);
-  assert.deepEqual(await order('billings_12m', 'asc'), ['Kestrel', 'Lumen', 'Dormant', 'Finch']);
+  // Finch has placements and has been billed nothing for them: that is nought. Dormant has no placements: nothing to show.
+  assert.deepEqual(await order('billings', 'desc'), ['Lumen', 'Kestrel', 'Finch', 'Dormant']);
+  assert.deepEqual(await order('billings', 'asc'), ['Finch', 'Kestrel', 'Lumen', 'Dormant']);
+  assert.deepEqual(await order('billings_12m', 'asc'), ['Finch', 'Kestrel', 'Lumen', 'Dormant']);
   assert.deepEqual(await order('avg_fee', 'desc'), ['Kestrel', 'Lumen', 'Dormant', 'Finch']);
   assert.deepEqual(await order('avg_fee', 'asc'), ['Lumen', 'Kestrel', 'Dormant', 'Finch']);
   // With nothing asked for, or nonsense: total reqs, high to low.
@@ -478,7 +570,7 @@ test('recruiters sort by any column, and a ratio with no submissions behind it g
 // ---------- who may see what ----------
 
 test('a recruiter sees only their own row, and only an admin can move the start date', async () => {
-  for (const [who, name, numbers] of [[priya, 'Priya Nair', [5, 3, 60, 2]], [sam, 'Sam Ode', [3, 2, 66.7, 3]], [nia, 'Nia New', [0, 0, null, 0]]]) {
+  for (const [who, name, numbers] of [[priya, 'Priya Nair', [5, 3, 60, 2]], [sam, 'Sam Ode', [3, 2, 67, 3]], [nia, 'Nia New', [0, 0, null, 0]]]) {
     const report = await individual(who);
     assert.deepEqual(report.rows.map((r) => r.name), [name]);
     assert.deepEqual(line(report, name), numbers);
@@ -523,12 +615,23 @@ test('the overview report that was already there answers as it did', async () =>
   assert.equal(report.weeks.length, 12);
   assert.equal(report.weeks.reduce((n, w) => n + w.count, 0), 2);
   assert.deepEqual(report.openRoles, [{ id: jobs.backend, title: 'Backend Engineer', client_name: 'Lumen', openings: 1, hires: 1, days_open: 0, new_applicants: 0, interviewing: 1, offers: 0 }]);
-  // It still works the fee out from the client's terms as they are today (25% now), which is why the new reports keep their own record (20,000).
+  // The one thing that has changed: for the agency, a hire's fee is the one recorded when it happened (20,000), not
+  // the client's terms today (25%) applied afresh, so this page and the Clients report show the same billings.
   const { applied_at, hired_at, ...hire } = report.hires[0];
-  assert.deepEqual(hire, { id: apps.ana, name: 'Ana One', job_title: 'Backend Engineer', client_name: 'Lumen', currency: 'CAD', source: 'Agency sourced', days_to_hire: 0, fee: 25000, salary: 100000 });
+  assert.deepEqual(hire, { id: apps.ana, name: 'Ana One', job_title: 'Backend Engineer', client_name: 'Lumen', currency: 'CAD', source: 'Agency sourced', days_to_hire: 0, fee: 20000, salary: 100000 });
   assert.equal(report.hires.length, 1);
   assert.deepEqual([...report.revenue].sort((a, b) => a.currency.localeCompare(b.currency)),
-    [{ currency: 'CAD', monthly_retainers: 5000, placement_fees: 25000 }, { currency: 'USD', monthly_retainers: 3000, placement_fees: 0 }]);
+    [{ currency: 'CAD', monthly_retainers: 5000, placement_fees: 20000 }, { currency: 'USD', monthly_retainers: 3000, placement_fees: 0 }]);
+  // A fee corrected by hand shows here too, in the currency it was recorded in.
+  await put(olive, `/applications/${apps.flo}/placement-fee`, { fee: 28000 });
+  const sales = ok(await olive.get(`/reports?job_id=${jobs.sales}`));
+  assert.deepEqual(sales.hires.map((h) => [h.name, h.fee, h.currency]), [['Flo Six', 28000, 'USD']]);
+  assert.deepEqual(sales.revenue.find((r) => r.currency === 'USD').placement_fees, 28000);
+  assert.deepEqual(clientRow(await clients(), 'Kestrel').billings, [{ currency: 'USD', amount: 28000 }]);
+  await put(olive, `/applications/${apps.flo}/placement-fee`, { fee: 30000 });
+  // A hire from before counting started has no fee on record, so it is still estimated from today's terms: 25% of 90,000.
+  const old = ok(await olive.get(`/reports?job_id=${jobs.old}`));
+  assert.deepEqual(old.hires.map((h) => [h.name, h.fee]).sort(), [['Pat Early', 22500], ['Uma Early', 0]]);
   // And for the client's hiring team: the same, without the money.
   const theirs = ok(await maya.get(`/reports?job_id=${jobs.backend}`));
   assert.deepEqual(Object.keys(theirs), ['totals', 'funnel', 'sources', 'weeks', 'openRoles', 'hires']);
@@ -563,7 +666,7 @@ test('deleting a candidate or a job removes what was recorded for them; merging 
   ok(await olive.del(`/jobs/${jobs.temp}`));
   lumenNow = clientRow(await clients(), 'Lumen');
   assert.deepEqual([lumenNow.reqs, lumenNow.reqs_filled, lumenNow.placements, lumenNow.billings], [3, 2, 3, [{ currency: 'CAD', amount: 45000 }]]);
-  assert.deepEqual(line(await individual(), 'Sam Ode'), [3, 2, 66.7, 3]);
+  assert.deepEqual(line(await individual(), 'Sam Ode'), [3, 2, 67, 3]);
 
   // Ben turns out to be on file twice. His record with the submission and the interview is merged into the other one.
   const ben = ok(await olive.get(`/applications/${apps.ben}`)).candidate.id;
@@ -578,7 +681,7 @@ test('deleting a candidate or a job removes what was recorded for them; merging 
   ok(await olive.post(`/candidates/${ok(await olive.get(`/applications/${extra}`)).candidate.id}/merge`, { into: cy }));
   assert.deepEqual(line(await individual(), 'Priya Nair'), [3, 3, 100, 2]);
   assert.deepEqual(clientRow(await clients(), 'Lumen').billings, [{ currency: 'CAD', amount: 45000 }]);
-  assert.deepEqual(line(await individual()), [6, 5, 83.3, 6]);
+  assert.deepEqual(line(await individual()), [6, 5, 83, 6]);
 });
 
 // ---------- the start date ----------
@@ -590,28 +693,39 @@ test('an admin can move the start date: later hides what came before it, and mov
   assert.equal((await putJson(olive, server.base, '/reports/start', {})).status, 400);
 
   // A date that has not come yet: no numbers at all.
-  assert.deepEqual(await put(olive, '/reports/start', { date: '2027-01-01' }), { date: '2027-01-01', time_zone: 'America/Toronto', at: '2027-01-01T05:00:00.000Z', started: false });
+  assert.deepEqual(await put(olive, '/reports/start', { date: '2027-01-01' }), { date: '2027-01-01', time_zone: 'America/Toronto', at: '2027-01-01T05:00:00.000Z', started: false, recorded_from: null });
   assert.deepEqual((await individual()).rows, []);
   for (const name of ['Lumen', 'Kestrel', 'Finch', 'Dormant']) assert.deepEqual(figures(await clients(), name), NOTHING);
   assert.equal(ok(await olive.get(`/applications/${apps.ana}`)).placement, null);
+  // Counting has begun, so what happens while the date is set later is still written down: Gus, submitted by Sam
+  // on day 3, gets his first interview with the client today, and Sam submits somebody new.
+  await move(sam, apps.gus, (await stagesOf(jobs.sales))['Final interview']);
+  apps.zed = await add(sam, jobs.sales, 'Zed Late');
+  await submit(sam, apps.zed);
+  assert.deepEqual((await individual()).rows, []);
 
-  // 1 December 2026: only what happened from that day on. Every submission and every kickoff was in November.
+  // 1 December 2026: only what happened from that day on. Every other submission and every kickoff was in
+  // November, and Gus's interview is not counted without the submission it followed.
   await put(olive, '/reports/start', { date: '2026-12-01' });
   const people = await individual();
-  assert.deepEqual(people.rows.map((r) => [r.name, ...line(people, r.name)]), [['No recruiter', 0, 0, null, 1], ['Priya Nair', 0, 0, null, 2], ['Sam Ode', 0, 0, null, 1]]);
+  assert.deepEqual(people.rows.map((r) => [r.name, ...line(people, r.name)]), [['Sam Ode', 1, 0, 0, 1], ['No recruiter', 0, 0, null, 1], ['Priya Nair', 0, 0, null, 2]]);
   assert.equal(people.from, '2026-12-01T05:00:00.000Z');
   // Lumen's two December placements are billed, but belong to no search that counts: no fill rate and no time to fill.
   assert.deepEqual(figures(await clients(), 'Lumen'), { ...NOTHING, placements: 2, billings: [{ currency: 'CAD', amount: 25000 }], billings_12m: [{ currency: 'CAD', amount: 25000 }], avg_fee: [{ currency: 'CAD', amount: 12500 }] });
   assert.equal(ok(await olive.get(`/applications/${apps.ana}`)).placement, null);       // hired on 28 November
   assert.equal(ok(await olive.get(`/applications/${apps.cy}`)).placement.fee, 15000);   // hired on 6 December
 
-  // Back to the day counting really began: everything is as it was.
-  await put(olive, '/reports/start', { date: '2026-11-16' });
-  assert.deepEqual(line(await individual()), [6, 5, 83.3, 6]);
+  // Back to the day counting really began: everything is as it was, with Gus's interview beside it.
+  assert.equal((await put(olive, '/reports/start', { date: '2026-11-16' })).recorded_from, null);
+  assert.deepEqual(line(await individual(), 'Sam Ode'), [4, 3, 75, 3]);
+  ok(await olive.del(`/applications/${apps.zed}`)); // Zed leaves the story here, and his submission with him
+  assert.deepEqual(line(await individual(), 'Sam Ode'), [3, 3, 100, 3]);
+  assert.deepEqual(line(await individual()), [6, 6, 100, 6]);
   assert.equal(clientRow(await clients(), 'Lumen').reqs, 3);
-  // Earlier than that brings nothing back: the week before was never written down.
-  await put(olive, '/reports/start', { date: '2026-11-01' });
-  assert.deepEqual(line(await individual()), [6, 5, 83.3, 6]);
+  // Earlier than that brings nothing back: the week before was never written down, and the answer says from when it was.
+  assert.equal((await put(olive, '/reports/start', { date: '2026-11-01' })).recorded_from, START);
+  assert.equal((await individual()).start.recorded_from, START);
+  assert.deepEqual(line(await individual()), [6, 6, 100, 6]);
   assert.equal(clientRow(await clients(), 'Lumen').reqs, 3);
   await put(olive, '/reports/start', { date: '2026-11-16' });
 });
@@ -637,8 +751,8 @@ test('each period of the Individual report, and the last 12 months of the Client
 
   await clock('2027-12-20T17:00:00.000Z'); // noon in Toronto on Monday 20 December 2027
   const period = async (id) => { const r = await individual(olive, `?period=${id}`); return [r.period, r.from, line(r, 'Sam Ode'), line(r, 'Priya Nair'), line(r)]; };
-  assert.deepEqual(await period('all'), ['all', START, [9, 3, 33.3, 4], [3, 3, 100, 2], [12, 6, 50, 7]]);
-  assert.deepEqual(await period('12m'), ['12m', '2026-12-20T17:00:00.000Z', [6, 1, 16.7, 1], [0, 0, null, 0], [6, 1, 16.7, 1]]);
+  assert.deepEqual(await period('all'), ['all', START, [9, 4, 44, 4], [3, 3, 100, 2], [12, 7, 58, 7]]);
+  assert.deepEqual(await period('12m'), ['12m', '2026-12-20T17:00:00.000Z', [6, 2, 33, 1], [0, 0, null, 0], [6, 2, 33, 1]]);
   assert.deepEqual(await period('90d'), ['90d', '2027-09-21T17:00:00.000Z', [5, 1, 20, 1], [0, 0, null, 0], [5, 1, 20, 1]]);
   assert.deepEqual(await period('30d'), ['30d', '2027-11-20T17:00:00.000Z', [4, 1, 25, 1], [0, 0, null, 0], [4, 1, 25, 1]]);
   assert.deepEqual(await period('month'), ['month', '2027-12-01T05:00:00.000Z', [2, 1, 50, 1], [0, 0, null, 0], [2, 1, 50, 1]]); // the month starts at midnight in Toronto
@@ -649,20 +763,38 @@ test('each period of the Individual report, and the last 12 months of the Client
 
   const report = await clients('?sort=reqs_12m&dir=asc');
   assert.equal(report.since_12m, '2026-12-20T17:00:00.000Z');
-  assert.deepEqual(names(report), ['Kestrel', 'Dormant', 'Finch', 'Lumen']); // only Kestrel opened a search in the last 12 months
+  assert.deepEqual(names(report), ['Dormant', 'Finch', 'Lumen', 'Kestrel']); // only Kestrel opened a search in the last 12 months; nought is lowest
   assert.deepEqual(figures(report, 'Kestrel'), {
-    reqs: 2, reqs_12m: 1, submissions: 8, interviews: 2, interview_pct: 25, reqs_filled: 2, placement_pct: 100, placements: 2, fills: 2,
+    reqs: 2, reqs_12m: 1, submissions: 8, interviews: 3, interview_pct: 38, reqs_filled: 2, placement_pct: 100, placements: 2, fills: 2,
     time_to_fill: 144.5, // 7 days for Head of Sales; 282 for Account Executive, from 1 March to the offer accepted on 8 December
     billings: [{ currency: 'USD', amount: 45000 }], billings_12m: [{ currency: 'USD', amount: 15000 }], avg_fee: [{ currency: 'USD', amount: 22500 }],
   });
   const lumenNow = figures(report, 'Lumen');
-  assert.deepEqual([lumenNow.reqs, lumenNow.reqs_12m, lumenNow.billings, lumenNow.billings_12m], [3, 0, [{ currency: 'CAD', amount: 45000 }], []]);
-  assert.deepEqual(names(await clients('?sort=billings_12m&dir=desc')), ['Kestrel', 'Dormant', 'Finch', 'Lumen']);
+  // Lumen opened nothing and billed nothing in the last 12 months: both are nought, not a blank.
+  assert.deepEqual([lumenNow.reqs, lumenNow.reqs_12m, lumenNow.billings, lumenNow.billings_12m], [3, 0, [{ currency: 'CAD', amount: 45000 }], [{ currency: 'CAD', amount: 0 }]]);
+  assert.deepEqual(names(await clients('?sort=billings_12m&dir=desc')), ['Kestrel', 'Finch', 'Lumen', 'Dormant']);
+  assert.deepEqual(names(await clients('?sort=billings_12m&dir=asc')), ['Finch', 'Lumen', 'Kestrel', 'Dormant']); // Dormant has no placements at all
 
   // The client's currency is changed afterwards: what was billed stays in the currency it was recorded in.
   await put(olive, `/clients/${kestrel}`, { name: 'Kestrel', engagement_model: 'hybrid', monthly_retainer: 3000, fee_percent: 15, currency: 'CAD' });
   const changed = clientRow(await clients(), 'Kestrel');
   assert.deepEqual([changed.currency, changed.billings], ['CAD', [{ currency: 'USD', amount: 45000 }]]);
+});
+
+test('a percentage is rounded once: 5 interviews out of 11 submissions is 45%', async () => {
+  await clock('2027-12-20T17:00:00.000Z');
+  const jobId = await openJob(dormant, 'Analyst');
+  const stage = (await stagesOf(jobId))['Hiring manager interview'];
+  for (let i = 0; i < 11; i++) {
+    const id = await add(nia, jobId, `Analyst ${'abcdefghijk'[i]}`);
+    await submit(nia, id);
+    if (i < 5) await move(nia, id, stage);
+  }
+  assert.deepEqual(line(await individual(), 'Nia New'), [11, 5, 45, 0]); // 45.45%: not 45.5 and then 46
+  const row = clientRow(await clients(), 'Dormant');
+  assert.deepEqual([row.submissions, row.interviews, row.interview_pct, row.reqs, row.placement_pct], [11, 5, 45, 1, 0]);
+  // Rows are put in order by the exact ratio, not the rounded one: Sam's 4 of 9 (44.4%) comes before Nia's 5 of 11.
+  assert.deepEqual((await individual(olive, '?sort=ratio&dir=asc')).rows.map((r) => [r.name, r.ratio]), [['Sam Ode', 44], ['Nia New', 45], ['Priya Nair', 100], ['No recruiter', null]]);
 });
 
 // ---------- restarting and upgrading ----------
@@ -676,8 +808,28 @@ test('restarting the server changes nothing that was recorded', async () => {
   };
   const recorded = await snapshot();
   await server.stop();
-  server = await startApi({ port: PORT, dataDir });
+  server = await startApi({ port: PORT, dataDir, firstRun: INSTALLED });
   assert.deepEqual(await snapshot(), recorded);
+});
+
+test('a workspace that gets this version after the start date says from when the numbers were really written down', async () => {
+  const dir = tempDir('reporting-late');
+  // Installed on Wednesday 18 November 2026 at nine in the morning, two days after counting was meant to start.
+  const late = '2026-11-18T14:00:00.000Z';
+  const api = await startApi({ port: UPGRADE_PORT, dataDir: dir, firstRun: late });
+  try {
+    const set = async (iso) => assert.equal((await fetch(`${api.base}/test/clock`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ now: iso }) })).status, 200);
+    await set('2026-11-20T17:00:00.000Z');
+    const admin = session(api.base);
+    ok(await admin.post('/setup', { agencyName: 'Late Agency', name: 'Olive Admin', email: 'olive@agency.example', password: 'demo1234' }));
+    assert.deepEqual(ok(await admin.get('/reports/start')), { date: '2026-11-16', time_zone: 'America/Toronto', at: START, started: true, recorded_from: late });
+    assert.equal(ok(await admin.get('/reports/clients')).start.recorded_from, late);
+    // Moving the date to the day it was installed, or later, leaves nothing to explain.
+    assert.equal(ok(await putJson(admin, api.base, '/reports/start', { date: '2026-11-19' })).recorded_from, null);
+  } finally {
+    await api.stop().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('a database from before reporting gains the new parts on start, and its existing rows are left alone', async () => {
@@ -697,8 +849,10 @@ test('a database from before reporting gains the new parts on start, and its exi
 
     const file = path.join(dir, 'app.db');
     let db = new DatabaseSync(file);
-    db.exec('DROP TABLE report_events; ALTER TABLE stages DROP COLUMN with_client; ALTER TABLE offers DROP COLUMN accepted_at;');
-    const dump = (d) => Object.fromEntries(['clients', 'jobs', 'candidates', 'applications', 'stage_history', 'activities', 'users', 'settings']
+    db.exec(`DROP TABLE report_events; ALTER TABLE stages DROP COLUMN with_client; ALTER TABLE offers DROP COLUMN accepted_at; DELETE FROM settings WHERE key LIKE 'reports_%';`);
+    const settings = (d) => d.prepare('SELECT key, value FROM settings ORDER BY key').all();
+    const oldSettings = settings(db);
+    const dump = (d) => Object.fromEntries(['clients', 'jobs', 'candidates', 'applications', 'stage_history', 'activities', 'users']
       .map((t) => [t, d.prepare(`SELECT * FROM ${t} ORDER BY 1`).all()]));
     const old = { tables: dump(db), stages: db.prepare('SELECT * FROM stages ORDER BY id').all(), offers: db.prepare('SELECT * FROM offers').all() };
     db.close();
@@ -708,6 +862,10 @@ test('a database from before reporting gains the new parts on start, and its exi
     await api.stop();
     db = new DatabaseSync(file);
     assert.deepEqual(dump(db), old.tables);
+    // One setting is added, once: the moment this version first ran here. Every other setting is as it was.
+    const firstRun = db.prepare(`SELECT value FROM settings WHERE key = 'reports_first_run'`).get().value;
+    assert.ok(Math.abs(Date.now() - new Date(firstRun)) < 60000);
+    assert.deepEqual(settings(db).filter((x) => x.key !== 'reports_first_run'), oldSettings);
     assert.deepEqual(db.prepare('SELECT id, job_id, name, kind, position FROM stages ORDER BY id').all(), old.stages); // every stage as it was
     assert.deepEqual(db.prepare('SELECT id, application_id, salary, start_date, status, notes, created_at, updated_at FROM offers').all(), old.offers);
     assert.equal(db.prepare('SELECT accepted_at FROM offers').get().accepted_at, null);
@@ -723,6 +881,7 @@ test('a database from before reporting gains the new parts on start, and its exi
     db = new DatabaseSync(file);
     assert.deepEqual(ticks(), [['Recruiter screen', 0], ['AGENCY interview', 0], ['Pre-screening', 1], ['Hiring manager interview', 1], ['Final interview', 1]]);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM report_events').get().n, 0);
+    assert.equal(db.prepare(`SELECT value FROM settings WHERE key = 'reports_first_run'`).get().value, firstRun); // noted once, not again
     db.close();
   } finally {
     await api.stop().catch(() => {});

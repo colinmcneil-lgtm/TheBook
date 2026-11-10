@@ -5,8 +5,12 @@
 // server keeps the real time.
 import express from 'express';
 import { api } from '../server/api.js';
-import { db } from '../server/db.js';
+import { db, setSetting } from '../server/db.js';
 import { setReportClock } from '../server/reporting.js';
+
+// The server notes the day it first ran, with the real clock, to know whether it was there when counting started.
+// A story told with a made-up clock says when that was, too.
+if (process.env.REPORTS_FIRST_RUN) setSetting('reports_first_run', process.env.REPORTS_FIRST_RUN);
 
 const app = express();
 app.post('/test/clock', express.json(), (req, res) => {

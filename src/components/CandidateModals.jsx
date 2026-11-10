@@ -267,12 +267,13 @@ export function OfferModal({ data, onClose }) {
   );
 }
 
-/** Correct the fee recorded for a placement: the figure Reports counts. It starts from what is recorded, or from what the offer and the client's fee work out to now. */
+/** Correct the fee recorded for a placement: the figure Reports counts. It starts from what is recorded, or from what the offer works out to at the fee percentage recorded when they were hired. */
 export function PlacementFeeModal({ data, onClose }) {
   const { bump } = useApp();
   const toast = useToast();
   const { placement, offer, client } = data;
-  const workedOut = offer?.salary != null && client.fee_percent > 0 ? Math.round((offer.salary * client.fee_percent) / 100) : '';
+  const percent = placement.fee_percent ?? client.fee_percent;
+  const workedOut = offer?.salary != null && percent > 0 ? Math.round((offer.salary * percent) / 100) : '';
   const [fee, setFee] = useState(placement.fee ?? workedOut);
   const [save, busy] = useAction(async () => {
     await api.put(`/applications/${data.application.id}/placement-fee`, { fee });
@@ -283,7 +284,7 @@ export function PlacementFeeModal({ data, onClose }) {
   return (
     <Modal title="Placement fee" subtitle={`${data.candidate.name} · ${data.job.title}`} size="sm" onClose={onClose} onSubmit={save}
       footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Save fee</Button></>}>
-      <Field label={`Placement fee (${placement.currency})`} hint="What you billed for this placement. Reports counts this figure, whatever the offer or the client’s terms say later. Leave it empty if there is no fee.">
+      <Field label={`Placement fee (${placement.currency})`} hint="What you billed for this placement. Reports counts this figure, whatever the offer or the client’s terms say later. Leave it empty if there is no fee for this placement.">
         <Input type="number" min="0" step="1" value={fee} onChange={(e) => setFee(e.target.value)} autoFocus />
       </Field>
     </Modal>

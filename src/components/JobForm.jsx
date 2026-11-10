@@ -204,7 +204,7 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
         <Textarea rows={9} {...bind('description')} placeholder={'A short introduction to the role and team.\n\nWhat you will do\n• …\n\nWhat we are looking for\n• …'} />
       </Section>
 
-      <Section title="Interview stages" hint="Every pipeline starts with Applied and ends with Offer and Hired. These are the steps in between, in order. Drag a stage by its grip to move it. Tick “Interview with the client” where the client meets the candidate, and leave it off for your own screening calls: Reports counts a submitted candidate’s first interview from the first ticked stage they reach.">
+      <Section title="Interview stages" hint="Every pipeline starts with Applied and ends with Offer and Hired. These are the steps in between, in order. Drag a stage by its grip to move it. Tick “Interview with the client” where the client meets the candidate, and leave it off for your own screening calls: Reports counts a submitted candidate’s first interview from the first ticked stage they reach, or from an interview scheduled for them in The Book, whichever comes first.">
         <div className="space-y-2" ref={stageOrder.box}>
           {form.interview_stages.map((s, i) => (
             <div key={i} data-reorder-row="" className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg ${stageOrder.dragging === i ? 'bg-brand-50 ring-2 ring-brand-300' : ''}`}>

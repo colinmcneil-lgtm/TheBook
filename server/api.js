@@ -1050,7 +1050,7 @@ function moveToStage(app, stageId, user, { quiet = false } = {}) {
   if (!quiet) logActivity(app.id, user.id, back ? 'stage_back' : arrivalType(stage), back ? `Moved back to ${stage.name}` : hired ? 'Marked as hired' : `Moved to ${stage.name}`);
   // An applicant nobody owns yet becomes the responsibility of the recruiter who first takes them forward.
   if (!app.owner_id && isAgency(user) && stage.kind !== 'applied') q.run('UPDATE applications SET owner_id = ? WHERE id = ? AND owner_id IS NULL', user.id, app.id);
-  reporting.arrivedIn(app.id, stage); // after the owner is settled: a placement is credited to whoever owns the candidate now
+  reporting.arrivedIn(app.id, stage, app); // after the owner is settled: a placement is credited to whoever owns the candidate now
   return stage;
 }
 
@@ -1723,7 +1723,10 @@ api.get('/reports', (req, res) => {
       ...h, source: SOURCE_LABELS[h.source] || h.source,
       days_to_hire: Math.max(0, Math.round((new Date(h.hired_at) - new Date(h.applied_at)) / DAY)),
       fee: h.salary && h.fee_percent ? Math.round((h.salary * h.fee_percent) / 100) : 0,
-    }));
+    }))
+    // For the agency, a hire whose fee was recorded when it happened shows that figure, so this page, the Clients
+    // report and the candidate's profile agree. The estimate above stays for hires from before counting started.
+    .map((h) => (isAgency(req.user) ? { ...h, ...reporting.recordedFee(h.id) } : h));
   const offerStats = q.get(
     `SELECT SUM(o.status = 'accepted') AS accepted, SUM(o.status = 'declined') AS declined
      FROM offers o JOIN applications a ON a.id = o.application_id JOIN jobs j ON j.id = a.job_id WHERE o.updated_at >= ? ${scope}`, since, ...p);

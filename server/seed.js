@@ -339,6 +339,10 @@ tx(() => {
   monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
   setSetting('reports_start', monday.toISOString().slice(0, 10));
   const counted = reportStart();
+  // The demo behaves as if The Book had been installed, and counting had begun, on that Monday. Without these two
+  // the page would say, truthfully for a real workspace, that nothing was written down before today.
+  setSetting('reports_first_run', counted.at);
+  setSetting('reports_began', counted.at);
   q.run(`UPDATE offers SET accepted_at = created_at WHERE status = 'accepted'`);
   for (const j of q.all('SELECT id, client_id, opened_at FROM jobs WHERE opened_at >= ?', counted.at)) {
     q.run(`INSERT INTO report_events (kind, job_id, client_id, at) VALUES ('search_opened', ?, ?, ?)`, j.id, j.client_id, j.opened_at);

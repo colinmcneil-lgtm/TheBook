@@ -74,8 +74,14 @@ Individual and Clients count from **Monday 16 November 2026**, from the start of
 happened before that moment is counted, and "lifetime" means since then. Before that day the two views say when
 counting begins and show no numbers. An admin can see and change the date at the top of either view. The numbers are
 written down as things happen, so moving the date later hides what was recorded before it, and moving it earlier
-cannot bring back anything from before counting first began. The day is read in Toronto time; set
+cannot bring back anything from before counting first began. Once counting has begun, everything is written down
+whatever the date is moved to, so moving it later and back again loses nothing. The day is read in Toronto time; set
 `REPORTS_TIMEZONE` (for example `America/Vancouver`) to read it elsewhere.
+
+Moments are only written down while this version is running. **It has to be live before the start date.** If it is
+installed after that day, or the date is moved to a day already past, nothing between that day and the moment
+recording really began is in the numbers, and both views say so under the date ("The Book began writing these
+numbers down on ...").
 
 Something first done before the start is not made up for by doing it again afterwards: a candidate first submitted
 the week before is not counted when they are sent again, and neither is the interview that follows.
@@ -91,13 +97,18 @@ things stood then. Reassigning a candidate or editing a client's terms later cha
   after their submission, being moved into an interview stage ticked "Interview with the client" or having an
   interview scheduled in The Book. A candidate already sitting in such a stage when they are submitted counts at
   the submission. It is credited to whoever submitted them. A candidate interviewed without ever being submitted is
-  not counted.
+  not counted, and neither is a submitted candidate taken straight to Offer or Hired with no interview stage or
+  scheduled interview in between.
 - **Placement.** A candidate is marked hired, credited to the recruiter who owns them in that job at that moment
   (whoever submitted them, if nobody owns them). The fee recorded is the salary on their offer times the client's fee
-  percentage at that moment; if the offer has no salary yet, the fee is worked out when the salary is added. An
-  agency user can correct it on the hired candidate's profile, under Placement. If a hire is undone the placement is
-  removed; a hired candidate who is rejected or withdraws stops counting, and counts again as before if they are
-  returned to the pipeline.
+  percentage at that moment; if the offer has no salary yet, the fee is worked out when the salary is added, still
+  at the percentage recorded at the hire. An agency user can correct it on the hired candidate's profile, under
+  Placement; saving it empty says there is no fee for this placement. A hired candidate who is moved out of Hired,
+  rejected or withdraws stops counting. If they are put back in Hired, by any road, the same placement counts again
+  exactly as it was: its date, its credit and its fee do not change, whoever moved the card and whatever has been
+  edited since. The one exception is a hire undone within a day of being made (a card dropped on Hired by mistake),
+  with no fee entered by hand: that is forgotten, and a later hire of the same candidate is recorded afresh. A
+  candidate hired before counting started is never counted, however their card is moved afterwards.
 - **Search opened.** A job becomes open for the first time (kickoff).
 
 Deleting a candidate or a job removes what was recorded for them. Merging two records of one person keeps it.
@@ -116,20 +127,23 @@ their own row. Click a column heading to sort by it.
 | --- | --- |
 | Submissions | The recruiter's submissions recorded in the period. |
 | Interviews | First interviews in the period for candidates the recruiter submitted. |
-| Interview/Submission ratio | Interviews divided by submissions, both in the period, as a percentage; a dash when there are no submissions. |
+| Interview/Submission ratio | Interviews divided by submissions, both in the period, as a whole percentage (5 of 11 is 45%); a dash when there are no submissions. |
 | Placements | Placements credited to the recruiter in the period. |
 
 ### Clients: one row per client
 
 Above the table are two drop-downs: the metric to sort by, and **High to low** or **Low to high**. Clicking a column
-heading does the same. A client with nothing to show for the chosen metric (a dash) is listed last either way.
+heading does the same. Nought is a figure like any other: a client with no searches shows 0 and comes first in
+"Low to high", and a client with placements and nothing billed shows 0 in its currency. A dash means there is
+nothing to work the figure out from (a percentage of nothing, a time to fill with nothing filled, billings with no
+placements); those clients are listed last either way.
 
 | Number | How it is counted |
 | --- | --- |
 | Total reqs, lifetime | Searches opened at the client since counting started. |
 | Total reqs, last 12 months | Searches opened at the client in the last 12 months (never reaching back before counting started). |
 | Interview % | First interviews divided by submissions, across all of that client's searches. |
-| Placement % | Searches filled divided by searches opened: the client's fill rate. A search is filled when every opening on it has been hired into. |
+| Placement % | Searches filled divided by searches opened: the client's fill rate. A search is filled when every opening on it has been hired into. Only searches opened since counting started are included, so a placement on an older search adds to billings but not here. |
 | Time to fill | The average number of days from a search opening to the day the offer was accepted (the day of the hire, when no accepted offer was on record), over the placements on searches that count. |
 | Total billings, lifetime | The fees recorded for the client's placements since counting started, in the client's currency. |
 | Total billings, last 12 months | The same, for placements in the last 12 months. |
@@ -138,7 +152,11 @@ heading does the same. A client with nothing to show for the chosen metric (a da
 Billings are placement fees only; monthly retainers are not included. When clients are billed in different
 currencies, each amount is shown in the client's own currency, and sorting by billings or fees compares the figures
 as written, without converting them; the page says so. A placement with no fee (the offer had no salary) is listed
-under the table with a link to the candidate, until the fee is entered.
+under the table with a link to the candidate, until the fee is entered or saved empty to say there is none.
+
+The Overview's "Your fee" column and "Placement fees" total use the same recorded fees, so the two views agree. A
+hire from before counting started has no fee on record, and the Overview still estimates it from the client's terms
+today.
 
 The demo data (`npm run seed`) is the one exception to the start date: so that the two views have something in
 them, the demo counts from a Monday about five months back and is loaded with the moments its made-up history

@@ -384,12 +384,12 @@ function Overview({ data, onOffer, onFee, onResume }) {
           <Card className="p-4">
             <h3 className="text-sm font-semibold text-stone-900">Placement</h3>
             <dl className="mt-2 text-sm">
-              {row('Placement fee', data.placement.fee != null ? money(data.placement.fee, data.placement.currency) : <span className="font-normal text-stone-500">Not set</span>)}
+              {row('Placement fee', data.placement.fee != null ? money(data.placement.fee, data.placement.currency) : <span className="font-normal text-stone-500">{data.placement.fee_edited ? 'No fee' : 'Not set'}</span>)}
               {row('Credited to', data.placement.credited_to || 'No recruiter')}
               {row('Recorded', fmtDate(data.placement.at, true))}
             </dl>
             <p className="mt-2 text-xs leading-relaxed text-stone-500">
-              {data.placement.fee_edited ? 'The fee was entered by hand.'
+              {data.placement.fee_edited ? (data.placement.fee != null ? 'The fee was entered by hand.' : 'Somebody on your team said there is no fee for this placement.')
                 : data.placement.fee != null ? `The fee was worked out when they were hired: ${data.placement.fee_percent}% of the ${money(data.placement.salary, data.placement.currency)} offer.`
                   : 'No fee could be worked out when they were hired: the offer had no salary, or the client has no fee per hire.'}
               {' '}This is the figure Reports counts. Your agency only.
