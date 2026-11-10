@@ -81,7 +81,7 @@ function useReorder(list, onChange) {
 
 /** Create a job, or edit one when `job` (and its `stages`) are passed. */
 export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
-  const { clients, scope, bump } = useApp();
+  const { clients, scope, bump, user, isAdmin } = useApp();
   const toast = useToast();
   const [form, setForm] = useState(() => ({
     client_id: job?.client_id ?? clientId ?? scope ?? (clients.length === 1 ? clients[0].id : ''),
@@ -89,6 +89,8 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
     work_mode: job?.work_mode ?? 'hybrid', employment_type: job?.employment_type ?? 'full_time',
     salary_min: job?.salary_min ?? '', salary_max: job?.salary_max ?? '', salary_public: job ? job.salary_public === 1 : true,
     openings: job?.openings ?? 1, hiring_manager_id: job?.hiring_manager_id ?? '', status: job?.status ?? 'draft',
+    // The account executive: whoever creates the job, until it is handed to somebody else.
+    account_executive_id: job ? job.account_executive_id ?? '' : user.id,
     description: job?.description ?? '',
     // `with_client` is the "Interview with the client" tick. A stage that has never had one set (a new stage, or one
     // autofill drafted) leaves it out, and the tick then follows what the stage is called until somebody clicks it.
@@ -132,9 +134,16 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
   const stageOrder = useReorder(form.interview_stages, (next) => set('interview_stages', next));
   const { data: people } = useApi(form.client_id ? url('/users', { client_id: form.client_id }) : null);
   const client = clients.find((c) => c.id === Number(form.client_id));
+  // Whose job it is can be changed by an admin, and by the account executive handing on a job of their own. Anyone
+  // else sees who it is and cannot change it; a recruiter's new job is their own.
+  const canHand = isAdmin || Boolean(job && job.account_executive_id === user.id);
+  const { data: executives } = useApi('/account-executives');
+  const team = (executives?.people || []).filter((p) => p.active);
+  const holder = job ? { id: job.account_executive_id, name: job.account_executive_name, left: job.account_executive_active === 0 } : { id: user.id, name: user.name };
 
   const [save, busy] = useAction(async () => {
     const body = { ...form, interview_stages: form.interview_stages.map((s) => ({ ...s, with_client: withClient(s) })) };
+    if (!canHand) delete body.account_executive_id; // not theirs to say, so it is not sent
     // The plain reader's one "job title to search" is the title it read. If the title was corrected here, the brief follows it.
     const title = form.title.trim().replace(/\s*\(.*\)$/, '');
     if (draft?.source === 'basic' && form.brief?.search_titles?.length === 1 && title) body.brief = { ...form.brief, search_titles: [title] };
@@ -195,7 +204,15 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
               {(people || []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.role === 'client' ? '' : ' (agency)'}</option>)}
             </Select>
           </Field>
-          <div className="flex items-end pb-2 sm:col-span-3">
+          <Field label="Account executive" className="sm:col-span-3"
+            hint={canHand ? undefined : job ? `Only ${holder.name ? `${holder.name} or an admin` : 'an admin'} can hand this job to somebody else.` : 'Whoever creates a job is its account executive, so this one is yours.'}>
+            <Select {...bind('account_executive_id')} disabled={!canHand}>
+              {holder.id == null && <option value="">Not set</option>}
+              {holder.id != null && !team.some((p) => p.id === holder.id) && <option value={holder.id}>{holder.name}{holder.left ? ' (deactivated)' : ''}</option>}
+              {team.map((p) => <option key={p.id} value={p.id}>{p.name}{p.id === user.id ? ' (you)' : ''}</option>)}
+            </Select>
+          </Field>
+          <div className="sm:col-span-6">
             <Checkbox checked={form.salary_public} onChange={(e) => set('salary_public', e.target.checked)} label="Show the salary range on the careers page" />
           </div>
         </div>

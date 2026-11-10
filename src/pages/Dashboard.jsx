@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CalendarDays, Briefcase, Inbox, Hourglass, ClipboardCheck, ArrowRight, UserPlus, CalendarCheck, ArrowUpRight, ThumbsUp, Handshake, Trophy } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
-import { url, ago, daysSince, firstName, fmtDay, photoUrl, plural } from '../lib.js';
+import { url, ago, daysSince, firstName, fmtDay, photoUrl, plural, remember, remembered } from '../lib.js';
 import { Card, CardHeader, Empty, Page, Stat, Avatar } from '../ui.jsx';
 import { ClientName, InterviewLine, StageBadge } from '../components/bits.jsx';
+import JobBoard from '../components/JobBoard.jsx';
 
 // The moments a recruiter most wants to see in the feed. Each gets a label, an icon and a tint so it stands out
 // from notes, emails and other routine activity.
@@ -55,7 +56,12 @@ function Nudge({ icon: Icon, to, children }) {
 export default function Dashboard() {
   const { user, scope, scopeClient, isAgency, clients } = useApp();
   const openCandidate = useOpenCandidate();
-  const { data, error } = useApi(url('/dashboard', { client_id: scope }));
+  // The job board shows open jobs, and paused and draft ones too when its switch is on. The switch is remembered for
+  // each person in this browser. The board is the agency's: for a client's user it is neither asked for nor sent.
+  const boardKey = `thebook.jobboard.${user.id}`;
+  const [boardAll, setBoardAll] = useState(() => remembered(boardKey) === 'all');
+  const showAll = (on) => { setBoardAll(on); remember(boardKey, on ? 'all' : null); };
+  const { data, error } = useApi(url('/dashboard', { client_id: scope, board: isAgency && boardAll ? 'all' : null }));
   const { data: nav } = useApi(url('/nav', { client_id: scope }));
   const { data: clientRows } = useApi(isAgency && !scope ? '/clients' : null);
   const hour = new Date().getHours();
@@ -94,6 +100,8 @@ export default function Dashboard() {
           {nav?.scorecards_due > 0 && <Nudge icon={ClipboardCheck} to="/interviews?tab=feedback">{plural(nav.scorecards_due, 'scorecard')} for you to complete</Nudge>}
         </div>
       )}
+
+      {isAgency && data.board && <div className="mt-6"><JobBoard columns={data.board} all={boardAll} onAll={showAll} /></div>}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1.6fr_1fr]">
         <div className="min-w-0 space-y-6">

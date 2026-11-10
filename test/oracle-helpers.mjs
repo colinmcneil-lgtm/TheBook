@@ -21,13 +21,15 @@ export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-c
 // Ports: every test file's ports are counted from ORACLE_TEST_PORT (3610 unless set), thirty in a row in all.
 //   +0 to +4    Otterview tests: three for servers, then one for each stand-in
 //   +12, +13    the workspace tests: a server and a stand-in
+//   +14, +15    the account executive tests: two servers
 //   +16, +17    the reporting tests: two servers
 //   +18, +19    the to-do tests: two servers
 //   +20 to +29  the Metaview tests (see metaview-helpers.mjs)
 // Node refuses to fetch from a few ports whatever is listening there, and the tests then fail with nothing but
 // "Connection error" in the server's log. Keep all thirty clear of 3659, 4045, 5060, 5061, 6000 and 6665 to 6669.
 const BASE_PORT = Number(process.env.ORACLE_TEST_PORT) || 3610;
-export const PORTS = { main: BASE_PORT, bare: BASE_PORT + 1, restart: BASE_PORT + 2, deepgram: BASE_PORT + 3, anthropic: BASE_PORT + 4, workspace: BASE_PORT + 12, workspaceAi: BASE_PORT + 13, metaview: BASE_PORT + 20 };
+export const PORTS = { main: BASE_PORT, bare: BASE_PORT + 1, restart: BASE_PORT + 2, deepgram: BASE_PORT + 3, anthropic: BASE_PORT + 4, workspace: BASE_PORT + 12, workspaceAi: BASE_PORT + 13,
+  accountExecutive: BASE_PORT + 14, accountExecutiveOld: BASE_PORT + 15, metaview: BASE_PORT + 20 };
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const tempDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `the-book-${name}-`));

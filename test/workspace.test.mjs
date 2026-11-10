@@ -136,15 +136,15 @@ test('brief text over a limit is refused with the section named, never saved sho
   assert.equal((await put(owner, `/jobs/${job}/brief`, { brief: stored.brief })).status, 200);
 });
 
-test('the ideal profile is part of the brief: the ordinary job save changes it only for the creator or an admin', async () => {
+test('the ideal profile is part of the brief: the ordinary job save changes it only for the account executive or an admin', async () => {
   const fields = { title: 'Head of Sales', status: 'open', description: 'Lead and grow our sales team.' };
   assert.equal((await put(priya, `/jobs/${job}/brief`, { brief: { about: 'Priya' } })).status, 403);
-  assert.equal((await put(priya, `/jobs/${job}`, { ...fields, ideal_profile: 'CHANGED BY PRIYA who did not create this job' })).status, 200);
+  assert.equal((await put(priya, `/jobs/${job}`, { ...fields, ideal_profile: 'CHANGED BY PRIYA who is not the account executive of this job' })).status, 200);
   assert.equal((await owner.get(`/jobs/${job}`)).body.job.ideal_profile, 'Only the profile was sent');
   assert.equal((await put(priya, `/jobs/${job}`, { ...fields, ideal_profile: '' })).status, 200);
   assert.equal((await owner.get(`/jobs/${job}`)).body.job.ideal_profile, 'Only the profile was sent');
-  assert.equal((await put(owner, `/jobs/${job}`, { ...fields, ideal_profile: 'Changed by the creator' })).status, 200);
-  assert.equal((await owner.get(`/jobs/${job}`)).body.job.ideal_profile, 'Changed by the creator');
+  assert.equal((await put(owner, `/jobs/${job}`, { ...fields, ideal_profile: 'Changed by the account executive' })).status, 200);
+  assert.equal((await owner.get(`/jobs/${job}`)).body.job.ideal_profile, 'Changed by the account executive');
 });
 
 // ---------- the activity feed ----------

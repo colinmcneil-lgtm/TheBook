@@ -58,8 +58,8 @@ const Label = ({ children }) => <div className="mb-1.5 text-xs font-medium track
 export default function JobBrief({ job, stages }) {
   const toast = useToast();
   const { user, isAdmin } = useApp();
-  const canEdit = isAdmin || job.created_by === user.id; // the brief belongs to whoever created the job
-  const owner = job.created_by_name || 'an admin';
+  const canEdit = isAdmin || (job.account_executive_id != null && job.account_executive_id === user.id); // the brief belongs to the job's account executive
+  const owner = job.account_executive_name; // nobody, for a job that has no account executive
   const [editing, setEditing] = useState(false);
   const brief = job.brief || {};
   const has = (key) => (Array.isArray(brief[key]) ? brief[key].length > 0 : Boolean(brief[key]));
@@ -88,7 +88,7 @@ export default function JobBrief({ job, stages }) {
           <Empty icon={NotebookPen} title="No brief for this role yet" action={canEdit && <Button variant="primary" icon={Pencil} onClick={() => setEditing(true)}>Write the brief</Button>}>
             {canEdit
               ? 'Give your recruiters what they need to start sourcing: must-haves, where to look, what to search for, the pay and how to sell the role.'
-              : `${owner === 'an admin' ? 'An admin' : owner} created this job and can write its brief. An admin can too.`}
+              : owner ? `${owner} is this job’s account executive and can write its brief. An admin can too.` : 'This job has no account executive, so only an admin can write its brief.'}
           </Empty>
         </Card>
         {editing && <BriefForm job={job} onClose={() => setEditing(false)} />}
@@ -102,7 +102,7 @@ export default function JobBrief({ job, stages }) {
         <div className="flex items-center justify-between gap-3 rounded-xl border border-violet-200 bg-violet-50/60 px-4 py-2.5 text-[13px] text-violet-900">
           <span>
             This brief is for your recruiters. The client’s hiring team cannot see it.
-            {!canEdit && ` Only ${owner === 'an admin' ? 'an admin' : `${owner} (who created the job) or an admin`} can change it.`}
+            {!canEdit && ` Only ${owner ? `${owner} (the account executive) or an admin` : 'an admin'} can change it.`}
           </span>
           {canEdit && <Button size="sm" icon={Pencil} onClick={() => setEditing(true)}>Edit brief</Button>}
         </div>
@@ -191,7 +191,9 @@ export default function JobBrief({ job, stages }) {
 
         <Section title="The role at a glance">
           <dl className="divide-y divide-line text-sm">
-            {[['Client', job.client_name], ['Job created by', job.created_by_name], ['Location', [job.location, WORK_MODES[job.work_mode]].filter(Boolean).join(' · ')], ['Contract', EMPLOYMENT[job.employment_type]],
+            {[['Client', job.client_name], ['Account executive', job.account_executive_name || 'Not set'],
+              // Who created the job is only worth a line once it has been handed to somebody else.
+              ['Job created by', job.created_by !== job.account_executive_id && job.created_by_name], ['Location', [job.location, WORK_MODES[job.work_mode]].filter(Boolean).join(' · ')], ['Contract', EMPLOYMENT[job.employment_type]],
               ['Openings', `${job.hires} of ${job.openings} filled`], ['Hiring manager', job.hiring_manager_name]].filter(([, v]) => v).map(([label, value]) => (
               <div key={label} className="flex justify-between gap-4 py-1.5"><dt className="text-stone-500">{label}</dt><dd className="text-right font-medium text-stone-800">{value}</dd></div>
             ))}

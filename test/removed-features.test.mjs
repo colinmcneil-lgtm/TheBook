@@ -93,10 +93,11 @@ test('the app starts on a database that still has the old tables, and nothing in
     assert.deepEqual(counts(all), { phone_calls: 2, phone_webhooks: 1, phone_recordings_owed: 1, phone_calls_erased: 1, calendar_links: 1, calendar_events: 2 });
     // Every table, index and trigger that was there is still there, exactly as it was written.
     const now = objects(all);
-    // (stages and offers each gain one column for the reports, added in place like the calls columns; they are checked below.)
-    const GAINED = { calls: null, stages: 'with_client', offers: 'accepted_at' };
+    // (stages and offers each gain one column for the reports, and jobs one for its account executive, added in place
+    // like the calls columns; they are checked below.)
+    const GAINED = { calls: null, stages: 'with_client', offers: 'accepted_at', jobs: 'account_executive_id' };
     for (const [name, sql] of Object.entries(schemaBefore)) if (!(name in GAINED)) assert.equal(now[name], sql, `${name} was changed or dropped`);
-    for (const table of ['stages', 'offers']) {
+    for (const table of ['stages', 'offers', 'jobs']) {
       const before = /\(([\s\S]*)\)/.exec(schemaBefore[table])[1], after = /\(([\s\S]*)\)/.exec(now[table])[1];
       assert.ok(after.startsWith(before) && after.slice(before.length).includes(GAINED[table]), `${table} was changed by more than its one new column`);
     }
