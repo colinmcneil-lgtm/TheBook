@@ -68,9 +68,10 @@ An agency user can add a résumé to a candidate's profile later, not only on Ad
 the open profile, or use "Choose a file" (or "Replace" beside the one on file). Dropped on the Candidates page, it
 opens Add candidate with the file taken. Before anything is saved, a dialog shows what the résumé says beside what
 the profile has: empty details are ticked to be filled in, a different value is only changed if you tick it, and
-the name is never changed. A current title and company are only ticked when the job they come from runs to the
-present in the résumé ("2021 – Present"); with an end date, or no dates that can be read, they are offered unticked
-with "Check this is their current job". One click attaches the file and saves the ticked details, with the same
+the name is never changed. A current title is only ticked when the job it comes from runs to the present in the
+résumé ("2021 – Present"), and the company only when it also stands with that title: on its line, on the line above
+it that opens the entry, or on the line below a title with no dates, the dates coming after. Otherwise they are
+offered unticked with "Check this is their current job". One click attaches the file and saves the ticked details, with the same
 checks as Edit details, or nothing is saved. The résumé that was there is kept under "Earlier résumés", for the
 agency only, and the history says "Résumé added" or "Résumé replaced". From then on it is the profile's résumé like
 one attached any other way, and the same rules decide what happens to it when the person goes back to The Book (see
@@ -159,13 +160,16 @@ candidate in the app, and put on a job later when the right role comes up.
   is still on the client's record), and the entry goes back without a résumé. One case leaves the agency's own
   copy under Earlier résumés instead of on the profile: an application they made themselves without a résumé,
   which had been using the entry's. Last, the file that would be on the profile in The Book is compared, byte for
-  byte, with the earlier résumés of the application it leaves and with every résumé, on file or earlier, of their
-  other applications on that client's record. Only one file there is left out: the copy of the résumé on their
-  profile that went with them when the agency added them to another of that client's jobs afterwards. If it is the
-  same file as any of the others it is kept under Earlier résumés as well (once), and the entry goes back without a
-  résumé. When they are folded into another entry of theirs in The Book, that entry's résumé is held to the same
-  test. So a copy of what they sent the client, put on the profile again on another of that client's jobs, does not
-  reach the next one, and somebody the agency found keeps the agency's résumé after being on two of a client's jobs.
+  byte, with the earlier résumés of the application it leaves and with every résumé, on file or earlier, of the
+  other applications on that client's record that the person made themselves (on its careers page or through the
+  agency's post). Applications the agency made there, the copies made when it added them to more of the client's
+  jobs among them, are not looked at. If the file matches any it is compared with, it is kept under Earlier résumés as
+  well (once), and the entry goes back without a résumé. When they are folded into another entry of theirs in The
+  Book, that entry's résumé is held to the same test. So a copy of what they sent the client, put on the profile
+  again on another of that client's jobs, does not reach the next one, and somebody the agency found keeps the
+  agency's résumé however often they were on and off the client's jobs. The limit, as before this release: once
+  the application they made themselves has been deleted outright (not sent back to The Book), a copy of its résumé
+  on an application the agency made is no longer recognised.
 - **What a hiring team could still work out.** Nothing from before the job is shown, but two things are as they
   are because the entry is kept and not copied: its history line reads "Added to (job) at (stage)", where somebody
   added straight to a job has "Added to the pipeline (...)" (the same line as for anyone added to a second job at

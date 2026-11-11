@@ -443,7 +443,7 @@ export function AttachResumeModal({ data, file, more = false, again = false, onC
   useEffect(() => { clearToasts(); }, []);
   const { application: app, candidate, client } = data;
   const first = firstName(candidate.name);
-  const [read, setRead] = useState(null); // what readResume found: { fields, status, nameFromFile, roleCurrent }
+  const [read, setRead] = useState(null); // what readResume found: { fields, status, nameFromFile, roleCurrent, companyCurrent }
   const [rows, setRows] = useState([]);   // [{ key, label, current, value, ticked }], one for each detail worth asking about
   const [problem, setProblem] = useState(null); // why the workspace would not save it
   const problemBox = useRef(null);
@@ -459,9 +459,10 @@ export function AttachResumeModal({ data, file, more = false, again = false, onC
       const found = result.fields || {};
       // Somebody else's résumé: nothing from it is ticked until the recruiter has looked.
       const theirs = !found.name || sameName(found.name, candidate.name);
-      // A title and company are only ticked when the résumé shows that job running to the present ("2021 – Present").
-      // With an end date, dates that cannot be read or none, they may not be the job they have now: offered, not ticked.
-      const unsure = (key) => !result.roleCurrent && (key === 'current_title' || key === 'current_company');
+      // A title is only ticked when the résumé shows that job running to the present ("2021 – Present"), and a company
+      // only when it also stands with that title where it plainly belongs to it. Otherwise they may not be the job
+      // they have now: offered, not ticked.
+      const unsure = (key) => (key === 'current_title' ? !result.roleCurrent : key === 'current_company' ? !result.companyCurrent : false);
       setRead(result);
       setRows(RESUME_DETAILS.map(([key, label]) => ({ key, label, current: String(candidate[key] || '').trim(), value: String(found[key] || '').trim() }))
         .filter((r) => r.value && !sameDetail(r.key, r.current, r.value))
@@ -496,7 +497,8 @@ export function AttachResumeModal({ data, file, more = false, again = false, onC
     try {
       answer = await api.put(`/applications/${app.id}/resume`, fd);
     } catch (err) {
-      setProblem(err.message); // said in the dialog, which stays open: nothing was saved
+      // Said in the dialog, which stays open: nothing was saved. No answer at all means the server was not reached.
+      setProblem(err.status ? `${err.message}${/[.!?]$/.test(err.message) ? '' : '.'}` : 'The Book could not be reached.');
       return;
     }
     const n = answer.filled.length;
@@ -848,8 +850,10 @@ export function AddCandidateModal({ jobId, onClose, onAdded, initialFile, initia
     setReading(false);
   };
 
-  // A résumé dropped on the page that opened this dialog is taken as if it had been dropped in here.
-  useEffect(() => { if (initialFile) takeFile(initialFile); }, []);
+  // A résumé dropped on the page that opened this dialog is taken as if it had been dropped in here. Toasts left on
+  // that page would sit over this dialog's buttons on a phone, as for the attach dialog.
+  const clearToasts = useClearToasts();
+  useEffect(() => { if (initialFile) { clearToasts(); takeFile(initialFile); } }, []);
 
   // Takes the file off the form. What it filled in stays, as typed details would.
   const removeFile = () => {

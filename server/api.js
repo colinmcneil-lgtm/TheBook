@@ -2232,28 +2232,27 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
 
 /**
  * A résumé is not left on the profile of somebody going back to The Book from application `a` when it is byte for
- * byte one of this application's earlier résumés, or one of the résumés (on file or earlier) of any other application
- * on the client's record it is on. Such a file is, or may be, one they sent that client, so it is kept under Earlier
+ * byte (a) one of this application's earlier résumés, or (b) the résumé on file, or one of the earlier résumés, of
+ * another application on the client's record that the person made themselves (on the client's careers page or
+ * through the agency's post). Such a file is, or may be, one they sent that client, so it is kept under Earlier
  * résumés instead (see returnToBook), where only the agency sees it and nothing is lost.
  *
- * One file on another application does not count: the copy of this application's own résumé that went with them
- * when the agency added them to another of the client's jobs after this one (an application the agency made, holding
- * the very file this one has on file). Otherwise the agency's own résumé would come off somebody it found as soon as
- * it put them on two of a client's jobs.
+ * Applications the agency made on the client's record (the copy made when it added them to another of the client's
+ * jobs among them) do not count in (b): a file on one of those is the agency's own unless it is also on one they made.
+ * The limit, the same as on the live release: once their own application has been deleted outright, a copy of its
+ * file on an application the agency made is no longer recognised.
  *
  * Answers a test for one file: true when it is such a copy. `row` is the earlier résumé being tested, which is not
  * compared with itself. A file that cannot be read matches nothing. Call it before anything is moved.
  */
 function clientsCopy(a) {
-  const onFile = uploadHash(a.resume_file);
-  const others = q.all(`SELECT resume_file, applied_at, consent_at, source FROM applications WHERE candidate_id = ?1 AND id != ?2 AND resume_file IS NOT NULL
-      UNION ALL SELECT r.resume_file, o.applied_at, o.consent_at, o.source FROM earlier_resumes r JOIN applications o ON o.id = r.application_id WHERE o.candidate_id = ?1 AND o.id != ?2`, a.candidate_id, a.id)
-    .map((o) => ({ id: null, hash: uploadHash(o.resume_file), own: ownApplication(o), after: o.applied_at >= a.applied_at }));
-  // (When an application they made has that file too, its own row still counts: own applications are never left out.)
-  const tookWithThem = (o) => !o.own && o.after && o.hash === onFile;
+  const own = `SELECT id FROM applications WHERE candidate_id = ?1 AND id != ?2 AND ${OWN_APPLICATION}`;
+  const theirs = q.all(`SELECT resume_file FROM applications WHERE id IN (${own}) AND resume_file IS NOT NULL
+      UNION ALL SELECT resume_file FROM earlier_resumes WHERE application_id IN (${own})`, a.candidate_id, a.id)
+    .map((o) => ({ id: null, hash: uploadHash(o.resume_file) }));
   const files = [
     ...q.all('SELECT id, resume_file FROM earlier_resumes WHERE application_id = ?', a.id).map((r) => ({ id: r.id, hash: uploadHash(r.resume_file) })),
-    ...others.filter((o) => !tookWithThem(o)),
+    ...theirs,
   ].filter((r) => r.hash);
   return (file, row = null) => {
     const hash = uploadHash(file);

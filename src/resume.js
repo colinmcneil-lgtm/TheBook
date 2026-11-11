@@ -689,6 +689,8 @@ function pieces(text, line) {
   // The Europass form puts its long labels in a column of their own, which may reach us as a single space.
   const segs = text.replace(/^(occupation or position held|name and address of employer) (?=\p{Lu})/iu, '$1: ').replace(DATES, '$1 · ')
     .split(new RegExp(`${SEPARATOR.source}|${DASH.source}`)).map(tidy).filter(Boolean);
+  // A table's header row ("Company | Role | Dates") is only labels: no label there has a value, and none is an employer.
+  if (segs.length > 1 && segs.every((s) => LABEL.test(s) || SUBHEADING.test(s))) return out;
   for (let seg = 0; seg < segs.length; seg++) {
     const s = segs[seg];
     if (WORK_TYPE.test(s) || isPlace(s)) continue;
@@ -727,8 +729,8 @@ function pieces(text, line) {
 /** Title and company of the first job listed under a heading such as "Experience". */
 function firstRole(lines, heading) {
   const entry = [];
-  let skipped = 0, dates = false, datedLine = false;
-  const stamps = []; // the lines of this entry that carry its dates
+  let skipped = 0, dates = false, datedLine = false, gone = false; // gone: the entry has a title, and its dates have gone by
+  const stamps = []; // the lines of this entry that carry its dates, with where they stand
   for (let i = heading + 1; i < lines.length && entry.length < 3; i++) {
     const { text, heading: isHeading } = lines[i];
     if (isHeading) break;
@@ -738,25 +740,43 @@ function firstRole(lines, heading) {
       // A job has one set of dates. A second line that carries dates, or a third line once the dates have gone by,
       // belongs to the job before: its title must not be taken for this one's.
       if (dated ? datedLine : dates && entry.length >= 2) break;
-      // Nor are dates on a line that brings a title of its own, once the entry has one: they are the next job's.
-      if (dated && found.some((p) => p.kind === 'title') && entry.flat().some((p) => p.kind === 'title')) break;
+      // Nor are dates on a line that brings a title of its own, once the entry has one: they are the next job's. And
+      // once the entry's dates have gone by, such a line is the next job ("Engineer, Beta Corp" under "2021 – Present").
+      if ((dated || gone) && found.some((p) => p.kind === 'title') && entry.flat().some((p) => p.kind === 'title')) break;
       entry.push(found.map((p) => ({ ...p, row: i })));
       datedLine ||= dated;
     }
     // Words that are neither a title nor an employer are description too ("Refonte du parcours d'achat mobile").
     else if (described && (entry.length || ++skipped > 2)) break; // the description of the job, or no list of jobs at all
     // A line of description passed over before the entry starts is not where the entry's dates are.
-    if (dated && !described) stamps.push(text);
+    if (dated && !described) stamps.push({ text, row: i });
     dates ||= dated;
+    gone ||= dated && entry.flat().some((p) => p.kind === 'title');
   }
   // Only dates that run to the present say that this is the job they are in now. An end date in any form, dates that
   // cannot be read, or none at all leave it open: it may be a job they have left.
-  const current = stamps.length > 0 && stamps.every(runsToNow);
-  const role = roleOf(entry);
-  return role.title ? { ...role, current } : role;
+  const current = stamps.length > 0 && stamps.every((d) => runsToNow(d.text));
+  const { picked, ...role } = roleOf(entry);
+  if (!role.title) return role;
+  return { ...role, current, companyCurrent: current && Boolean(picked.company) && standsWith(picked.company, picked.title, lines, stamps) };
 }
 
-/** Title and company from the lines of one job entry, as `pieces` gives them. */
+/**
+ * Whether the employer chosen stands where it plainly belongs with the title: "Title at Company", in the title's own
+ * line, on the line straight above it when that opens the entry ("Acme Ltd" then "Engineer   2021 – Present"), or on
+ * the line straight below a title line with no dates, the dates coming after it ("Engineer", "Acme Ltd", "2021 –
+ * Present"). Anywhere else (under a dated title line, past the dates, further away) it may be another job's.
+ */
+function standsWith(company, title, lines, stamps) {
+  if (company === title || company.line === title.line) return true; // "at", or the same line
+  if (company.line === 0 && company.row === title.row - 1) return true;
+  return company.row === title.row + 1 && lines[title.row].text.search(DATES) < 0 && stamps.every((d) => d.row > company.row);
+}
+
+/**
+ * Title and company from the lines of one job entry, as `pieces` gives them, and which pieces they are (`picked`):
+ * for "Title at Company" the title's piece stands for both.
+ */
 function roleOf(entry) {
   const all = entry.flat();
   const title = all.find((p) => p.kind === 'title');
@@ -764,9 +784,9 @@ function roleOf(entry) {
     // No recognisable job word: "Barista" above "Costa Coffee Ltd" still reads as title and employer.
     const firm = all.find((p) => p.kind === 'org' && COMPANY_WORDS.test(p.text));
     const other = firm && all.filter((p) => p !== firm && Math.abs(p.line - firm.line) === 1 && p.text.split(' ').length <= 4);
-    return firm && other.length === 1 && entry[other[0].line].length === 1 ? { title: other[0].text, company: firm.text } : {};
+    return firm && other.length === 1 && entry[other[0].line].length === 1 ? { title: other[0].text, company: firm.text, picked: { title: other[0], company: firm } } : {};
   }
-  if (title.with) return { title: title.text, company: title.with };
+  if (title.with) return { title: title.text, company: title.with, picked: { title, company: title } };
   // Where the employer is looked for, in order: on the lines above the title, starting where the entry starts
   // ("Acme, Chicago" then the title), in another column of the title's line, on the line straight below. What follows the title after a comma comes
   // after those unless it is plainly a company ("Engineer, Acme Corp"): with the employer on a line of its own,
@@ -784,7 +804,7 @@ function roleOf(entry) {
     ...below,
   ];
   const company = ranked.find((p) => !p.town) || ranked[0]; // "Armonk, NY" may be only where the job was
-  return { title: title.text, company: company?.text };
+  return { title: title.text, company: company?.text, picked: { title, company } };
 }
 
 const RUNS_ON = new RegExp(`(?:-|–|—|to|until|till|bis|au|à|→)\\s*${UNTIL}(?![\\p{L}\\d])|(?:^|[^\\p{L}])(?:since|seit|depuis|desde|ab)\\s+${DATE}`, 'iu');
@@ -821,8 +841,9 @@ function currentWhenOldestFirst(lines, heading) {
  * @param {{lines?: {size?:number,page?:number,footer?:boolean}[], links?: string[], filename?: string}} [hints] what
  *   the file itself adds: each line's font size and page (PDF) or whether it is a page footer (Word), the addresses
  *   its links point to, and its name.
- * @param {{roleCurrent?: boolean}} [notes] what is worth knowing about the fields found: `roleCurrent` when the
- *   current title and company come from a job whose dates run to the present ("2019 - Present").
+ * @param {{roleCurrent?: boolean, companyCurrent?: boolean}} [notes] what is worth knowing about the fields found:
+ *   `roleCurrent` when the current title comes from a job whose dates run to the present ("2019 - Present"), and
+ *   `companyCurrent` when the company does too and stands with that title where it plainly belongs to it.
  * @returns {{name?:string,email?:string,phone?:string,linkedin?:string,location?:string,current_title?:string,current_company?:string}}
  */
 export function parseResume(text, hints = {}, notes = {}) {
@@ -858,7 +879,13 @@ export function parseResume(text, hints = {}, notes = {}) {
     const current = currentWhenOldestFirst(lines, i);
     if (current === -1) break;
     const role = firstRole(lines, current ?? i);
-    if (role.title) { out.current_title = role.title; if (role.company) out.current_company = role.company; notes.roleCurrent = role.current; }
+    if (role.title) {
+      out.current_title = role.title;
+      if (role.company) out.current_company = role.company;
+      notes.roleCurrent = role.current;
+      // Reached past a first job that has ended, the employer's place in the list says less: it is never taken as sure.
+      notes.companyCurrent = role.companyCurrent && current === undefined;
+    }
   }
   // Otherwise a headline under the name ("Senior Product Designer at Juniper Row") is a fair guess.
   if (!out.current_title && name) {
@@ -921,8 +948,10 @@ export async function readResume(file) {
     const guess = nameFromFilename(file.name);
     if (guess) { fields.name = guess; nameFromFile = true; }
   }
-  // `roleCurrent`: the current title and company were taken from a job whose dates run to the present. Without it
-  // they may be out of date.
-  const out = notes.roleCurrent && fields.current_title ? { fields, status, nameFromFile, roleCurrent: true } : { fields, status, nameFromFile };
+  // `roleCurrent`: the current title was taken from a job whose dates run to the present; `companyCurrent`: so was
+  // the company, from where it stands with that title. Without them they may be out of date.
+  const out = { fields, status, nameFromFile };
+  if (notes.roleCurrent && fields.current_title) out.roleCurrent = true;
+  if (notes.roleCurrent && notes.companyCurrent && fields.current_company) out.companyCurrent = true;
   return error === undefined ? out : { ...out, error };
 }

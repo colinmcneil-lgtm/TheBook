@@ -1482,3 +1482,57 @@ test('a month with the year in two figures ("Jan \'19") is read as a date, not a
   // Without a company, nothing is taken for one.
   assert.equal(parseResume(`${head}Customer Success Manager\nJan '19 – Dec '23`).current_company, undefined);
 });
+
+test('a current title is sure when its own dates run to the present, and the company only when it stands with that title', () => {
+  const head = 'Jordan Example\njordan@example.com\n416 555 0188\n\nExperience\n';
+  // [title, company, title sure (roleCurrent), company sure (companyCurrent)]
+  const sure = (text) => { const n = {}; const f = parseResume(`${head}${text}`, {}, n); return [f.current_title, f.current_company, Boolean(n.roleCurrent), Boolean(n.roleCurrent && n.companyCurrent)]; };
+  // The commonest layout: the next job's title line and dates are not counted into this entry.
+  assert.deepEqual(sure('Senior Engineer, Acme Ltd\n2021 – Present\nEngineer, Beta Corp\n2017 – 2021'), ['Senior Engineer', 'Acme Ltd', true, true]);
+  assert.deepEqual(sure('Senior Engineer, Acme Ltd\n2021 – Present\n• Led the payments team of six\n• Moved billing to a new platform\nEngineer, Beta Corp\n2017 – 2021'), ['Senior Engineer', 'Acme Ltd', true, true]);
+  assert.deepEqual(sure('Senior Engineer at Acme Ltd\n2021 – Present\nEngineer at Beta Corp\n2017 – 2021'), ['Senior Engineer', 'Acme Ltd', true, true]);
+  // The company on the line above, which opens the entry.
+  assert.deepEqual(sure('Acme Ltd\nSenior Engineer   2021 – Present\nBeta Corp\nEngineer   2017 – 2021'), ['Senior Engineer', 'Acme Ltd', true, true]);
+  // Title, then company, then dates.
+  assert.deepEqual(sure('Senior Engineer\nAcme Ltd, Leeds\nJan 2021 – Present\nEngineer\nBeta Corp, York\n2017 – 2020'), ['Senior Engineer', 'Acme Ltd', true, true]);
+  assert.deepEqual(sure('Barista\nCosta Coffee Ltd\n2021 – Present'), ['Barista', 'Costa Coffee Ltd', true, true]);
+  // Under a dated title line the company may be the next job's: offered, not sure.
+  assert.deepEqual(sure('Senior Engineer   2021 – Present\nAcme Ltd\nEngineer   2017 – 2021\nBeta Corp'), ['Senior Engineer', 'Acme Ltd', true, false]);
+  // Past the dates: here it is the employer of the job below.
+  assert.deepEqual(sure('Independent Consultant\n2021 – Present\nLumen Health Ltd\nSenior Consultant\n2015 – 2021'), ['Independent Consultant', 'Lumen Health Ltd', true, false]);
+  assert.deepEqual(sure('Self-employed Electrician\nJan 2020 – Present\nBright Sparks Ltd\nElectrician\nMar 2014 – Dec 2019'), ['Self-employed Electrician', 'Bright Sparks Ltd', true, false]);
+  // Reached past a first job that has ended (a list read oldest first): the title is sure, the company never.
+  const [title, , titleSure, companySure] = sure('Northwind Corp\nData Director   2019 – 2023\nKestrel Analytics Ltd\nTechnical Advisor   2021 – Present\nBrightwave Ltd\nHead of Data   2016 – 2019');
+  assert.deepEqual([title, titleSure, companySure], ['Technical Advisor', true, false]);
+  assert.deepEqual(sure('Analyst, First Co\n2012 - 2016\nCustomer Success Manager, Example Co, 2016 - Present'), ['Customer Success Manager', 'Example Co', true, false]);
+  assert.deepEqual(sure('Head of Engineering   2019 – 2024\nQuartz Ltd\nNon-Executive Director   2022 – Present\nSapphire Trust\nEngineering Manager   2015 – 2019\nOpal Ltd'), ['Non-Executive Director', 'Sapphire Trust', true, false]);
+  // The layouts that used to be ticked wrongly stay unticked.
+  assert.deepEqual(sure('Warehouse Assistant, Beta Shipping Ltd\nSenior Logistics Planner, Harbour Freight Ltd, 2021 – Present'), ['Warehouse Assistant', 'Beta Shipping Ltd', false, false]);
+  assert.deepEqual(sure('Senior Logistics Planner\nHarbour Freight Ltd\nVolunteer Driver, Cardiff Food Bank, 2022 – Present'), ['Senior Logistics Planner', 'Harbour Freight Ltd', false, false]);
+  // A job they have left above one that runs to the present (a volunteer post, a typo): nothing is taken.
+  assert.deepEqual(sure('Senior Engineer, Acme Ltd   2018 – 2023\nVolunteer Mentor, Code Club   2020 – Present'), [undefined, undefined, false, false]);
+  assert.deepEqual(sure('Product Manager, Delta Ltd\n2019 – 2023\nProduct Analyst, Echo Corp\n2016 – Present'), [undefined, undefined, false, false]);
+  assert.deepEqual(sure('Customer Success Manager, Example Co\n2021 - Present\n2016 - 2019'), ['Customer Success Manager', 'Example Co', false, false]);
+});
+
+test('a table\'s header row is not an employer', () => {
+  const head = 'Jordan Example\njordan@example.com\n416 555 0188\n\nExperience\n';
+  const role = (text) => { const n = {}; const f = parseResume(`${head}${text}`, {}, n); return [f.current_title, f.current_company, Boolean(n.roleCurrent), Boolean(n.roleCurrent && n.companyCurrent)]; };
+  for (const header of ['Company | Role | Dates', 'Employer | Position | Dates', 'Company\tJob Title\tPeriod', 'Organisation | Title | Duration']) {
+    const row = header.includes('\t') ? 'Orbit Labs Ltd\tData Scientist\t2022 – Present' : 'Orbit Labs Ltd | Data Scientist | 2022 – Present';
+    assert.deepEqual(role(`${header}\n${row}\nNimbus Ltd | Data Analyst | 2019 – 2022`), ['Data Scientist', 'Orbit Labs Ltd', true, true], header);
+  }
+  // A label with its value, on one line or in the next cell, still says which is which.
+  assert.deepEqual(role('Employer: Infosys Limited, Pune\nDesignation: Systems Engineer\n2021 – Present').slice(0, 2), ['Systems Engineer', 'Infosys Limited']);
+  assert.deepEqual(role('Company | Orbit Labs Ltd\nRole | Data Scientist\n2022 – Present').slice(0, 2), ['Data Scientist', 'Orbit Labs Ltd']);
+});
+
+test('readResume says whether the company is as sure as the title', async () => {
+  const head = 'Jordan Example\njordan@example.com\n416 555 0188\n\nExperience\n';
+  const both = await readResume(textFile(`${head}Senior Engineer, Acme Ltd\n2021 – Present\nEngineer, Beta Corp\n2017 – 2021`, 'utf8', 'jordan.txt'));
+  assert.equal(both.roleCurrent, true);
+  assert.equal(both.companyCurrent, true);
+  const titleOnly = await readResume(textFile(`${head}Senior Engineer   2021 – Present\nAcme Ltd\nEngineer   2017 – 2021\nBeta Corp`, 'utf8', 'jordan.txt'));
+  assert.equal(titleOnly.roleCurrent, true);
+  assert.equal('companyCurrent' in titleOnly, false);
+});

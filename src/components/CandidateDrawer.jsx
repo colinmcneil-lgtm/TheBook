@@ -276,8 +276,9 @@ function CandidateView({ data, onClose }) {
         <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
 
         {tab === 'overview' && <Overview data={data} reviews={isAgency ? teamReviews?.reviews : null} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} onChooseResume={isAgency ? takeResume : null} />}
-        {/* Drawn afresh when the file changes: a newer résumé can take the place of this one under the same address and name. */}
-        {tab === 'resume' && app.resume_file && <ResumeViewer key={app.resume_file} app={app} />}
+        {/* Drawn afresh when the file changes: a newer résumé can take the place of this one under the same address and name.
+            Straight after an attach, until the profile shows the new file, it would be drawn under the old one's name. */}
+        {tab === 'resume' && app.resume_file && (attachedOver ? <Loading /> : <ResumeViewer key={app.resume_file} app={app} />)}
         {tab === 'interviews' && !general && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onEdit={(i) => setModal({ editInterview: i })} onScorecard={(i) => setModal({ scorecard: i })} />}
         {tab === 'calls' && isAgency && <CallsTab data={data} calls={calls} error={callsError} reload={reloadCalls} />}
         {tab === 'activity' && <ActivityTab data={data} />}
