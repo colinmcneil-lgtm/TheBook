@@ -269,7 +269,9 @@ test('what is sealed can only be opened by this server, for the purpose it was s
   assert.equal(unseal(sealed, 'metaview-key'), 'mv-a-secret-key');
   assert.notEqual(seal('mv-a-secret-key', 'metaview-key'), sealed, 'sealing the same thing twice does not give the same text');
   assert.equal(unseal(sealed, 'another-purpose'), null);
-  assert.equal(unseal(`${sealed.slice(0, -2)}xx`, 'metaview-key'), null, 'a changed value is refused, not misread');
+  // One character changed, well inside the text (the last one or two can already be what they are changed to, or hold no data).
+  const at = sealed.length - 4, changed = `${sealed.slice(0, at)}${sealed[at] === 'x' ? 'y' : 'x'}${sealed.slice(at + 1)}`;
+  assert.equal(unseal(changed, 'metaview-key'), null, 'a changed value is refused, not misread');
   for (const junk of ['', null, 'v2.a.b.c', 'not sealed at all']) assert.equal(unseal(junk, 'metaview-key'), null);
   // The secret itself is a file beside the database, readable by the server's own account only.
   assert.equal(fs.statSync(`${process.env.DATA_DIR}/server-secret`).mode & 0o777, 0o600);
