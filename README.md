@@ -19,7 +19,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **Otterview** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [Otterview](#otterview) and [Metaview in Otterview](#metaview-in-otterview). |
 | **To do** | Each person on your team has their own list: the jobs they have picked to work on, the people to prep before an interview and the people to debrief after one. Jobs and people are dragged across from a picker, or added with a button; The Book adds people by itself from the interviews scheduled in it. Agency only. See [To do](#to-do). |
-| **Inbox** | Every new application across all clients lands in one review queue, oldest first. |
+| **Inbox** | Every new application across all clients lands in one review queue, oldest first. Candidates somebody on your team has asked you to review are there too, under **For your review**. See [Asking for a review](#asking-for-a-review). |
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
 | **Shortlist hand-off** | Submit a candidate to the hiring team with your write-up. They approve (the candidate moves to the next interview stage) or decline with a reason, so you can calibrate. |
 | **Interviews** | Schedule with a panel, download a calendar file, and collect a structured scorecard from each interviewer against the criteria set on the job. Outstanding scorecards are chased in the sidebar and dashboard. |
@@ -178,6 +178,11 @@ candidate in the app, and put on a job later when the right role comes up.
   an interview is edited, is an e-mail like any other sent after they joined the job: the job's hiring team can
   read it and the line in the history that says what was changed, and both become the agency's own, with the rest,
   if they later go on another job.
+- **Asking for a review.** Somebody on no job can be put to anybody on the team with "Ask for AE review" like
+  anyone else. Nobody is suggested, since there is no job and so no account executive, and the request is in the
+  Inbox of whoever is asked whichever client the menu shows. Put on a job, or back in The Book, their requests stay
+  with them; when two entries are merged, or an entry is joined to a client's record, the requests go to the one
+  that is kept. See [Asking for a review](#asking-for-a-review).
 - **Jobs on our website.** A confidential post (see "Jobs on our website" below) and The Book are kept apart the
   same way a client's careers page and The Book are.
   - *Somebody in The Book who applies through a post, or on a client's careers page,* is answered exactly as anybody
@@ -358,9 +363,9 @@ did, because the first start gives each job that was there its creator.
 `test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview (and, where this meets the
 agency's jobs page, a stand-in for the mail provider), on four ports: the fifteenth,
 sixteenth, eleventh and twelfth from `ORACLE_TEST_PORT`, or four in a row from `POOL_TEST_PORT` when that is set
-(`test/oracle-helpers.mjs` lists which test file uses which port, and a unit test checks that no two share one). `npm test` uses thirty-two ports in a row from `ORACLE_TEST_PORT` (3610 unless
+(`test/oracle-helpers.mjs` lists which test file uses which port, and a unit test checks that no two share one). `npm test` uses thirty-four ports in a row from `ORACLE_TEST_PORT` (3610 unless
 set): `ORACLE_TEST_PORT=5080 npm test`. Node refuses to fetch from a few ports whatever is listening on them
-(5060 and 5061 among them), so a base that puts one of the thirty-two on such a port, any base from 5029 to 5061 for
+(5060 and 5061 among them), so a base that puts one of the thirty-four on such a port, any base from 5027 to 5061 for
 one, is refused before a test runs, with a sentence that says which base to choose instead.
 
 ## Account executives and the job board
@@ -397,6 +402,48 @@ beside each job and can be narrowed to one person's jobs, and the job form has a
   "Deactivated", until the jobs are handed on.
 - **Clients.** The client's hiring team sees no job board and is never told who a job's account executive is, or who
   created it.
+
+## Asking for a review
+
+You have a candidate you want one of your account executives to look at. Open their profile, choose **Ask for AE
+review** from the **...** menu (it is also in the **...** menu beside **Open profile** on a call in Otterview), and
+choose who. The job's account executive is chosen for you when there is one and it is not you; anybody else active on
+the agency team can be chosen instead. A client's user, somebody deactivated, somebody whose account request is still
+waiting and you yourself cannot be. Say what they should look at if you like ("What should they look at?").
+
+- **One at a time for each person.** While somebody has a request about a candidate that they have not answered,
+  asking them again about the same candidate is refused ("Priya Nair has already been asked to review ..."). Asking a
+  second person is fine.
+- **Where it arrives.** In the Inbox of whoever was asked, under **For your review**, which comes first while it has
+  anything in it: the candidate, the job and client (or "Not on a job yet"), who asked, when, and the note, oldest
+  first. It follows the client chosen in the menu as the other tabs do, but people in The Book on no job are always
+  listed. **Review** opens the candidate's profile. The count beside **Inbox** in the menu includes it, and the
+  dashboard says "2 candidates for you to review".
+- **E-mail.** With e-mail connected, the person asked is sent a short message ("Alex Morgan asked you to review a
+  candidate") with the candidate's name, the job and client, the note and a link to the profile (when `APP_URL` is
+  set). The request does not wait for it: if the message cannot be sent, the request is still made and the log says
+  so. Nothing is sent to the candidate or to anybody at the client.
+- **Answering.** At the top of the candidate's profile the person asked sees who asked, when and the note, and two
+  answers, **Good to go** and **Not a fit**, with a comment if they like. Everybody else on the agency team sees a
+  quieter line instead ("Waiting on Priya Nair's review, asked by Alex Morgan 2 hours ago"), and whoever asked, and
+  any admin, can **Cancel request**.
+- **The answer comes back.** It is in the Inbox of whoever asked, under the same tab ("Priya Nair: Good to go", with
+  the comment), and is counted there until they press **Done**. Opening the candidate from it does not clear it.
+- **History.** The profile keeps a short list of the reviews asked about the candidate: who asked whom, when, the
+  note, the answer and the comment, and which were cancelled.
+- **Somebody who can no longer answer.** If the person asked is deactivated, becomes a client's user or is removed,
+  nobody can answer their open requests. The profile says so ("Priya Nair can no longer answer; ask somebody else"),
+  and whoever asked, or an admin, can cancel the request and ask somebody else. If whoever asked is removed, the
+  request stays and can still be answered; the answer then goes to nobody's Inbox.
+- **What happens around it.** Rejecting a candidate, or their withdrawing, leaves their requests open. Deleting a
+  candidate, "Delete all data on this person", removing them from a job (unless they go back to The Book) and deleting
+  the job remove their requests.
+- **Clients.** A client's user is never sent anything of this: not the request, the note, the answer, the count, nor
+  who was asked. Every route of it answers them "Only the agency team can do this." Everything about a review is
+  kept in one table of its own (`team_reviews`), which nothing else reads: no line is added to the candidate's
+  history, e-mails or notes, and no column to their record. So if the app were ever rolled back to a version from
+  before this, the client's hiring team would still have nothing of it to see; that version simply leaves the table
+  alone. `test/reviews.test.mjs` runs all of this against the real API, with a stand-in for the mail provider.
 
 ## To do
 

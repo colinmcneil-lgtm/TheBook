@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarDays, Briefcase, Inbox, Hourglass, ClipboardCheck, UserPlus, CalendarCheck, ArrowUpRight, ThumbsUp, Handshake, Trophy, EyeOff } from 'lucide-react';
+import { CalendarDays, Briefcase, Inbox, Hourglass, ClipboardCheck, UserPlus, CalendarCheck, ArrowUpRight, ThumbsUp, Handshake, Trophy, EyeOff, UserCheck, MessageSquareText } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, ago, daysSince, firstName, fmtDay, photoUrl, plural, remember, remembered } from '../lib.js';
 import { Card, CardHeader, Empty, ListRow, Page, Stat, StatStrip, Avatar, cx } from '../ui.jsx';
@@ -90,6 +90,8 @@ export default function Dashboard() {
   const needs = [
     nav?.board_down > 0 && row({ icon: EyeOff, to: '/jobs?view=board', title: `${plural(nav.board_down, 'confidential post is', 'confidential posts are')} switched on but not public`, detail: 'The check took it down, or its job is no longer open' }),
     nav?.pending_accounts > 0 && row({ icon: UserPlus, to: '/settings?tab=team', title: `${plural(nav.pending_accounts, 'person', 'people')} waiting for you to approve their account`, detail: 'Choose which client’s hiring team each one joins' }),
+    nav?.to_review > 0 && row({ icon: UserCheck, to: '/inbox?tab=reviews', title: `${plural(nav.to_review, 'candidate')} for you to review`, detail: 'Somebody on your team asked for your view' }),
+    nav?.reviews > nav?.to_review && row({ key: 'answers', icon: MessageSquareText, to: '/inbox?tab=reviews', title: `${plural(nav.reviews - nav.to_review, 'answer')} to what you asked the team`, detail: 'Read them in your Inbox and mark each one done' }),
     isAgency && s.new_applicants > 0 && row({ icon: Inbox, to: '/inbox', title: `${plural(s.new_applicants, 'new applicant')} to review`, detail: 'Oldest first, so nobody waits long for a first reply' }),
     s.pending_review > 0 && row({
       icon: Hourglass, to: '/inbox?tab=review',
@@ -113,7 +115,7 @@ export default function Dashboard() {
       {needs.length > 0 && (
         <Card className="mt-4 divide-y divide-hairline">
           <CardHeader title="Needs you today" action={<span className="text-xs text-stone-500">{plural(needs.length, 'thing')}</span>} />
-          {needs.map((n) => <ListRow key={n.to} {...n} />)}
+          {needs.map(({ key, ...n }) => <ListRow key={key ?? n.to} {...n} />)}
         </Card>
       )}
 

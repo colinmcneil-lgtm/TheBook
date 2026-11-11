@@ -22,7 +22,7 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   }
   console.log(`Wiping ${DATA_DIR} ...`);
   tx(() => {
-    for (const t of ['post_applications_set_aside', 'board_applications', 'board_log', 'board_overrules', 'board_posts', 'todos', 'report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'agency_emails', 'agency_activities', 'earlier_resumes', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
+    for (const t of ['team_reviews', 'post_applications_set_aside', 'board_applications', 'board_log', 'board_overrules', 'board_posts', 'todos', 'report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'agency_emails', 'agency_activities', 'earlier_resumes', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
       db.exec(`DELETE FROM ${t}`);
     db.exec(`DELETE FROM settings WHERE key LIKE 'metaview_%'`); // the demo is not connected to Metaview
     db.exec(`DELETE FROM settings WHERE key LIKE 'board_%'`);    // the demo's job board starts as a new one does
@@ -671,6 +671,27 @@ What is on offer
 // Any job made further down this file (the one behind the second confidential post) belongs to whoever made it,
   // as a job made in the app does.
   q.run('UPDATE jobs SET account_executive_id = created_by WHERE account_executive_id IS NULL AND created_by IS NOT NULL');
+
+// Asking somebody on the team for a review, so the Inbox's "For your review" is not empty: Marcus has asked Priya about
+// somebody at interview in one of her jobs and is waiting, and Priya asked Alex about somebody in one of his, which he
+// has answered. Written as reviews.js writes them, with times of their own so that nothing above changes.
+{
+  const person = (email) => q.get('SELECT id FROM users WHERE email = ?', email).id;
+  const [alexId, priyaId, marcusId] = ['alex', 'priya', 'marcus'].map((name) => person(`${name}@harbourtalent.example`));
+  const hoursAgo = (hours) => new Date(Date.now() - hours * 3600000).toISOString();
+  const atInterview = (ae) => q.get(
+    `SELECT a.id FROM applications a JOIN jobs j ON j.id = a.job_id JOIN stages s ON s.id = a.stage_id
+     WHERE j.account_executive_id = ? AND j.status = 'open' AND a.status = 'active' AND s.kind = 'interview' ORDER BY a.id LIMIT 1`, ae)?.id;
+  const forPriya = atInterview(priyaId), forAlex = atInterview(alexId);
+  if (forPriya) {
+    q.run('INSERT INTO team_reviews (application_id, asked_by, reviewer_id, note, created_at) VALUES (?, ?, ?, ?, ?)', forPriya, marcusId, priyaId,
+      'Strong on paper. Is the salary they asked for going to work for this client?', hoursAgo(26));
+  }
+  if (forAlex) {
+    q.run('INSERT INTO team_reviews (application_id, asked_by, reviewer_id, note, created_at, answer, comment, answered_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', forAlex, priyaId, alexId,
+      'Could you look at their last two roles before I put them forward?', hoursAgo(30), 'good_to_go', 'Both roles are a good match. Put them forward this week.', hoursAgo(3));
+  }
+}
   console.log(`Demo data loaded.
   Agency owner:  alex@harbourtalent.example / ${PASSWORD}
   Recruiters:    priya@harbourtalent.example and marcus@harbourtalent.example / ${PASSWORD}

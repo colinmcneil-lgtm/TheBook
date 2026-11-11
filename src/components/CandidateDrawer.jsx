@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines, LoaderCircle, Plus, EyeOff,
+  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines, LoaderCircle, Plus, EyeOff, UserCheck,
 } from 'lucide-react';
 import { api, url, ago, since, extUrl, photoUrl, telHref, fmtDate, fmtDateTime, fmtWhen, money, firstName, NO_JOB, sourceName, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
@@ -12,6 +12,7 @@ import { kindLine, oraclePath } from '../oracle/calls.js';
 import { ChannelBadge, problemOf } from '../oracle/metaview.jsx';
 import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, PlacementFeeModal, EditCandidateModal, AddToJobModal, EraseModal } from './CandidateModals.jsx';
 import { NoJobBadge, ReviewBadge } from './bits.jsx';
+import { AskReviewModal, ReviewHistory, ReviewRequests } from './TeamReviews.jsx';
 
 const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
 const DELIVERY = { sent: { label: 'Sent', tone: 'green' }, failed: { label: 'Delivery failed', tone: 'red' }, not_configured: { label: 'Saved, not sent', tone: 'amber' } };
@@ -31,8 +32,10 @@ function CandidateView({ data, onClose }) {
   const { isAgency, bump, user } = useApp();
   const toast = useToast();
   const [tab, setTab] = useState('overview');
-  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'fee' | 'edit' | 'addToJob' | 'erase' | { review } | { scorecard }
+  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'fee' | 'edit' | 'addToJob' | 'erase' | 'askReview' | { review } | { scorecard }
   const { application: app, candidate, job, client, stages } = data;
+  // Somebody on the team asked to review this person, or asked by you: the agency's alone, so never asked for by a client's user.
+  const { data: teamReviews } = useApi(isAgency ? `/applications/${app.id}/reviews` : null);
   // Someone saved to The Book without a job: there is no job, client or stage, so everything that works on one
   // (moving, rejecting, scheduling, submitting, offers) is left off their profile, and "Add to a job" leads instead.
   const general = Boolean(app.general) || !job;
@@ -164,6 +167,7 @@ function CandidateView({ data, onClose }) {
               { label: 'Email candidate', icon: Mail, onClick: () => setModal('email') },
               isAgency && active && { label: app.review_status ? 'Resubmit to hiring team' : 'Submit to hiring team', icon: Send, onClick: () => setModal('submit') },
               isAgency && !general && { label: data.offer ? 'Update offer' : 'Record an offer', icon: Banknote, onClick: () => setModal('offer') },
+              isAgency && { label: 'Ask for AE review', icon: UserCheck, onClick: () => setModal('askReview') },
               isAgency && { label: 'Edit details', icon: Pencil, onClick: () => setModal('edit') },
               isAgency && !general && { label: 'Add to another job', icon: BriefcaseBusiness, onClick: () => setModal('addToJob') },
               active && null,
@@ -196,6 +200,7 @@ function CandidateView({ data, onClose }) {
             <span className="font-medium">Rejected.</span> {app.reject_reason}
           </div>
         )}
+        {isAgency && <ReviewRequests reviews={teamReviews?.reviews} candidateName={candidate.name} />}
         {scorecardsDue.map((i) => (
           <div key={i.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gold-200 bg-gold-50 px-4 py-3 text-sm text-gold-900">
             <span><span className="font-medium">Your scorecard is due</span> for {i.title} on {fmtDate(i.starts_at)}.</span>
@@ -226,7 +231,7 @@ function CandidateView({ data, onClose }) {
         ))}
         <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
 
-        {tab === 'overview' && <Overview data={data} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} />}
+        {tab === 'overview' && <Overview data={data} reviews={isAgency ? teamReviews?.reviews : null} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} />}
         {/* Drawn afresh when the file changes: a newer résumé can take the place of this one under the same address and name. */}
         {tab === 'resume' && app.resume_file && <ResumeViewer key={app.resume_file} app={app} />}
         {tab === 'interviews' && !general && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onEdit={(i) => setModal({ editInterview: i })} onScorecard={(i) => setModal({ scorecard: i })} />}
@@ -244,6 +249,7 @@ function CandidateView({ data, onClose }) {
       {modal === 'fee' && <PlacementFeeModal data={data} onClose={() => setModal(null)} />}
       {modal === 'edit' && <EditCandidateModal data={data} onClose={() => setModal(null)} />}
       {modal === 'addToJob' && <AddToJobModal data={data} onClose={() => setModal(null)} />}
+      {modal === 'askReview' && <AskReviewModal applicationId={app.id} candidateName={candidate.name} jobLine={job ? `${job.title} at ${client.name}` : null} onClose={() => setModal(null)} />}
       {modal === 'erase' && <EraseModal data={data} elsewhere={elsewhere} metaviewToo={metaviewToo} onClose={() => setModal(null)} onDone={onClose} />}
       {modal?.review && <ReviewModal data={data} decision={modal.review} onClose={() => setModal(null)} />}
       {modal?.scorecard && job && <ScorecardModal interview={modal.scorecard} criteria={job.criteria} candidateName={candidate.name} onClose={() => setModal(null)} />}
@@ -298,7 +304,7 @@ function ReviewBanner({ data, onDecide }) {
   );
 }
 
-function Overview({ data, onOffer, onFee, onResume }) {
+function Overview({ data, reviews, onOffer, onFee, onResume }) {
   const { isAgency, bump, user } = useApp();
   const { application: app, client } = data;
   const general = Boolean(app.general) || !data.job;
@@ -474,6 +480,7 @@ function Overview({ data, onOffer, onFee, onResume }) {
             <Button size="sm" className="mt-3 w-full" onClick={onFee}>{data.placement.fee != null ? 'Correct the fee' : 'Add the fee'}</Button>
           </Card>
         )}
+        <ReviewHistory reviews={reviews} />
         {data.others.length > 0 && (
           <Card className="p-4">
             <h3 className="text-sm font-semibold text-stone-900">Also considered for</h3>

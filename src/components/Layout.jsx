@@ -116,7 +116,8 @@ export default function Layout({ children }) {
   const recording = useRecorder().live;
   useEffect(() => setOpen(false), [location.pathname]);
 
-  const inboxCount = counts ? (isAgency ? counts.new_applicants : counts.pending_review) : 0;
+  // For the agency, new applicants and what somebody on the team is waiting for this person to review (or has answered).
+  const inboxCount = counts ? (isAgency ? counts.new_applicants + (counts.reviews || 0) : counts.pending_review) : 0;
   // The pages in three groups: what is waiting today, the hiring itself, and the agency (or, for a client's user, their company) around it.
   const groups = [
     { label: 'Today', items: [

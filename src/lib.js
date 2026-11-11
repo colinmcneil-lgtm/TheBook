@@ -87,6 +87,16 @@ export function ago(d) {
   if (days < 30) return `${days}d ago`;
   return fmtDate(d, new Date(d).getFullYear() !== new Date().getFullYear());
 }
+/** How long ago `d` was, in words for a sentence: "just now", "5 minutes ago", "2 hours ago", "3 days ago", or the date. */
+export function agoInWords(d) {
+  const mins = Math.floor((Date.now() - new Date(d).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${plural(mins, 'minute')} ago`;
+  if (mins < 1440) return `${plural(Math.floor(mins / 60), 'hour')} ago`;
+  const days = Math.floor(mins / 1440);
+  if (days < 30) return `${plural(days, 'day')} ago`;
+  return `on ${fmtDate(d, new Date(d).getFullYear() !== new Date().getFullYear())}`;
+}
 /** A duration since `d`, e.g. "5m", "3h", "42d". */
 export function since(d) {
   const mins = Math.max(0, Math.floor((Date.now() - new Date(d).getTime()) / 60000));

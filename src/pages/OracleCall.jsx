@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, ArrowLeftRight, AudioLines, Check, ClipboardPaste, Copy, Ellipsis, ExternalLink, LoaderCircle, NotebookPen, Pencil, RefreshCw, Send, Sparkles, StickyNote, Trash2, UserPlus, UserRound, X,
+  ArrowLeft, ArrowLeftRight, AudioLines, Check, ClipboardPaste, Copy, Ellipsis, ExternalLink, LoaderCircle, NotebookPen, Pencil, RefreshCw, Send, Sparkles, StickyNote, Trash2, UserCheck, UserPlus, UserRound, X,
 } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, ago, extUrl, firstName, fmtDateTime, fmtWhen, jobLine, photoUrl } from '../lib.js';
 import { Avatar, Badge, Button, Card, CardHeader, Input, Menu, Select, Tabs, Textarea, useAction, useToast, cx } from '../ui.jsx';
 import { ReviewBadge } from '../components/bits.jsx';
 import { SubmitModal } from '../components/CandidateModals.jsx';
+import { AskReviewModal } from '../components/TeamReviews.jsx';
 import { MicBadge, useRecorder } from '../oracle/RecorderProvider.jsx';
 import { AttachModal, CallStatus, CopyButton, MetaviewMark, NotesText, Notice, callName, fmtClock, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
 import { oraclePath, tabOfCall } from '../oracle/calls.js';
@@ -68,6 +69,7 @@ function Title({ call, onPatch }) {
 /** Who the call was with: their profile and job, or the prompt to add the call to someone. */
 function CandidateCard({ data, onPatch, onAttach }) {
   const { call, candidate, application, applications } = data;
+  const [asking, setAsking] = useState(false); // "Ask for AE review" open
   // A submission draft is written for one job's hiring team, so it does not follow the call to another job or person.
   const [setJob, moving] = useAction(async (applicationId) => {
     if (call.submission && !window.confirm('Change which job this call is about? The submission draft was written for the current job, so it is removed.')) return;
@@ -80,6 +82,8 @@ function CandidateCard({ data, onPatch, onAttach }) {
   const changeWho = (
     <Menu trigger={<Button aria-label="Change who this call is with" icon={Ellipsis} className="!px-2.5" />}
       items={[
+        // Not drawn at all when the call is on nobody's job: a null item would be drawn as a divider.
+        Boolean(application) && { label: 'Ask for AE review', icon: UserCheck, onClick: () => setAsking(true) },
         { label: 'Move to another candidate', icon: ArrowLeftRight, onClick: onAttach },
         candidate && { label: `Take off ${firstName(candidate.name)}’s profile`, icon: X, onClick: detach },
       ]} />
@@ -152,6 +156,7 @@ function CandidateCard({ data, onPatch, onAttach }) {
         <Link to={`?c=${application.id}`} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-white px-3.5 text-sm font-medium text-stone-800 shadow-sm hover:bg-stone-50"><UserRound className="size-4" />Open profile</Link>
         {changeWho}
       </div>
+      {asking && <AskReviewModal applicationId={application.id} candidateName={candidate.name} jobLine={application.job_id ? `${application.job_title} at ${application.client_name}` : null} onClose={() => setAsking(false)} />}
     </Card>
   );
 }

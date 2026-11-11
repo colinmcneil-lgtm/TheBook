@@ -853,6 +853,38 @@ CREATE TABLE IF NOT EXISTS post_applications_set_aside (
 CREATE INDEX IF NOT EXISTS idx_post_applications_set_aside_post ON post_applications_set_aside(post_id);`);
 // ---------- end of our website's jobs page ----------
 
+// ---------- asking somebody on the team to review a candidate ----------
+// One person on the agency team asks another (a job's account executive, usually) to look at a candidate, and the
+// answer comes back to them (see reviews.js). It is the agency's business alone. Everything about a request is in this
+// one table, which nothing but reviews.js reads: no line goes in the history, the e-mails or the notes, and no column
+// is added to applications or candidates, so a version of the app from before this one, which shows the client's
+// hiring team from those, has nothing of it to show. Everything here is new: no existing row is rewritten.
+db.exec(`
+-- One row for each time somebody was asked. A request goes with the candidate's application (deleting the candidate
+-- or removing them from the job deletes it). Who asked and who was asked are kept as nobody when either is removed
+-- from the database: the request stays in the candidate's history, and an open one is then answerable by nobody.
+CREATE TABLE IF NOT EXISTS team_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused, so an old tab cannot answer somebody else's newer request
+  application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  asked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,     -- who asked; the answer comes back to them
+  reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- who was asked
+  note TEXT,                                         -- what they should look at
+  created_at TEXT NOT NULL,
+  answer TEXT,                                       -- good_to_go | not_a_fit, once answered
+  comment TEXT,                                      -- what the reviewer added to their answer
+  answered_at TEXT,
+  cancelled_at TEXT,                                 -- taken back before it was answered, by whoever asked or an admin
+  cancelled_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  done_at TEXT                                       -- whoever asked has read the answer and cleared it from their Inbox
+);
+CREATE INDEX IF NOT EXISTS idx_team_reviews_application ON team_reviews(application_id);
+-- What is waiting on a person to answer. One open request for each candidate and person asked: asking the same
+-- person again while one is open is refused.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_team_reviews_waiting ON team_reviews(reviewer_id, application_id) WHERE answered_at IS NULL AND cancelled_at IS NULL;
+-- Answers that have come back to whoever asked and are still in their Inbox.
+CREATE INDEX IF NOT EXISTS idx_team_reviews_answers ON team_reviews(asked_by) WHERE answered_at IS NOT NULL AND done_at IS NULL;`);
+// ---------- end of asking somebody on the team to review a candidate ----------
+
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
   get: (sql, ...p) => db.prepare(sql).get(...p),

@@ -12,6 +12,7 @@ import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
 import * as reporting from './reporting.js';
 import * as todos from './todos.js';
 import * as board from './board.js';
+import * as reviews from './reviews.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -567,6 +568,9 @@ todos.registerTodos(api, { agencyOnly, bad, clean, text, int });
 // again each time, and ask it before anything is e-mailed to somebody who applied through a post.
 board.registerBoard(api, { agencyOnly, adminOnly, bad, clean, text, int, takeHit, linkField, candidateUpload, acceptPhoto, removeUpload, logActivity,
   loadJob: (id, user) => loadJob(id, user), loadApp: (id, user) => loadApp(id, user) });
+// Asking somebody on the team to review a candidate is a module of its own too. The routes below tell it when an
+// application is folded into another, so that the requests about it move with it.
+reviews.registerReviews(api, { agencyOnly, bad, text, int, loadApp: (id, user) => loadApp(id, user), scopeOf: (req) => scopeOf(req) });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);
@@ -612,6 +616,9 @@ api.get('/nav', (req, res) => {
     ...(isAgency(req.user) ? { todo: todos.openCount(req.user.id) } : {}),
     // Confidential posts that are switched on but not public: the check, or a change to the job, stands in their way. The agency's only.
     ...(isAgency(req.user) ? { board_down: board.postsDown() } : {}),
+    // Candidates somebody on the team asked this person to review, and answers that have come back to them, in view of
+    // the client chosen as the Inbox shows them (`reviews`), and of those the ones for them to answer (`to_review`). The agency's only.
+    ...(isAgency(req.user) ? reviews.waitingOn(req.user.id, cid) : {}),
   });
 });
 
@@ -2014,6 +2021,7 @@ function foldEntry(going, kept, userId) {
   const spare = carryResume(going, kept, userId);
   q.run('UPDATE applications SET cover_note = COALESCE(cover_note, ?), owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', going.cover_note, going.owner_id, now(), kept.id);
   board.entryFolded(going.id, kept.id); // what the board had noted about a post they once applied through stays set aside, on the entry that is kept
+  reviews.entryFolded(going.id, kept.id); // anybody asked to review them is asked about the entry that is kept
   q.run('DELETE FROM applications WHERE id = ?', going.id);
   foldedInto(going.id, kept.id); // a message still on its way to them is recorded there
   return spare;
@@ -2122,6 +2130,7 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
   if (entry.cover_note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', there.id, user.id, `Saved with their entry in The Book: ${entry.cover_note}`, now());
   q.run('UPDATE applications SET owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', entry.owner_id, now(), there.id);
   board.entryFolded(entry.id, there.id); // what the board had set aside for the entry is kept with the application it is folded into
+  reviews.entryFolded(entry.id, there.id); // and so are the requests for somebody on the team to review them, which only the agency reads
   q.run('DELETE FROM applications WHERE id = ?', entry.id);
   foldedInto(entry.id, there.id); // a message still on its way to them is recorded there, for the agency
   const left = absorbRecord(person, into);
