@@ -62,6 +62,28 @@ GitHub page, a personal site, a company's team page, a LinkedIn Recruiter or Sal
   "Possible duplicate", and an agency user can merge them. Merging moves every application, note, interview and
   email onto the record you keep.
 
+## A résumé on a profile
+
+A résumé can be added when a candidate is added (drop it on Add candidate and the form is filled in from it), and
+later on their profile: drop the file anywhere on the open profile, or use "Choose a file" where it says "No résumé on
+file", or "Replace" beside the résumé that is there. Dropped on the Candidates page with no profile open, it opens Add
+candidate with the file already taken. The same files are taken as on Add candidate (PDF, Word, RTF or text, up to
+8 MB), and the file is read in the browser. Before anything is saved, a dialog sets what it found beside what the
+profile has: an e-mail address, phone number, location, current title, company or LinkedIn link the profile has no
+value for is ticked to be filled in, one it has a different value for is only changed if you tick it, and each can be
+corrected first. The name is never changed, and a résumé with somebody else's name on it says so ("This résumé looks
+like it belongs to ...") with nothing ticked. A scan, a password-protected file or an empty one can still be attached,
+with nothing filled in, and the dialog says why. One click attaches the file and saves the ticked details together,
+with the same checks as Edit details, and also refuses a LinkedIn link that is on another record at the same client
+(or another entry in The Book): if anything is refused, nothing is saved. A résumé that was there is kept under
+"Earlier résumés", for the agency only, and the same file sent twice is kept once. The history says "Résumé added" or
+"Résumé replaced" and which details were filled in, not what they were. Agency only: a client's hiring team sees the
+résumé on their job as they would one added with the candidate, and nothing is sent to anybody. A résumé the agency
+attaches this way is the agency's, even on an application the person made themselves, so it goes back to The Book with
+them (see "What they wrote to one client never reaches another" below). The first start after this adds one empty
+table, which records which résumés the agency attached; a version from before this neither reads nor needs it.
+`test/resume-drop.test.mjs` runs all of this against the real API.
+
 ## People in The Book without a job
 
 A person can be saved to The Book with no job chosen, from the Chrome extension on their profile or from Add
@@ -144,7 +166,9 @@ candidate in the app, and put on a job later when the right role comes up.
   of it on another of that client's jobs they were added to, for as long as the application they made themselves
   is still on the client's record), and the entry goes back without a résumé. One case leaves the agency's own
   copy under Earlier résumés instead of on the profile: an application they made themselves without a résumé,
-  which had been using the entry's.
+  which had been using the entry's. A résumé the agency dropped on the profile while they were on the job is the
+  agency's and stays on the profile; the one the entry brought, and the one they sent the client, are then both
+  kept under Earlier résumés.
 - **What a hiring team could still work out.** Nothing from before the job is shown, but two things are as they
   are because the entry is kept and not copied: its history line reads "Added to (job) at (stage)", where somebody
   added straight to a job has "Added to the pipeline (...)" (the same line as for anyone added to a second job at
@@ -1379,7 +1403,7 @@ they made at that client, their résumé files, and their recorded calls with th
   job autofill (the plain reader, and the route against a stand-in for the AI service), the recruiter brief, the activity
   feed's milestones, résumé and photo files, Otterview's server side, Otterview's uploader, Metaview in Otterview
   against a stand-in for Metaview, starting on a database from before phone calls and the calendar were taken
-  out, people saved without a job, and the database upgrade that made room for them. Otterview's recording screens were driven end to end in Chrome with a simulated microphone while they were
+  out, people saved without a job, the database upgrade that made room for them, and a résumé dropped on a profile. Otterview's recording screens were driven end to end in Chrome with a simulated microphone while they were
   built (record, reload and server restart mid-call, a lost connection, two people on one computer, transcript,
   notes, add to a candidate, draft, submit, delete), against stand-ins for Deepgram and Claude. The two tabs with
   Metaview were driven the same way at computer and phone widths against the stand-in for Metaview (connect, the

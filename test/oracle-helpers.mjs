@@ -22,6 +22,7 @@ export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-c
 // (PORT_PLAN below is the same list, for the code).
 //   +0 to +4    Otterview tests: three for servers, then one for each stand-in
 //   +5 to +8    the job board tests: two servers, then a stand-in each for the AI and mail services
+//   +9          a résumé dropped on a candidate's profile (resume-drop.test.mjs): a server
 //   +10, +11    people saved without a job (pool.test.mjs): a server with e-mail delivery connected, and a stand-in for its mail provider
 //   +12, +13    the workspace tests: a server and a stand-in
 //   +14, +15    people saved without a job again: a server and a stand-in for Metaview
@@ -55,13 +56,13 @@ if (problem) throw new Error(problem);
  * The test files run at the same time, so no two groups may overlap; the unit tests check this list for that, and
  * every file takes its ports from it, through PORTS below (pool.test.mjs can be given four of its own instead).
  */
-export const PORT_PLAN = { oracle: [0, 5], board: [5, 4], poolMail: [10, 2], workspace: [12, 2], pool: [14, 2], reporting: [16, 2], todos: [18, 2], metaview: [20, 10], accountExecutive: [30, 2], reviews: [32, 2] };
+export const PORT_PLAN = { oracle: [0, 5], board: [5, 4], resumeDrop: [9, 1], poolMail: [10, 2], workspace: [12, 2], pool: [14, 2], reporting: [16, 2], todos: [18, 2], metaview: [20, 10], accountExecutive: [30, 2], reviews: [32, 2] };
 const first = (group) => BASE_PORT + PORT_PLAN[group][0];
 export const PORTS = {
   main: first('oracle'), bare: first('oracle') + 1, restart: first('oracle') + 2, deepgram: first('oracle') + 3, anthropic: first('oracle') + 4,
   board: first('board'), poolMail: first('poolMail'), workspace: first('workspace'), workspaceAi: first('workspace') + 1, pool: first('pool'), reporting: first('reporting'), todos: first('todos'), metaview: first('metaview'),
   accountExecutive: first('accountExecutive'), accountExecutiveOld: first('accountExecutive') + 1,
-  reviews: first('reviews'), reviewsMail: first('reviews') + 1,
+  reviews: first('reviews'), reviewsMail: first('reviews') + 1, resumeDrop: first('resumeDrop'),
 };
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

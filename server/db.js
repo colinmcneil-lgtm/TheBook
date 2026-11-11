@@ -885,6 +885,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_reviews_waiting ON team_reviews(revie
 CREATE INDEX IF NOT EXISTS idx_team_reviews_answers ON team_reviews(asked_by) WHERE answered_at IS NOT NULL AND done_at IS NULL;`);
 // ---------- end of asking somebody on the team to review a candidate ----------
 
+// ---------- a résumé dropped on a profile ----------
+// A résumé the agency attached to an application from the candidate's profile. It is the agency's file even when the
+// application is one the person made themselves on a client's careers page or the agency's website, so going back to
+// The Book takes it with the entry instead of setting it aside as the person's own (see returnToBook in api.js). A row
+// goes with its application; the file named is the one that was attached, and it only counts while it is still the
+// application's résumé. Nothing else reads this table, and no existing row is rewritten.
+db.exec(`
+CREATE TABLE IF NOT EXISTS agency_resumes (
+  application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  resume_file TEXT NOT NULL,                         -- the file in the uploads folder that the agency attached
+  PRIMARY KEY (application_id, resume_file)
+);`);
+
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
   get: (sql, ...p) => db.prepare(sql).get(...p),

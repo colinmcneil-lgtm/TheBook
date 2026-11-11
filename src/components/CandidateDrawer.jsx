@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines, LoaderCircle, Plus, EyeOff, UserCheck,
+  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines, LoaderCircle, Plus, EyeOff, UserCheck, FileUp,
 } from 'lucide-react';
 import { api, url, ago, since, extUrl, photoUrl, telHref, fmtDate, fmtDateTime, fmtWhen, money, firstName, NO_JOB, sourceName, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
@@ -10,7 +10,8 @@ import ResumeViewer from './ResumeViewer.jsx';
 import { CallStatus, MetaviewMark, callName, callWhen, fmtLength, madeBy, useLive } from '../oracle/bits.jsx';
 import { kindLine, oraclePath } from '../oracle/calls.js';
 import { ChannelBadge, problemOf } from '../oracle/metaview.jsx';
-import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, PlacementFeeModal, EditCandidateModal, AddToJobModal, EraseModal } from './CandidateModals.jsx';
+import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, PlacementFeeModal, EditCandidateModal, AddToJobModal, EraseModal,
+  AttachResumeModal, RESUME_ACCEPT, carriesFiles, resumeRefusal, useNoStrayDrops } from './CandidateModals.jsx';
 import { NoJobBadge, ReviewBadge } from './bits.jsx';
 import { AskReviewModal, ReviewHistory, ReviewRequests } from './TeamReviews.jsx';
 
@@ -32,7 +33,7 @@ function CandidateView({ data, onClose }) {
   const { isAgency, bump, user } = useApp();
   const toast = useToast();
   const [tab, setTab] = useState('overview');
-  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'fee' | 'edit' | 'addToJob' | 'erase' | 'askReview' | { review } | { scorecard }
+  const [modal, setModal] = useState(null); // 'reject' | 'schedule' | 'email' | 'submit' | 'offer' | 'fee' | 'edit' | 'addToJob' | 'erase' | 'askReview' | { review } | { scorecard } | { attach: file }
   const { application: app, candidate, job, client, stages } = data;
   // Somebody on the team asked to review this person, or asked by you: the agency's alone, so never asked for by a client's user.
   const { data: teamReviews } = useApi(isAgency ? `/applications/${app.id}/reviews` : null);
@@ -101,10 +102,37 @@ function CandidateView({ data, onClose }) {
     bump();
   });
 
+  // A résumé file dropped anywhere on the open profile, or chosen on it, is attached through a dialog that shows what
+  // it would fill in (agency only). While another dialog is open a file dropped here is not taken, and one dropped
+  // just outside the profile is not opened by the browser either.
+  useNoStrayDrops();
+  const [over, setOver] = useState(false);
+  const canDrop = isAgency && !modal;
+  useEffect(() => { if (!canDrop) setOver(false); }, [canDrop]);
+  const takeResume = (file) => {
+    if (!file) return;
+    const refusal = resumeRefusal(file);
+    if (refusal) return toast(refusal, 'error');
+    setModal({ attach: file });
+  };
+  const dropZone = canDrop ? {
+    onDragEnter: (e) => { if (carriesFiles(e)) { e.preventDefault(); setOver(true); } },
+    onDragOver: (e) => { if (carriesFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setOver(true); } },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(false); },
+    onDrop: (e) => { if (!carriesFiles(e)) return; e.preventDefault(); setOver(false); takeResume(e.dataTransfer.files[0]); },
+  } : {};
+
   const scorecardsDue = data.interviews.filter((i) => i.status !== 'cancelled' && new Date(i.starts_at) < new Date() && i.panel.some((p) => p.id === user.id) && !i.scorecards.some((s) => s.user_id === user.id));
 
   return (
-    <>
+    <div className="relative flex min-h-0 flex-1 flex-col" {...dropZone}>
+      {over && (
+        <div className="pointer-events-none absolute inset-2 z-40 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-brand-500 bg-brand-50/95 px-6 text-center" role="status">
+          <span className="flex size-12 items-center justify-center rounded-xl bg-white text-brand-700 ring-1 ring-brand-200"><FileUp className="size-6" /></span>
+          <p className="text-lg font-semibold text-brand-900">Drop the résumé here</p>
+          <p className="max-w-sm text-sm text-brand-800">It is attached to {firstName(candidate.name)}’s profile, and you see what it would fill in before anything is saved. PDF, Word, RTF or text, up to 8 MB.</p>
+        </div>
+      )}
       <div className="border-b border-line bg-white px-5 pt-4 sm:px-6">
         <div className="flex items-start gap-4">
           <Avatar name={candidate.name} size={candidate.photo ? 64 : 52} src={photoUrl(candidate.id, candidate.photo)} />
@@ -231,7 +259,7 @@ function CandidateView({ data, onClose }) {
         ))}
         <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
 
-        {tab === 'overview' && <Overview data={data} reviews={isAgency ? teamReviews?.reviews : null} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} />}
+        {tab === 'overview' && <Overview data={data} reviews={isAgency ? teamReviews?.reviews : null} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} onChooseResume={isAgency ? takeResume : null} />}
         {/* Drawn afresh when the file changes: a newer résumé can take the place of this one under the same address and name. */}
         {tab === 'resume' && app.resume_file && <ResumeViewer key={app.resume_file} app={app} />}
         {tab === 'interviews' && !general && <InterviewsTab data={data} onSchedule={() => setModal('schedule')} onEdit={(i) => setModal({ editInterview: i })} onScorecard={(i) => setModal({ scorecard: i })} />}
@@ -253,7 +281,8 @@ function CandidateView({ data, onClose }) {
       {modal === 'erase' && <EraseModal data={data} elsewhere={elsewhere} metaviewToo={metaviewToo} onClose={() => setModal(null)} onDone={onClose} />}
       {modal?.review && <ReviewModal data={data} decision={modal.review} onClose={() => setModal(null)} />}
       {modal?.scorecard && job && <ScorecardModal interview={modal.scorecard} criteria={job.criteria} candidateName={candidate.name} onClose={() => setModal(null)} />}
-    </>
+      {modal?.attach && <AttachResumeModal data={data} file={modal.attach} onClose={() => setModal(null)} onAttached={() => setTab('resume')} />}
+    </div>
   );
 }
 
@@ -304,7 +333,8 @@ function ReviewBanner({ data, onDecide }) {
   );
 }
 
-function Overview({ data, reviews, onOffer, onFee, onResume }) {
+/** `onChooseResume` takes a résumé file chosen on the profile; it is only given to the agency. */
+function Overview({ data, reviews, onOffer, onFee, onResume, onChooseResume }) {
   const { isAgency, bump, user } = useApp();
   const { application: app, client } = data;
   const general = Boolean(app.general) || !data.job;
@@ -415,15 +445,35 @@ function Overview({ data, reviews, onOffer, onFee, onResume }) {
           </Card>
         )}
         {app.resume_file ? (
-          <div className="flex items-center gap-1 rounded-xl border border-line bg-white pr-2 text-sm hover:border-brand-300">
-            <button type="button" onClick={onResume} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl px-4 py-3 text-left">
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700"><FileText className="size-4" /></span>
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1 rounded-xl border border-line bg-white pr-2 text-sm hover:border-brand-300">
+              <button type="button" onClick={onResume} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl px-4 py-3 text-left">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700"><FileText className="size-4" /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium text-stone-900">View résumé</span>
+                  <span className="block truncate text-xs text-stone-500">{app.resume_name}</span>
+                </span>
+              </button>
+              <a href={`/api/applications/${app.id}/resume`} download aria-label="Download résumé" title="Download" className="rounded-md p-2 text-stone-400 hover:bg-stone-100 hover:text-stone-700"><Download className="size-4" /></a>
+            </div>
+            {/* A newer résumé can be chosen here or dropped on the profile; the one on file is kept under Earlier résumés. */}
+            {onChooseResume && (
+              <p className="px-1 text-xs text-stone-500">
+                <ChooseResume onFile={onChooseResume} className="rounded font-medium text-stone-600 underline decoration-stone-300 underline-offset-2 hover:text-brand-700" aria-label="Replace the résumé">Replace</ChooseResume>
+                {' '}it, or drop a newer one on the profile.
+              </p>
+            )}
+          </div>
+        ) : onChooseResume ? (
+          <div className="rounded-xl border border-dashed border-stone-300 px-4 py-3 text-sm">
+            <div className="flex items-start gap-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-stone-100 text-stone-500"><FileUp className="size-4" /></span>
               <span className="min-w-0 flex-1">
-                <span className="block font-medium text-stone-900">View résumé</span>
-                <span className="block truncate text-xs text-stone-500">{app.resume_name}</span>
+                <span className="block font-medium text-stone-700">No résumé on file.</span>
+                <span className="block text-xs text-stone-500">Drop one anywhere on this profile, or choose a file. The details in it are filled in where the profile has none.</span>
               </span>
-            </button>
-            <a href={`/api/applications/${app.id}/resume`} download aria-label="Download résumé" title="Download" className="rounded-md p-2 text-stone-400 hover:bg-stone-100 hover:text-stone-700"><Download className="size-4" /></a>
+            </div>
+            <ChooseResume onFile={onChooseResume} className="mt-2.5 inline-flex h-8 w-full items-center justify-center rounded-lg border border-line bg-white px-2.5 text-[13px] font-medium text-stone-800 shadow-sm hover:bg-stone-50">Choose a file</ChooseResume>
           </div>
         ) : (
           <div className="rounded-xl border border-dashed border-stone-300 px-4 py-3 text-sm text-stone-500">No résumé on file.</div>
@@ -493,6 +543,16 @@ function Overview({ data, reviews, onOffer, onFee, onResume }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** A button that opens the file picker for a résumé and hands over the file chosen. */
+function ChooseResume({ onFile, className, children, ...props }) {
+  return (
+    <label className={cx('cursor-pointer focus-within:ring-2 focus-within:ring-brand-500', className)}>
+      {children}
+      <input type="file" accept={RESUME_ACCEPT} className="sr-only" {...props} onChange={(e) => { onFile(e.target.files[0]); e.target.value = ''; }} />
+    </label>
   );
 }
 

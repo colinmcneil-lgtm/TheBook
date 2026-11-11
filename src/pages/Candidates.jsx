@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, UserPlus } from 'lucide-react';
+import { FileUp, Search, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, plural, NO_JOB } from '../lib.js';
-import { Button, Input, Page, Select, Tabs } from '../ui.jsx';
+import { Button, Input, Page, Select, Tabs, useToast } from '../ui.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
-import { AddCandidateModal } from '../components/CandidateModals.jsx';
+import { AddCandidateModal, carriesFiles, resumeRefusal } from '../components/CandidateModals.jsx';
 
 const NOT_ON_A_JOB = 'none'; // the Job filter's choice for people saved to The Book without a job
 const BOOK = 'book';         // and the tab that shows them; the two are one choice, shown in both places
@@ -27,6 +27,8 @@ export default function Candidates() {
   const [text, setText] = useState(params.get('q') || '');
   const [query, setQuery] = useState((params.get('q') || '').trim());
   const [adding, setAdding] = useState(isAgency && params.get('new') === '1');
+  const [dropped, setDropped] = useState(null); // a résumé dropped on the page, which the Add candidate dialog opens with
+  const over = useDroppedResume(isAgency && !adding && !params.get('c'), (file) => { setDropped(file); setAdding(true); });
   useEffect(() => { const t = setTimeout(() => setQuery(text.trim()), 250); return () => clearTimeout(t); }, [text]);
   // Changing client keeps the "Not on a job yet" tab open: those people belong to no client, so it still means the same.
   useEffect(() => setJobId(''), [scope]);
@@ -91,7 +93,59 @@ export default function Candidates() {
       {noJob && <p className="mb-4 text-sm text-stone-500">People you have saved to The Book without a job. Open one to add them to a job. Only your agency sees them.</p>}
       {query && <p className="mb-3 text-[13px] text-stone-500" role="status">Showing people matching “{query}”{status === 'all' ? ', whatever stage they reached' : ''}.</p>}
       {rows ? <ApplicationsTable rows={rows} empty={noJob && !query && !owner ? 'Nobody is in The Book without a job. Use “Add candidate” or the browser extension and choose “No job yet”. If your extension has no such choice, download it again from Settings, Browser extension.' : undefined} /> : <Pending error={error} />}
-      {adding && <AddCandidateModal onClose={() => setAdding(false)} onAdded={openCandidate} />}
+      {adding && <AddCandidateModal initialFile={dropped} onClose={() => { setAdding(false); setDropped(null); }} onAdded={openCandidate} />}
+      {over && (
+        <div className="pointer-events-none fixed inset-3 z-40 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-brand-500 bg-brand-50/90 px-6 text-center" role="status">
+          <span className="flex size-12 items-center justify-center rounded-xl bg-white text-brand-700 ring-1 ring-brand-200"><FileUp className="size-6" /></span>
+          <p className="text-lg font-semibold text-brand-900">Drop a résumé to add a candidate</p>
+          <p className="max-w-sm text-sm text-brand-800">Add candidate opens with the details filled in from it. PDF, Word, RTF or text, up to 8 MB.</p>
+        </div>
+      )}
     </Page>
   );
+}
+
+/**
+ * A résumé file dropped anywhere on the page while `on` (agency only, with no dialog or profile open) is handed to
+ * `take`, as if it had been dropped in the Add candidate dialog. Answers whether a file is being dragged over the page.
+ * A file dropped on an open profile or dialog is theirs: they take it first, and this lets it be.
+ */
+function useDroppedResume(on, take) {
+  const toast = useToast();
+  const [over, setOver] = useState(false);
+  const latest = useRef({ on, take });
+  latest.current = { on, take };
+  useEffect(() => {
+    let depth = 0; // dragenter and dragleave come in pairs for every element crossed; the page is left when they even out
+    const enter = (e) => { if (latest.current.on && carriesFiles(e)) { depth += 1; setOver(true); } };
+    const leave = (e) => { if (carriesFiles(e) && --depth <= 0) { depth = 0; setOver(false); } };
+    const overPage = (e) => {
+      if (!latest.current.on || e.defaultPrevented || !carriesFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    };
+    const drop = (e) => {
+      depth = 0;
+      setOver(false);
+      if (!latest.current.on || e.defaultPrevented || !carriesFiles(e)) return;
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      const refusal = resumeRefusal(file, 'add the candidate without a résumé');
+      if (refusal) return toast(refusal, 'error');
+      latest.current.take(file);
+    };
+    window.addEventListener('dragenter', enter);
+    window.addEventListener('dragleave', leave);
+    window.addEventListener('dragover', overPage);
+    window.addEventListener('drop', drop);
+    return () => {
+      window.removeEventListener('dragenter', enter);
+      window.removeEventListener('dragleave', leave);
+      window.removeEventListener('dragover', overPage);
+      window.removeEventListener('drop', drop);
+    };
+  }, []);
+  useEffect(() => { if (!on) setOver(false); }, [on]);
+  return over && on;
 }

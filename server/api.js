@@ -1251,6 +1251,20 @@ const candidateFields = (c) => ({
   name: clean(c.name, 120), phone: clean(c.phone, 40), linkedin: profileField(c.linkedin), location: clean(c.location, 120),
   current_title: clean(c.current_title, 160), current_company: clean(c.current_company, 160),
 });
+/**
+ * What a person's contact details must be when the agency changes them on their profile (Edit details, or a résumé
+ * dropped on the profile): a name, an e-mail address that looks like one, an address or a profile link to tell them
+ * apart by, and an address that no other record at the same client (or, for somebody on no job, no other entry in
+ * The Book) already has.
+ */
+function checkContact(a, c, email) {
+  if (!c.name) bad('A name is required.');
+  if (email && !validEmail(email)) bad('That email address does not look right.');
+  if (!email && !c.linkedin) bad('Keep an email address or a profile link, so this person can be told apart from others.');
+  if (email && q.get('SELECT 1 AS x FROM candidates WHERE client_id IS ? AND email = ? AND id != ?', a.client_id, email, a.candidate_id)) {
+    bad(isGeneral(a) ? 'Someone else saved to The Book without a job already uses that email.' : 'Another candidate at this client already uses that email.');
+  }
+}
 
 /**
  * Put a newly uploaded résumé on an application that may already have one (inside a transaction). The one it had is
@@ -1627,12 +1641,7 @@ api.patch('/applications/:id', (req, res) => {
   if (b.candidate && isAgency(req.user)) {
     const c = candidateFields(b.candidate);
     const email = emailOf(b.candidate.email) || null;
-    if (!c.name) bad('A name is required.');
-    if (email && !validEmail(email)) bad('That email address does not look right.');
-    if (!email && !c.linkedin) bad('Keep an email address or a profile link, so this person can be told apart from others.');
-    if (email && q.get('SELECT 1 AS x FROM candidates WHERE client_id IS ? AND email = ? AND id != ?', a.client_id, email, a.candidate_id)) {
-      bad(isGeneral(a) ? 'Someone else saved to The Book without a job already uses that email.' : 'Another candidate at this client already uses that email.');
-    }
+    checkContact(a, c, email);
     q.run('UPDATE candidates SET name = ?, email = ?, phone = ?, linkedin = ?, location = ?, current_title = ?, current_company = ? WHERE id = ?',
       c.name, email, c.phone, c.linkedin, c.location, c.current_title, c.current_company, a.candidate_id);
   }
@@ -1831,6 +1840,63 @@ api.get('/applications/:id/resumes/:earlier', agencyOnly, (req, res) => {
   });
 });
 
+/** The contact details a résumé dropped on a profile may fill in, with the words the history uses for each. Never the name. */
+const RESUME_DETAILS = [['email', 'email'], ['phone', 'phone'], ['location', 'location'], ['current_title', 'current title'], ['current_company', 'company'], ['linkedin', 'LinkedIn link']];
+/** "phone", "phone and location", "phone, location and company". */
+const inWords = (items) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
+
+// A résumé dropped on a candidate's profile (or chosen there), with the contact details the recruiter chose to take
+// from it. The file goes on this application and the details on the person's record in one go, or nothing is kept:
+// the details are checked as Edit details checks them, and a profile link that is already on another record at the
+// same client (or another entry in The Book) is refused too, since a link is how a person is told apart. A résumé
+// that was there is never written over: it is kept under Earlier résumés for the agency (see putResume), and the
+// same file sent again is kept once. The file is the agency's, whoever made the application (see agency_resumes in
+// db.js). Nothing is sent to anybody. The name is never changed here: the screen asks before attaching a résumé
+// that has somebody else's name on it.
+api.put('/applications/:id/resume', agencyOnly, upload.single('resume'), (req, res) => {
+  let stored = false;
+  try {
+    const a = loadApp(req.params.id, req.user);
+    if (!req.file) bad('Choose a résumé to attach.');
+    const b = req.body || {};
+    const person = q.get('SELECT * FROM candidates WHERE id = ?', a.candidate_id);
+    // A detail that was not sent, or was sent empty, stays as it is: the résumé only ever adds or replaces.
+    const value = {};
+    for (const [key] of RESUME_DETAILS) {
+      if (!isStr(b[key]) || !b[key].trim()) continue;
+      value[key] = key === 'email' ? emailOf(b[key]) : candidateFields({ [key]: b[key] })[key];
+    }
+    const filled = RESUME_DETAILS.filter(([key]) => value[key] && value[key] !== person[key]);
+    const email = value.email ?? person.email;
+    checkContact(a, { name: person.name, linkedin: value.linkedin ?? person.linkedin }, email);
+    const key = value.linkedin ? identityKey(value.linkedin) : null;
+    if (key && key !== identityKey(person.linkedin)) {
+      const other = q.get('SELECT name FROM candidates WHERE client_id IS ? AND linkedin = ? AND id != ? ORDER BY id LIMIT 1', a.client_id, key, a.candidate_id);
+      if (other) bad(isGeneral(a) ? `That LinkedIn link is already on ${other.name}'s entry in The Book. Untick it, or check the link.` : `That LinkedIn link is already on ${other.name}'s record at this client. Untick it, or check the link.`);
+    }
+    const t = now();
+    const done = tx(() => {
+      const change = putResume(q.get('SELECT * FROM applications WHERE id = ?', a.id), req.file, req.user.id, t);
+      if (change.change !== 'unchanged') q.run('INSERT INTO agency_resumes (application_id, resume_file) VALUES (?, ?)', a.id, req.file.filename);
+      if (filled.length) q.run(`UPDATE candidates SET ${filled.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`, ...filled.map(([k]) => value[k]), a.candidate_id);
+      q.run('UPDATE applications SET updated_at = ? WHERE id = ?', t, a.id);
+      // One line, written like the agency's other changes to a profile. It says which details were filled in and not
+      // what they were, and nothing about Earlier résumés, which are the agency's business.
+      const what = inWords(filled.map(([, label]) => label));
+      const said = change.change === 'unchanged'
+        ? what && `Filled in ${what} from the résumé on file`
+        : `${change.change === 'added' ? 'Résumé added' : 'Résumé replaced'}${what ? `; filled in ${what} from it` : ''}`;
+      if (said) logActivity(a.id, req.user.id, 'resume', said, { at: t });
+      return change;
+    });
+    stored = true;
+    removeUpload(done.spare); // the same file as the one on file: kept once
+    res.json({ ok: true, resume: done.change, filled: filled.map(([k]) => k) });
+  } finally {
+    if (!stored) removeUpload(req.file?.filename);
+  }
+});
+
 // Remove one application (and the candidate record if this was their only one). For someone saved to The Book
 // without a job, their entry is the only one, so this removes the person with their résumé, photo and calls.
 // Somebody who was in The Book before they were put on this job is not deleted: they go back to The Book without a
@@ -2000,6 +2066,8 @@ api.post('/candidates/:id/merge', agencyOnly, (req, res) => {
  */
 function carryResume(going, kept, userId) {
   q.run('UPDATE earlier_resumes SET application_id = ? WHERE application_id = ?', kept.id, going.id);
+  // A résumé the agency dropped on the entry's profile stays the agency's on the application it goes to.
+  q.run('UPDATE agency_resumes SET application_id = ? WHERE application_id = ?', kept.id, going.id);
   if (!going.resume_file) return null;
   if (!kept.resume_file) {
     q.run('UPDATE applications SET resume_file = ?, resume_name = ? WHERE id = ?', going.resume_file, going.resume_name, kept.id);
@@ -2203,11 +2271,20 @@ function returnToBook(a, user, said, made) {
   // it would be shown to the next client's hiring team. When the entry brought none, a résumé the person sent this
   // client with their own application is still taken off (also the copy of it that went with them to another of the
   // client's jobs), and the entry goes back without one.
+  //
+  // A résumé the agency dropped on the profile while they were on the job is the agency's, even on an application
+  // they made themselves: it stays on the entry, and one the entry brought stays under Earlier résumés. A copy is
+  // looked for among the résumés of the applications they made themselves, the ones on them now (unless the agency
+  // put it there) and the ones kept under Earlier résumés there (which is where theirs went if the agency replaced it).
   const brought = q.get('SELECT * FROM earlier_resumes WHERE application_id = ? AND kept_by IS NULL ORDER BY kept_at DESC, id DESC LIMIT 1', a.id);
-  const theirOwn = a.resume_file && (ownApplication(a)
-    || q.all(`SELECT resume_file FROM applications WHERE candidate_id = ? AND id != ? AND resume_file IS NOT NULL AND ${OWN_APPLICATION}`, a.candidate_id, a.id)
+  const agencys = Boolean(a.resume_file && q.get('SELECT 1 AS x FROM agency_resumes WHERE application_id = ? AND resume_file = ?', a.id, a.resume_file));
+  const theirOwn = a.resume_file && !agencys && (ownApplication(a)
+    || [...q.all(
+      `SELECT resume_file FROM applications o WHERE candidate_id = ? AND id != ? AND resume_file IS NOT NULL AND ${OWN_APPLICATION}
+         AND NOT EXISTS (SELECT 1 FROM agency_resumes r WHERE r.application_id = o.id AND r.resume_file = o.resume_file)`, a.candidate_id, a.id),
+    ...q.all(`SELECT r.resume_file FROM earlier_resumes r JOIN applications o ON o.id = r.application_id WHERE o.candidate_id = ? AND o.id != ? AND ${OWN_APPLICATION}`, a.candidate_id, a.id)]
       .some((other) => sameUpload(other.resume_file, a.resume_file)));
-  if (brought || theirOwn) {
+  if ((brought && !agencys) || theirOwn) {
     if (a.resume_file) q.run('INSERT INTO earlier_resumes (application_id, resume_file, resume_name, kept_at, kept_by) VALUES (?, ?, ?, ?, ?)', a.id, a.resume_file, a.resume_name, t, user.id);
     q.run('UPDATE applications SET resume_file = ?, resume_name = ? WHERE id = ?', brought?.resume_file ?? null, brought?.resume_name ?? null, a.id);
     if (brought) q.run('DELETE FROM earlier_resumes WHERE id = ?', brought.id);
