@@ -1785,6 +1785,27 @@ function jobBoard(user, clientId, withPausedAndDraft) {
   return [...columns.values()].sort((a, b) => place(a) - place(b) || String(a.name).localeCompare(String(b.name), 'en', { sensitivity: 'base' }) || a.id - b.id);
 }
 
+// The most people named under one stage when a card on the job board drops its pipeline down (see JobBoard.jsx).
+const BOARD_PEOPLE = 8;
+/**
+ * One job's pipeline for its card on the job board: every stage in order, how many people are in it, and the first
+ * few of them, newest first. The people are those the job's own Pipeline tab shows: in the pipeline, or hired; not
+ * those rejected or withdrawn. Kept small, because every open card asks for it again whenever something is saved.
+ * The board is the agency's, so this is too.
+ */
+api.get('/jobs/:id/pipeline', agencyOnly, (req, res) => {
+  const job = loadJob(req.params.id, req.user);
+  const people = hidePhotos(q.all(
+    `SELECT a.id, a.stage_id, a.status, c.id AS candidate_id, c.name, c.current_title, c.current_company, substr(c.photo_file, 1, 8) AS photo
+     FROM applications a JOIN candidates c ON c.id = a.candidate_id
+     WHERE a.job_id = ? AND a.status IN ('active', 'hired') ORDER BY a.applied_at DESC, a.id DESC`, job.id), req.user);
+  const stages = q.all('SELECT id, name, kind FROM stages WHERE job_id = ? ORDER BY position', job.id).map((stage) => {
+    const here = people.filter((a) => a.stage_id === stage.id);
+    return { ...stage, count: here.length, people: here.slice(0, BOARD_PEOPLE).map(({ stage_id, ...a }) => a) };
+  });
+  res.json({ stages });
+});
+
 api.get('/dashboard', (req, res) => {
   const cid = scopeOf(req);
   const w = cid ? 'AND j.client_id = ?' : '';

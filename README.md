@@ -77,7 +77,12 @@ beside each job and can be narrowed to one person's jobs, and the job form has a
 - **The job board.** On the dashboard, for the agency: one column for each account executive, headed with their name,
   their initials and how many jobs they have, and under it a card for each job with its title, the client, how long
   it has been open, its openings and how many are filled, and how many people are in its pipeline, at interview and
-  at offer. A click opens the job. Your own column comes first, then the others by name. The board shows open jobs;
+  at offer. A click on a card drops the job's pipeline down under it: every stage in order, how many people are in
+  it and who they are (the first eight of a long stage, newest first; "and 12 more" opens the job's Pipeline tab, which
+  has everybody), and a click on a name opens that person's profile over the dashboard. The people are the ones the
+  job's Pipeline tab shows, so somebody hired is under Hired, though the card's Pipeline number counts only those
+  still in play. Another click folds it away, several cards can be open at once, and the arrow in the card's corner
+  opens the job itself. Your own column comes first, then the others by name. The board shows open jobs;
   the switch **Include paused and draft** adds those (closed jobs are never on it), and it follows the client chosen
   in the menu. Somebody with no jobs in view has no column. In a wide window the columns sit side by side and scroll
   sideways when there are many, with the scrollbar or the two arrows in the board's heading; a column is never taller
