@@ -433,7 +433,9 @@ function findPhone(lines, inContact) {
       if ((value.match(YEAR) || []).length >= 2 || /^\d{1,2}[ .-]\d{1,2}[ .-](?:19|20)\d{2}$|^(?:19|20)\d{2}[ .-]\d{1,2}[ .-]\d{1,2}$|^\d{5}-\d{4}$/.test(value)) continue;
       if (!labelled && !international && /^(?:19|20)\d{2}(?!\d)/.test(value)) continue; // "2026-00417" is a reference, "2019 ..." a date
       if (digits < (labelled ? 7 : international ? 8 : 9) || digits > (international ? 15 : 12)) continue;
-      found.push({ value, labelled, international, contact: inContact(i) });
+      // "(905) 555-0199 ext. 204": the extension is kept, since the number alone does not reach the person.
+      const ext = /^\s*,?\s*(?:ext|extn|extension|x)\.?\s*(\d{1,6})(?!\d)/i.exec(line.text.slice(m.index + m[0].length));
+      found.push({ value: ext ? `${value} ext. ${ext[1]}` : value, labelled, international, contact: inContact(i) });
     }
   });
   return (found.find((p) => p.contact && p.labelled) || found.find((p) => p.contact) || found.find((p) => p.labelled) || found.find((p) => p.international))?.value;
@@ -724,7 +726,7 @@ function pieces(text, line) {
 /** Title and company of the first job listed under a heading such as "Experience". */
 function firstRole(lines, heading) {
   const entry = [];
-  let skipped = 0, dates = false, datedLine = false;
+  let skipped = 0, dates = false, datedLine = false, when = '';
   for (let i = heading + 1; i < lines.length && entry.length < 3; i++) {
     const { text, heading: isHeading } = lines[i];
     if (isHeading) break;
@@ -739,8 +741,17 @@ function firstRole(lines, heading) {
     // Words that are neither a title nor an employer are description too ("Refonte du parcours d'achat mobile").
     else if ((prose || tidy(text.replace(DATES, '$1 ')).split(/\s+/).filter((w) => /^\p{Ll}/u.test(w)).length >= 3)
       && (entry.length || ++skipped > 2)) break; // the description of the job, or no list of jobs at all
+    if (dated && !dates) when = text;
     dates ||= dated;
   }
+  // "2019 - 2023" with nothing running to the present: a job they have left, which may not be the one they are in now.
+  const ended = Boolean(when) && ENDED.test(when) && !RUNS_ON.test(when);
+  const role = roleOf(entry);
+  return role.title ? { ...role, ended } : role;
+}
+
+/** Title and company from the lines of one job entry, as `pieces` gives them. */
+function roleOf(entry) {
   const all = entry.flat();
   const title = all.find((p) => p.kind === 'title');
   if (!title) {
@@ -794,9 +805,11 @@ function currentWhenOldestFirst(lines, heading) {
  * @param {{lines?: {size?:number,page?:number,footer?:boolean}[], links?: string[], filename?: string}} [hints] what
  *   the file itself adds: each line's font size and page (PDF) or whether it is a page footer (Word), the addresses
  *   its links point to, and its name.
+ * @param {{roleEnded?: boolean}} [notes] what is worth knowing about the fields found: `roleEnded` when the current
+ *   title and company come from a job whose dates end ("2019 - 2023").
  * @returns {{name?:string,email?:string,phone?:string,linkedin?:string,location?:string,current_title?:string,current_company?:string}}
  */
-export function parseResume(text, hints = {}) {
+export function parseResume(text, hints = {}, notes = {}) {
   const out = {};
   const lines = readLines(text, hints.lines);
   if (!lines.length) return out;
@@ -829,7 +842,7 @@ export function parseResume(text, hints = {}) {
     const current = currentWhenOldestFirst(lines, i);
     if (current === -1) break;
     const role = firstRole(lines, current ?? i);
-    if (role.title) { out.current_title = role.title; if (role.company) out.current_company = role.company; }
+    if (role.title) { out.current_title = role.title; if (role.company) out.current_company = role.company; notes.roleEnded = role.ended; }
   }
   // Otherwise a headline under the name ("Senior Product Designer at Juniper Row") is a fair guess.
   if (!out.current_title && name) {
@@ -885,11 +898,14 @@ export async function readResume(file) {
     status = /password/i.test(`${err?.name} ${err?.message}`) ? 'protected' : 'error';
     error = err;
   }
-  const fields = parseResume(text, { ...layout, filename: file.name });
+  const notes = {};
+  const fields = parseResume(text, { ...layout, filename: file.name }, notes);
   let nameFromFile = false;
   if (!fields.name) {
     const guess = nameFromFilename(file.name);
     if (guess) { fields.name = guess; nameFromFile = true; }
   }
-  return error === undefined ? { fields, status, nameFromFile } : { fields, status, nameFromFile, error };
+  // `roleEnded`: the current title and company were taken from a job whose dates end, so they may be out of date.
+  const out = notes.roleEnded && fields.current_title ? { fields, status, nameFromFile, roleEnded: true } : { fields, status, nameFromFile };
+  return error === undefined ? out : { ...out, error };
 }

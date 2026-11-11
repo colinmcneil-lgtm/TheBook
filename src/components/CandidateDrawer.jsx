@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines, LoaderCircle, Plus, EyeOff, UserCheck, FileUp,
@@ -11,7 +11,7 @@ import { CallStatus, MetaviewMark, callName, callWhen, fmtLength, madeBy, useLiv
 import { kindLine, oraclePath } from '../oracle/calls.js';
 import { ChannelBadge, problemOf } from '../oracle/metaview.jsx';
 import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, PlacementFeeModal, EditCandidateModal, AddToJobModal, EraseModal,
-  AttachResumeModal, RESUME_ACCEPT, carriesFiles, resumeRefusal, useNoStrayDrops } from './CandidateModals.jsx';
+  AttachResumeModal, RESUME_ACCEPT, carriesFiles, pickResume, resumeRefusal, useNoStrayDrops } from './CandidateModals.jsx';
 import { NoJobBadge, ReviewBadge } from './bits.jsx';
 import { AskReviewModal, ReviewHistory, ReviewRequests } from './TeamReviews.jsx';
 
@@ -103,23 +103,28 @@ function CandidateView({ data, onClose }) {
   });
 
   // A résumé file dropped anywhere on the open profile, or chosen on it, is attached through a dialog that shows what
-  // it would fill in (agency only). While another dialog is open a file dropped here is not taken, and one dropped
-  // just outside the profile is not opened by the browser either.
+  // it would fill in (agency only). While another dialog is open a file dropped here is not taken (and the toast says
+  // so), and one dropped just outside the profile is not opened by the browser either.
   useNoStrayDrops();
   const [over, setOver] = useState(false);
   const canDrop = isAgency && !modal;
   useEffect(() => { if (!canDrop) setOver(false); }, [canDrop]);
-  const takeResume = (file) => {
+  const takeResume = (file, more = false) => {
     if (!file) return;
     const refusal = resumeRefusal(file);
     if (refusal) return toast(refusal, 'error');
+    if (more) toast(`One résumé at a time: ${file.name} was taken.`);
     setModal({ attach: file });
   };
   const dropZone = canDrop ? {
     onDragEnter: (e) => { if (carriesFiles(e)) { e.preventDefault(); setOver(true); } },
     onDragOver: (e) => { if (carriesFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setOver(true); } },
     onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(false); },
-    onDrop: (e) => { if (!carriesFiles(e)) return; e.preventDefault(); setOver(false); takeResume(e.dataTransfer.files[0]); },
+    onDrop: (e) => { if (!carriesFiles(e)) return; e.preventDefault(); setOver(false); const { file, more } = pickResume(e.dataTransfer.files); takeResume(file, more); },
+  } : isAgency ? {
+    // A dialog is open on the profile: the file is not taken, and the person is told why nothing happened.
+    onDragOver: (e) => { if (!e.defaultPrevented && carriesFiles(e)) e.preventDefault(); },
+    onDrop: (e) => { if (e.defaultPrevented || !carriesFiles(e)) return; e.preventDefault(); toast(modal?.attach ? 'One résumé at a time. Cancel this one first to attach another.' : 'Close this dialog first to attach a résumé.'); },
   } : {};
 
   const scorecardsDue = data.interviews.filter((i) => i.status !== 'cancelled' && new Date(i.starts_at) < new Date() && i.panel.some((p) => p.id === user.id) && !i.scorecards.some((s) => s.user_id === user.id));
@@ -127,7 +132,7 @@ function CandidateView({ data, onClose }) {
   return (
     <div className="relative flex min-h-0 flex-1 flex-col" {...dropZone}>
       {over && (
-        <div className="pointer-events-none absolute inset-2 z-40 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-brand-500 bg-brand-50/95 px-6 text-center" role="status">
+        <div className="pointer-events-none absolute inset-2 z-40 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-brand-500 bg-brand-50 px-6 text-center" role="status">
           <span className="flex size-12 items-center justify-center rounded-xl bg-white text-brand-700 ring-1 ring-brand-200"><FileUp className="size-6" /></span>
           <p className="text-lg font-semibold text-brand-900">Drop the résumé here</p>
           <p className="max-w-sm text-sm text-brand-800">It is attached to {firstName(candidate.name)}’s profile, and you see what it would fill in before anything is saved. PDF, Word, RTF or text, up to 8 MB.</p>
@@ -548,11 +553,12 @@ function Overview({ data, reviews, onOffer, onFee, onResume, onChooseResume }) {
 
 /** A button that opens the file picker for a résumé and hands over the file chosen. */
 function ChooseResume({ onFile, className, children, ...props }) {
+  const input = useRef(null);
   return (
-    <label className={cx('cursor-pointer focus-within:ring-2 focus-within:ring-brand-500', className)}>
-      {children}
-      <input type="file" accept={RESUME_ACCEPT} className="sr-only" {...props} onChange={(e) => { onFile(e.target.files[0]); e.target.value = ''; }} />
-    </label>
+    <>
+      <button type="button" className={cx('cursor-pointer', className)} onClick={() => input.current?.click()} {...props}>{children}</button>
+      <input ref={input} type="file" accept={RESUME_ACCEPT} className="sr-only" tabIndex={-1} aria-hidden="true" onChange={(e) => { onFile(e.target.files[0]); e.target.value = ''; }} />
+    </>
   );
 }
 

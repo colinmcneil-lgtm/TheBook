@@ -330,3 +330,76 @@ test('deleting the person leaves nothing of what the agency attached', async () 
   assert.equal(db('SELECT COUNT(*) AS n FROM agency_resumes WHERE application_id = ?', id)[0].n, 0);
   await until(async () => uploads(), (now) => now.length === before.length - 2, 5000);
 });
+
+/** The person applies for a Maple Freight job on its careers page themselves; answers their own application's id. */
+async function appliesOnCareers(name, email, jobId, resume) {
+  const { slug } = (await alex.get(`/clients/${client.maple}`)).body.client;
+  const form = new FormData();
+  for (const [k, v] of Object.entries({ name, email, consent: 'yes' })) form.append(k, v);
+  if (resume) form.append('resume', new Blob([resume.bytes]), resume.name);
+  assert.equal((await fetch(`${base}/api/public/careers/${slug}/jobs/${jobId}/apply`, { method: 'POST', body: form })).status, 200);
+  return (await alex.get(`/applications?job_id=${jobId}`)).body.find((r) => r.email === email).id;
+}
+/** Their entry in The Book is joined to the record Maple Freight has of them, on this job. */
+async function joinOnJob(entry, jobId) {
+  const refused = await alex.post(`/applications/${entry}/add-to-job`, { job_id: jobId });
+  assert.equal(refused.body.code, 'already_in_job', JSON.stringify(refused.body));
+  assert.equal((await alex.post(`/applications/${entry}/add-to-job`, { job_id: jobId, into: refused.body.join.candidate_id })).status, 200);
+}
+const resumeText = async (who, id) => { const r = await who.get(`/applications/${id}/resume`); return r.status === 200 ? r.body.toString() : r.status; };
+
+test('their own résumé put back on their application by the agency is still theirs, and does not go on to the next client', async () => {
+  // Bo, in The Book, applies to Maple Freight herself, and is joined to that application.
+  const entry = (await alex.upload('/applications', { name: 'Bo Example', email: 'bo@example.com' })).body.id;
+  const own = await appliesOnCareers('Bo Example', 'bo@example.com', job.payroll, file('Bo Example, sent to Maple Freight herself', 'bo-own.pdf'));
+  await joinOnJob(entry, job.payroll);
+  // The agency replaces her résumé by mistake, then puts hers back: downloaded from Earlier résumés and dropped again.
+  assert.equal((await attach(alex, own, file('Bo Example, the agency\'s', 'bo-agency.pdf'))).body.resume, 'replaced');
+  const kept = (await detail(alex, own)).earlier_resumes.find((r) => r.name === 'bo-own.pdf');
+  const hers = (await alex.get(`/applications/${own}/resumes/${kept.id}`)).body;
+  assert.equal((await attach(alex, own, { name: 'bo-own.pdf', bytes: hers })).body.resume, 'replaced');
+  // Removed from the job: what she sent Maple Freight is kept for the agency only, and the entry goes back without it.
+  assert.equal((await alex.del(`/applications/${own}`)).body.returned, true);
+  assert.equal(await resumeText(alex, own), 404);
+  assert.ok((await detail(alex, own)).earlier_resumes.some((r) => r.name === 'bo-own.pdf'));
+  // Put on Northline Dental's job: its hiring team is not given what she wrote to Maple Freight.
+  assert.equal((await alex.post(`/applications/${own}/add-to-job`, { job_id: job.hygienist })).status, 200);
+  assert.equal(await resumeText(noor, own), 404);
+  assert.deepEqual((await detail(noor, own)).earlier_resumes, []);
+});
+
+test('a copy of their own résumé on another of the client\'s jobs comes off too, after the agency replaced the one on their own application', async () => {
+  // Pat applies to Maple Freight herself; the agency adds her to a second Maple job, with a copy of her résumé.
+  const own = await appliesOnCareers('Pat Example', 'pat@example.com', job.payroll, file('Pat Example, sent to Maple Freight herself', 'pat.pdf'));
+  const second = (await alex.post(`/applications/${own}/add-to-job`, { job_id: job.accountant })).body.id;
+  // Saved to The Book, and joined to the second application.
+  const entry = (await alex.upload('/applications', { name: 'Pat Example', email: 'pat@example.com' })).body;
+  await joinOnJob(entry.id, job.accountant);
+  // The agency drops its own résumé on her own application, so hers is now under Earlier résumés there.
+  assert.equal((await attach(alex, own, file('Pat Example, the agency\'s', 'pat-agency.pdf'))).body.resume, 'replaced');
+  // Removed from the second job: the copy of what she sent Maple Freight does not go back to The Book with her.
+  assert.equal((await alex.del(`/applications/${second}`)).body.returned, true);
+  assert.equal(await resumeText(alex, second), 404);
+  assert.deepEqual((await detail(alex, second)).earlier_resumes.map((r) => r.name), ['pat.pdf']);
+});
+
+test('a copy of the agency\'s résumé on another of the client\'s jobs is the agency\'s, and goes back to The Book with them', async () => {
+  const own = await appliesOnCareers('Lee Example', 'lee@example.com', job.payroll, file('Lee Example, sent to Maple Freight herself', 'lee.pdf'));
+  assert.equal((await attach(alex, own, file('Lee Example, the agency\'s', 'lee-agency.pdf'))).body.resume, 'replaced');
+  const second = (await alex.post(`/applications/${own}/add-to-job`, { job_id: job.accountant })).body.id; // a copy of the agency's
+  const entry = (await alex.upload('/applications', { name: 'Lee Example', email: 'lee@example.com' })).body;
+  await joinOnJob(entry.id, job.accountant);
+  assert.equal((await alex.del(`/applications/${second}`)).body.returned, true);
+  assert.equal(await resumeText(alex, second), 'Lee Example, the agency\'s');
+});
+
+test('a résumé dropped on their entry in The Book stays on it when they are joined to an application they made with none, and removed', async () => {
+  const entry = (await alex.upload('/applications', { name: 'Quinn Example', email: 'quinn@example.com' })).body.id;
+  assert.equal((await attach(alex, entry, file('Quinn Example, the agency\'s', 'quinn.txt'))).body.resume, 'added');
+  const own = await appliesOnCareers('Quinn Example', 'quinn@example.com', job.payroll, null);
+  await joinOnJob(entry, job.payroll);
+  assert.equal(await resumeText(maya, own), 'Quinn Example, the agency\'s');
+  assert.equal((await alex.del(`/applications/${own}`)).body.returned, true);
+  assert.equal(await resumeText(alex, own), 'Quinn Example, the agency\'s');
+  assert.deepEqual((await detail(alex, own)).earlier_resumes, []);
+});

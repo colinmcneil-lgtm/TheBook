@@ -510,7 +510,7 @@ WORK EXPERIENCE
 Google LLC — Mountain View, CA
 Staff Software Engineer, Search Infrastructure — Aug 2018 - Present
 Software Engineer — 2013 - 2018`,
-{ name: 'David Kim', email: 'david.kim@mail.example', phone: '415.555.0199', location: 'San Francisco, CA', current_title: 'Staff Software Engineer', current_company: 'Google LLC' });
+{ name: 'David Kim', email: 'david.kim@mail.example', phone: '415.555.0199 ext. 12', location: 'San Francisco, CA', current_title: 'Staff Software Engineer', current_company: 'Google LLC' });
 
 reads('US: summary with no heading and large figures under the contact line', `Rebecca Stone
 Leeds, West Yorkshire · rebecca.stone@mail.example · 07700 900455
@@ -970,7 +970,8 @@ test('phone: found in the forms people write them', () => {
     ['06 12 34 56 78', '06 12 34 56 78'], ['+33 6 12 34 56 78', '+33 6 12 34 56 78'], ['0049 30 12345678', '0049 30 12345678'], ['+91 98765 43210', '+91 98765 43210'],
     ['Tel: 555 0142', '555 0142'], ['M: 07700 900123 | E: jane@mail.example', '07700 900123'], ['Phone no. 020 7946 0991', '020 7946 0991'], ['Mobile +61 412 345 678', '+61 412 345 678'],
     ['London · 07700 900123 · jane@mail.example', '07700 900123'], ['123 Main Street, Springfield, IL 62704 | (217) 555-0142', '(217) 555-0142'], ['Tel. 030/12345678', '030/12345678'],
-    ['(555) 123-4567 x89', '(555) 123-4567'], ['415.555.0199 ext 12', '415.555.0199'], ['07700 900123 mobile', '07700 900123'], ['+44 7700 900123 (m), +44 20 7946 0991 (h)', '+44 7700 900123'], ['Reach me on 07700 900123 and by email', '07700 900123'],
+    // An extension is kept, written one way: the number alone does not reach the person.
+    ['(555) 123-4567 x89', '(555) 123-4567 ext. 89'], ['415.555.0199 ext 12', '415.555.0199 ext. 12'], ['Work: (905) 555-0199 ext. 204', '(905) 555-0199 ext. 204'], ['(905) 555-0199, Extension 7', '(905) 555-0199 ext. 7'], ['07700 900123 mobile', '07700 900123'], ['+44 7700 900123 (m), +44 20 7946 0991 (h)', '+44 7700 900123'], ['Reach me on 07700 900123 and by email', '07700 900123'],
   ]) assert.equal(phone(line), want, line);
 });
 
@@ -1435,4 +1436,16 @@ test('files that cannot be read say why, and fall back to the file name for the 
   const locked = await readResume({ name: 'cv.pdf', arrayBuffer: async () => { throw Object.assign(new Error('No password given'), { name: 'PasswordException' }); } });
   assert.equal(locked.status, 'protected');
   assert.equal(locked.error.name, 'PasswordException');
+});
+
+test('a current title and company taken from a job whose dates end are marked as maybe out of date', () => {
+  const notes = (text) => { const n = {}; const fields = parseResume(text, {}, n); return [fields.current_title, fields.current_company, Boolean(n.roleEnded)]; };
+  const head = 'Jordan Example\njordan@example.com\n416 555 0188\n\nExperience\n';
+  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\n2019 - 2023`), ['Customer Success Manager', 'Example Co', true]);
+  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co, Jan 2019 – Mar 2023`), ['Customer Success Manager', 'Example Co', true]);
+  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\n2019 - Present`), ['Customer Success Manager', 'Example Co', false]);
+  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\nSince 2021`), ['Customer Success Manager', 'Example Co', false]);
+  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co`), ['Customer Success Manager', 'Example Co', false]);
+  // Oldest first: the job that runs to the present is the one taken, and it has not ended.
+  assert.deepEqual(notes(`${head}Analyst, First Co\n2012 - 2016\nCustomer Success Manager, Example Co\n2016 - Present`)[2], false);
 });

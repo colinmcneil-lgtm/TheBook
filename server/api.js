@@ -2272,17 +2272,23 @@ function returnToBook(a, user, said, made) {
   // client with their own application is still taken off (also the copy of it that went with them to another of the
   // client's jobs), and the entry goes back without one.
   //
-  // A résumé the agency dropped on the profile while they were on the job is the agency's, even on an application
-  // they made themselves: it stays on the entry, and one the entry brought stays under Earlier résumés. A copy is
-  // looked for among the résumés of the applications they made themselves, the ones on them now (unless the agency
-  // put it there) and the ones kept under Earlier résumés there (which is where theirs went if the agency replaced it).
+  // A résumé the agency dropped on the profile (in The Book or on the job) is the agency's, even on an application
+  // they made themselves: it stays on the entry, and one the entry brought stays under Earlier résumés. Unless it is
+  // a copy of a résumé they sent the client themselves (put back after a replace by mistake, say): then it is still
+  // theirs. A copy is looked for among the résumés of the applications they made themselves, the ones on them now
+  // (unless the agency put it there) and the ones kept under Earlier résumés there (which is where theirs went if the
+  // agency replaced it), and, for a résumé the agency dropped, among this application's own earlier résumés too
+  // (leaving out the one the entry brought, and the ones the agency dropped).
   const brought = q.get('SELECT * FROM earlier_resumes WHERE application_id = ? AND kept_by IS NULL ORDER BY kept_at DESC, id DESC LIMIT 1', a.id);
   const agencys = Boolean(a.resume_file && q.get('SELECT 1 AS x FROM agency_resumes WHERE application_id = ? AND resume_file = ?', a.id, a.resume_file));
-  const theirOwn = a.resume_file && !agencys && (ownApplication(a)
+  const theirOwn = a.resume_file && ((ownApplication(a) && !agencys)
     || [...q.all(
       `SELECT resume_file FROM applications o WHERE candidate_id = ? AND id != ? AND resume_file IS NOT NULL AND ${OWN_APPLICATION}
          AND NOT EXISTS (SELECT 1 FROM agency_resumes r WHERE r.application_id = o.id AND r.resume_file = o.resume_file)`, a.candidate_id, a.id),
-    ...q.all(`SELECT r.resume_file FROM earlier_resumes r JOIN applications o ON o.id = r.application_id WHERE o.candidate_id = ? AND o.id != ? AND ${OWN_APPLICATION}`, a.candidate_id, a.id)]
+    ...q.all(`SELECT r.resume_file FROM earlier_resumes r JOIN applications o ON o.id = r.application_id WHERE o.candidate_id = ? AND o.id != ? AND ${OWN_APPLICATION}`, a.candidate_id, a.id),
+    ...(agencys && ownApplication(a) ? q.all(
+      `SELECT resume_file FROM earlier_resumes e WHERE application_id = ? AND kept_by IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM agency_resumes r WHERE r.application_id = e.application_id AND r.resume_file = e.resume_file)`, a.id) : [])]
       .some((other) => sameUpload(other.resume_file, a.resume_file)));
   if ((brought && !agencys) || theirOwn) {
     if (a.resume_file) q.run('INSERT INTO earlier_resumes (application_id, resume_file, resume_name, kept_at, kept_by) VALUES (?, ?, ?, ?, ?)', a.id, a.resume_file, a.resume_name, t, user.id);

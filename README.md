@@ -64,25 +64,14 @@ GitHub page, a personal site, a company's team page, a LinkedIn Recruiter or Sal
 
 ## A résumé on a profile
 
-A résumé can be added when a candidate is added (drop it on Add candidate and the form is filled in from it), and
-later on their profile: drop the file anywhere on the open profile, or use "Choose a file" where it says "No résumé on
-file", or "Replace" beside the résumé that is there. Dropped on the Candidates page with no profile open, it opens Add
-candidate with the file already taken. The same files are taken as on Add candidate (PDF, Word, RTF or text, up to
-8 MB), and the file is read in the browser. Before anything is saved, a dialog sets what it found beside what the
-profile has: an e-mail address, phone number, location, current title, company or LinkedIn link the profile has no
-value for is ticked to be filled in, one it has a different value for is only changed if you tick it, and each can be
-corrected first. The name is never changed, and a résumé with somebody else's name on it says so ("This résumé looks
-like it belongs to ...") with nothing ticked. A scan, a password-protected file or an empty one can still be attached,
-with nothing filled in, and the dialog says why. One click attaches the file and saves the ticked details together,
-with the same checks as Edit details, and also refuses a LinkedIn link that is on another record at the same client
-(or another entry in The Book): if anything is refused, nothing is saved. A résumé that was there is kept under
-"Earlier résumés", for the agency only, and the same file sent twice is kept once. The history says "Résumé added" or
-"Résumé replaced" and which details were filled in, not what they were. Agency only: a client's hiring team sees the
-résumé on their job as they would one added with the candidate, and nothing is sent to anybody. A résumé the agency
-attaches this way is the agency's, even on an application the person made themselves, so it goes back to The Book with
-them (see "What they wrote to one client never reaches another" below). The first start after this adds one empty
-table, which records which résumés the agency attached; a version from before this neither reads nor needs it.
-`test/resume-drop.test.mjs` runs all of this against the real API.
+An agency user can add a résumé to a candidate's profile later, not only on Add candidate: drop the file anywhere on
+the open profile, or use "Choose a file" (or "Replace" beside the one on file). Dropped on the Candidates page, it
+opens Add candidate with the file taken. Before anything is saved, a dialog shows what the résumé says beside what
+the profile has: empty details are ticked to be filled in, a different value is only changed if you tick it, and
+the name is never changed. One click attaches the file and saves the ticked details, with the same checks as Edit
+details, or nothing is saved. The résumé that was there is kept under "Earlier résumés", for the agency only, and
+the history says "Résumé added" or "Résumé replaced". A résumé dropped this way is the agency's, and goes back to The
+Book with the person (see "What they wrote to one client never reaches another" below).
 
 ## People in The Book without a job
 
@@ -166,9 +155,10 @@ candidate in the app, and put on a job later when the right role comes up.
   of it on another of that client's jobs they were added to, for as long as the application they made themselves
   is still on the client's record), and the entry goes back without a résumé. One case leaves the agency's own
   copy under Earlier résumés instead of on the profile: an application they made themselves without a résumé,
-  which had been using the entry's. A résumé the agency dropped on the profile while they were on the job is the
-  agency's and stays on the profile; the one the entry brought, and the one they sent the client, are then both
-  kept under Earlier résumés.
+  which had been using the entry's, when that résumé was added with the entry and not dropped on the profile. A
+  résumé the agency dropped on the profile (in The Book or on the job) is the agency's and stays on the profile; the
+  one the entry brought, and the one they sent the client, are then both kept under Earlier résumés. A copy of the
+  résumé they sent the client themselves is still theirs, even when the agency dropped it on the profile again.
 - **What a hiring team could still work out.** Nothing from before the job is shown, but two things are as they
   are because the entry is kept and not copied: its history line reads "Added to (job) at (stage)", where somebody
   added straight to a job has "Added to the pipeline (...)" (the same line as for anyone added to a second job at

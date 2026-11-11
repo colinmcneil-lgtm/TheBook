@@ -5,7 +5,7 @@ import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, plural, NO_JOB } from '../lib.js';
 import { Button, Input, Page, Select, Tabs, useToast } from '../ui.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
-import { AddCandidateModal, carriesFiles, resumeRefusal } from '../components/CandidateModals.jsx';
+import { AddCandidateModal, carriesFiles, pickResume, resumeRefusal } from '../components/CandidateModals.jsx';
 
 const NOT_ON_A_JOB = 'none'; // the Job filter's choice for people saved to The Book without a job
 const BOOK = 'book';         // and the tab that shows them; the two are one choice, shown in both places
@@ -129,10 +129,11 @@ function useDroppedResume(on, take) {
       setOver(false);
       if (!latest.current.on || e.defaultPrevented || !carriesFiles(e)) return;
       e.preventDefault();
-      const file = e.dataTransfer.files[0];
+      const { file, more } = pickResume(e.dataTransfer.files);
       if (!file) return;
       const refusal = resumeRefusal(file, 'add the candidate without a résumé');
       if (refusal) return toast(refusal, 'error');
+      if (more) toast(`One résumé at a time: ${file.name} was taken.`);
       latest.current.take(file);
     };
     window.addEventListener('dragenter', enter);
