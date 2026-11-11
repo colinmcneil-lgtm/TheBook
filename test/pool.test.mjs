@@ -1805,6 +1805,7 @@ test('an e-mail still on its way when the person is put on a job, joined to an a
   try {
     const owner = session(server.base);
     assert.equal((await owner.post('/setup', { agencyName: 'Harbour Talent', name: 'Alex Morgan', email: 'alex@agency.example', password: 'demo1234' })).status, 200);
+    assert.equal((await owner.putJson('/settings', { agencyName: 'Harbour Talent', candidateMail: true })).status, 200); // off until an admin switches them on
     const kestrel = (await owner.post('/clients', { name: 'Kestrel Logistics' })).body.id, lumen = (await owner.post('/clients', { name: 'Lumen Health' })).body.id;
     const { token } = (await owner.post('/invites', { role: 'client', email: 'kim@kestrel.example', client_id: kestrel })).body;
     const kim = session(server.base);
@@ -2329,6 +2330,7 @@ function meeting() {
     m.ok = ok;
     m.boss = session(m.server.base);
     ok(await m.boss.post('/setup', { agencyName: 'Harbour Talent', name: 'Alex Morgan', email: 'alex@agency.example', password: 'demo1234' }));
+    ok(await m.boss.putJson('/settings', { agencyName: 'Harbour Talent', candidateMail: true })); // off until an admin switches them on
     m.kestrel = ok(await m.boss.post('/clients', { name: 'Kestrel Logistics' })).id;
     m.lumen = ok(await m.boss.post('/clients', { name: 'Lumen Health' })).id;
     const join = async (role, name, email, extra = {}) => {

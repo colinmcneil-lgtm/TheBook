@@ -32,11 +32,13 @@ function ConfidentialNote({ data }) {
 }
 
 function MailNote() {
-  const { mailConfigured } = useApp();
-  if (mailConfigured) return null;
+  const { mailConfigured, candidateMail } = useApp();
+  if (candidateMail) return null;
   return (
     <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-      Email delivery is not connected yet, so messages are saved on the candidate's record but not sent. See Settings for how to connect it.
+      {mailConfigured
+        ? 'Emails to candidates are switched off, so this is saved on the candidate’s record but not sent. An admin can switch them on in Settings.'
+        : 'Email delivery is not connected yet, so messages are saved on the candidate\'s record but not sent. See Settings for how to connect it.'}
     </p>
   );
 }

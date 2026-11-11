@@ -173,6 +173,62 @@ test('a request for somebody on no job, and an e-mail that cannot be sent, are b
   assert.match(mail.to('marcus@agency.example')[0].text, /Job: Not on a job yet/);
 });
 
+test('an admin can send themselves a test e-mail, and is told what the mail provider said when it refuses', async () => {
+  const before = mail.sent.length;
+  assert.deepEqual(ok(await alex.post('/settings/test-email', {})), { ok: true, to: 'alex@agency.example' });
+  const [sent] = mail.sent.slice(before);
+  assert.deepEqual(sent.to, ['alex@agency.example']);
+  assert.match(sent.subject, /^A test e-mail from /);
+  assert.equal(mail.sent.length, before + 1, 'one e-mail, to the admin and nobody else');
+  // The provider refuses: the admin is told, in the provider's words.
+  mail.failing = true;
+  try {
+    const refused = await alex.post('/settings/test-email', {});
+    assert.equal(refused.status, 502);
+    assert.equal(refused.body.error, 'The test email was not sent. Resend answered: stand-in is down');
+  } finally { mail.failing = false; }
+  // It is the admins': not a recruiter's, not a client's user's, not a visitor's.
+  assert.equal((await priya.post('/settings/test-email', {})).status, 403);
+  assert.equal((await maya.post('/settings/test-email', {})).status, 403);
+  assert.equal((await session(server.base).post('/settings/test-email', {})).status, 401);
+  assert.equal(mail.sent.length, before + 1);
+});
+
+test('e-mails to candidates are not sent until an admin switches them on; e-mails to the team are sent either way', async () => {
+  const toLena = () => mail.to('lena@mail.example').length;
+  const me = async (who) => ok(await who.get('/me'));
+  // Delivery is connected, and nobody has switched e-mails to candidates on.
+  assert.deepEqual([(await me(alex)).mailConfigured, (await me(alex)).candidateMail], [true, false]);
+  const saved = ok(await alex.post(`/applications/${app.lena}/emails`, { subject: 'A quick question', body: 'Are you free on Thursday?' }));
+  assert.equal(saved.delivery, 'not_configured');
+  // It is on their record, marked as not sent, and nothing went to the mail provider for them.
+  const onRecord = ok(await alex.get(`/applications/${app.lena}`)).emails.find((m) => m.subject === 'A quick question');
+  assert.equal(onRecord.delivery, 'not_configured');
+  assert.equal(toLena(), 0);
+  // The team's own notifications do not wait for the switch: a test e-mail reaches the admin.
+  const before = mail.to('alex@agency.example').length;
+  ok(await alex.post('/settings/test-email', {}));
+  assert.equal(mail.to('alex@agency.example').length, before + 1);
+  // Only an admin can flip it.
+  assert.equal((await priya.putJson('/settings', { agencyName: 'Harbour Talent', candidateMail: true })).status, 403);
+  assert.equal((await maya.putJson('/settings', { agencyName: 'Harbour Talent', candidateMail: true })).status, 403);
+  assert.equal((await me(alex)).candidateMail, false);
+  // Saving the rest of the settings without naming the switch leaves it as it is.
+  ok(await alex.putJson('/settings', { agencyName: 'Harbour Talent' }));
+  assert.equal((await me(alex)).candidateMail, false);
+  try {
+    ok(await alex.putJson('/settings', { agencyName: 'Harbour Talent', candidateMail: true }));
+    assert.equal((await me(priya)).candidateMail, true);
+    const sent = ok(await alex.post(`/applications/${app.lena}/emails`, { subject: 'Thursday', body: 'See you then.' }));
+    assert.equal(sent.delivery, 'sent');
+    assert.deepEqual(mail.to('lena@mail.example').map((m) => m.subject), ['Thursday']); // the earlier one is not sent after the fact
+  } finally {
+    ok(await alex.putJson('/settings', { agencyName: 'Harbour Talent', candidateMail: false }));
+  }
+  assert.equal(ok(await alex.post(`/applications/${app.lena}/emails`, { subject: 'Off again', body: 'Not sent.' })).delivery, 'not_configured');
+  assert.equal(toLena(), 1);
+});
+
 // ---------- the reviewer's Inbox, and the count ----------
 
 test('the Inbox lists what is waiting on you, oldest first, with the candidate, the job and client, who asked, when and the note', async () => {
