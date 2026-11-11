@@ -714,14 +714,69 @@ export function applicationFacts(applicationId) {
  * Somebody who came through a post leaves its job for The Book without a job (see returnToBook in api.js). What the
  * board noted about the application belongs to that job: the post they applied through, the title they saw, and
  * whether they know who the client is. Their entry may next go on another client's job, and none of this may go
- * with it, so it is removed here. Resolves to a sentence for the agency's own note of what they applied for, or to
- * null for an application that did not come through a post.
+ * with it, so it is taken out of board_applications here. Everything else in this file reads that table and no
+ * other, so from this moment the entry is nobody's applicant: no title, no tick, no rewording.
+ *
+ * It is not thrown away. The row is set aside, as it was, in a table that only putOnJob below reads, in case the
+ * person is put back on the same job: they still have not been told who the client is, and an e-mail that named it
+ * then would be the first they heard of it.
+ *
+ * Resolves to a sentence for the agency's own note of what they applied for, or to null for an application that
+ * did not come through a post. (Inside the caller's transaction.)
  */
 export function leftJob(applicationId) {
   const facts = applicationFacts(applicationId);
   if (!facts) return null;
+  q.run(
+    `INSERT OR REPLACE INTO post_applications_set_aside (application_id, post_id, public_title, client_known_at, client_known_by, direct_applied_at, set_aside_at)
+     SELECT application_id, post_id, public_title, client_known_at, client_known_by, direct_applied_at, ? FROM board_applications WHERE application_id = ?`, now(), applicationId);
   q.run('DELETE FROM board_applications WHERE application_id = ?', applicationId);
   return `They applied through your confidential post “${facts.title}” and ${facts.client_known ? 'had since been told who the client is' : 'had not been told who the client is'}.`;
+}
+/**
+ * The agency has just put somebody on this job: this application is theirs in it (see onPostsJob in api.js, which
+ * every way of putting somebody on a job goes through). If they once applied for this very job through its post
+ * and went back to The Book, and the post is still there, what the board had noted is put back as it was when they
+ * left: they are an applicant of that post again, who has or has not been told who the client is. For any other
+ * job nothing is done: what was set aside stays where nothing reads it, and is still there should they ever come
+ * back to this one.
+ *
+ * What was set aside is looked for on this application and on the others the same record has, because the person
+ * can be on this job as a second application of their record (added to it from another of the client's jobs). Where
+ * more than one is found, "has not been told" is the one that counts. An application the board already has a record
+ * of keeps that record: it is the newer one. `appliedDirectlyAt` is when they applied for this job on the client's
+ * careers page, for an application that was made there.
+ *
+ * Resolves to what applicationFacts gives for them when something was put back, or to null. (Inside the caller's
+ * transaction.)
+ */
+export function putOnJob(applicationId, jobId, appliedDirectlyAt = null) {
+  const post = q.get('SELECT id FROM board_posts WHERE job_id = ?', jobId);
+  if (!post) return null;
+  const kept = q.get(
+    `SELECT k.* FROM post_applications_set_aside k
+     WHERE k.post_id = ?1 AND k.application_id IN (SELECT id FROM applications WHERE candidate_id = (SELECT candidate_id FROM applications WHERE id = ?2))
+     ORDER BY k.client_known_at IS NOT NULL, k.application_id = ?2 DESC, k.set_aside_at DESC LIMIT 1`, post.id, applicationId);
+  if (!kept) return null;
+  // This application's own is used up either way. One kept on another of the record's applications stays with it.
+  q.run('DELETE FROM post_applications_set_aside WHERE application_id = ? AND post_id = ?', applicationId, post.id);
+  if (applicationFacts(applicationId)) return null;
+  q.run('INSERT INTO board_applications (application_id, post_id, public_title, client_known_at, client_known_by, direct_applied_at) VALUES (?, ?, ?, ?, ?, ?)',
+    applicationId, post.id, kept.public_title, kept.client_known_at, kept.client_known_by, kept.direct_applied_at ?? appliedDirectlyAt);
+  return applicationFacts(applicationId);
+}
+/**
+ * An entry in The Book is folded into another application and goes (see foldEntry and entryIntoApplication in
+ * api.js): what was set aside for it moves to the application that is kept, so the person does not stop being
+ * somebody who has not been told. Where both have something set aside for the same post, the kept one's stays, and
+ * says "not told" if either did. (Inside the caller's transaction, before the entry that goes is deleted.)
+ */
+export function entryFolded(goingId, keptId) {
+  q.run('UPDATE OR IGNORE post_applications_set_aside SET application_id = ? WHERE application_id = ?', keptId, goingId);
+  q.run(
+    `UPDATE post_applications_set_aside SET client_known_at = NULL, client_known_by = NULL
+     WHERE application_id = ? AND post_id IN (SELECT post_id FROM post_applications_set_aside WHERE application_id = ? AND client_known_at IS NULL)`, keptId, goingId);
+  q.run('DELETE FROM post_applications_set_aside WHERE application_id = ?', goingId);
 }
 /** Came through a post and has not been told who the client is. */
 const inTheDark = (applicationId) => { const facts = applicationFacts(applicationId); return facts && !facts.client_known ? facts : null; };

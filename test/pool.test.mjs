@@ -2183,6 +2183,73 @@ test('an interview edited for somebody who came from The Book: the invitation se
   assert.deepEqual(later.activities.map((a) => a.detail), ['Rescheduled Meet the practice', 'Scheduled Meet the practice', 'Added to Clinic Coordinator at Applied']);
 });
 
+// ---------- where this meets account executives and the job board ----------
+// Every job has an account executive, and the dashboard has a job board with a column for each (the release that is
+// live). Somebody on no job is on nobody's board; on a job they are one of the people in it, whoever the job belongs to.
+test('account executives and the job board: somebody on no job is in no column and no count, and on a job they are counted in it and stay with the recruiter who owns them when the job is handed on', async () => {
+  const idOf = (email) => db('SELECT id FROM users WHERE email = ?', email)[0].id;
+  const [alexId, samId] = [idOf('alex@agency.example'), idOf('sam@agency.example')];
+  const boardOf = async (who, query = '?board=all') => (await who.get(`/dashboard${query}`)).body.board;
+  /** A job's card on the board: whose column it is in, and the people it counts. */
+  const card = async (jobId) => {
+    for (const column of await boardOf(alex)) {
+      const found = column.jobs.find((j) => j.id === jobId);
+      if (found) return [column.name, found.in_pipeline, found.interviewing, found.offers, found.hires];
+    }
+    return null;
+  };
+  const jobsOf = async (who, executive) => (await who.get(`/jobs?account_executive=${executive}`)).body.map((j) => [j.id, j.total_applicants, j.active_candidates, j.interviewing]);
+  const everything = async () => ({ board: await boardOf(alex), open: await boardOf(alex, ''), danas: await boardOf(dana), jobs: await jobsOf(alex, alexId), nobody: await jobsOf(alex, 'none'),
+    people: (await alex.get('/account-executives')).body, extension: (await sam.get('/jobs')).body.map((j) => [j.id, j.title, j.status, j.account_executive_name]) });
+  const before = await everything();
+  const [whose, pipeline, interviewing, offers, hires] = await card(job.accountant);
+  assert.equal(whose, 'Alex Morgan');
+
+  // Saved without a job: the board (open jobs, or all of them; for an admin and for a recruiter), the Jobs page
+  // narrowed to one person's jobs, the people a job can belong to and the extension's list of jobs are word for
+  // word what they were. Nobody has a column for owning somebody who is on no job.
+  const una = await saved(sam, { name: 'Una Fairweather', email: 'una@example.com' });
+  assert.deepEqual(await everything(), before);
+  assert.deepEqual(await jobsOf(alex, samId), []);
+  assert.equal(JSON.stringify(before.board).includes('Sam Okoro'), false);
+
+  // Put on Alex's job by Dana, straight into an interview stage: one more in its pipeline and at interview, in
+  // Alex's column. She belongs to Sam, who saved her: not to the job's account executive, and not to Dana.
+  assert.equal((await addToJob(dana, una, { job_id: job.accountant, stage_id: job.accountantStages[1].id })).status, 200);
+  assert.deepEqual(await card(job.accountant), ['Alex Morgan', pipeline + 1, interviewing + 1, offers, hires]);
+  assert.equal((await detail(alex, una)).application.owner_name, 'Sam Okoro');
+  // The brief is the account executive's: Sam, who owns her, and Dana, who put her on the job, cannot edit it.
+  for (const who of [sam, dana]) assert.equal((await put(who, `/jobs/${job.accountant}/brief`, { brief: { about: 'Not theirs to write' } })).status, 403);
+
+  // The job is handed to Sam. It is in his column with the same people counted, he can edit its brief, and she is
+  // still his. Dana, who put her on the job, still cannot hand the job on or edit its brief.
+  assert.equal((await put(dana, `/jobs/${job.accountant}`, { title: 'Senior Accountant', status: 'open', account_executive_id: idOf('dana@agency.example') })).status, 403);
+  assert.equal((await put(alex, `/jobs/${job.accountant}`, { title: 'Senior Accountant', status: 'open', account_executive_id: samId })).status, 200);
+  assert.deepEqual(await card(job.accountant), ['Sam Okoro', pipeline + 1, interviewing + 1, offers, hires]);
+  assert.deepEqual((await jobsOf(alex, samId)).map(([id]) => id), [job.accountant]);
+  assert.equal((await put(sam, `/jobs/${job.accountant}/brief`, { brief: { about: 'Written by its account executive' } })).status, 200);
+  assert.equal((await put(dana, `/jobs/${job.accountant}/brief`, { brief: { about: 'Not hers to write' } })).status, 403);
+  assert.equal((await detail(alex, una)).application.owner_name, 'Sam Okoro');
+  // The client's hiring team sees her on the job, and nothing of whose job it is or of the board.
+  const forMaya = { dashboard: (await maya.get('/dashboard')).body, jobs: (await maya.get('/jobs')).body, job: (await maya.get(`/jobs/${job.accountant}`)).body.job, her: (await maya.get(`/applications/${una}`)).body };
+  assert.equal('board' in forMaya.dashboard, false);
+  for (const shown of [...forMaya.dashboard.jobs, ...forMaya.jobs, forMaya.job, forMaya.her.job]) {
+    assert.deepEqual(Object.keys(shown).filter((key) => /account_executive|created_by/.test(key)), [], JSON.stringify(shown));
+  }
+  assert.equal(/account_executive|The Book/.test(JSON.stringify(forMaya)), false);
+  assert.deepEqual(forMaya.her.activities.map((a) => a.detail), ['Started at Recruiter screen', 'Added to Senior Accountant at Recruiter screen']);
+  assert.equal((await maya.get('/account-executives')).status, 403);
+  assert.deepEqual((await maya.get(`/jobs?account_executive=${alexId}`)).body.map((j) => j.id), (await maya.get('/jobs')).body.map((j) => j.id), 'the filter is ignored for a client user');
+
+  // Removed from the job she goes back to The Book: the job counts what it counted before her, in Sam's column
+  // now, and she is in no column again. The job goes back to Alex, so the tests that follow find it as it was.
+  assert.equal((await dana.del(`/applications/${una}`)).body.returned, true);
+  assert.deepEqual(await card(job.accountant), ['Sam Okoro', pipeline, interviewing, offers, hires]);
+  assert.equal((await put(alex, `/jobs/${job.accountant}`, { title: 'Senior Accountant', status: 'open', account_executive_id: alexId })).status, 200);
+  assert.deepEqual([(await everything()).board, (await everything()).jobs], [before.board, before.jobs]);
+  assert.equal((await dana.del(`/applications/${una}`)).status, 200);
+});
+
 // ---------- where this meets the agency's own jobs page ----------
 // "Jobs on our website" came with the release before this one: a confidential advert for a client's job on a public
 // board in the agency's name, with its own application form. Somebody who applies there has not been told who the
@@ -2696,6 +2763,461 @@ test('deleting, merging and deleting the job of people who applied through a pos
   // The public is told the same about that post as about one that never was.
   const gone = await m.onBoard(view.post.token, { name: 'Late Comer', email: 'late@example.com' });
   assert.deepEqual([gone.status, gone.body], [404, { error: 'This role is no longer open.' }]);
+});
+
+// ---------- back on the job they applied for through its post ----------
+// When somebody who came through a confidential post goes back to The Book, what the board had noted about them is
+// set aside, where nothing reads it. Put back on the job the post is for, they are that post's applicant again: not
+// told who the client is, or told, as they were. On any other job, nothing of the post.
+/** What the board has set aside for an application. Read from the database: no route shows it. */
+const setAside = (m, id) => m.read('SELECT post_id, public_title, client_known_at IS NOT NULL AS known, direct_applied_at IS NOT NULL AS direct FROM post_applications_set_aside WHERE application_id = ? ORDER BY post_id', id);
+/** The board's record of somebody who applied through Kestrel's post ("Sales Director", the first post) and has not been told who the client is. */
+const UNTOLD = [{ post_id: 1, public_title: 'Sales Director', known: 0, direct: 0 }];
+const TOLD = [{ ...UNTOLD[0], known: 1 }];
+const BACK_LINE = (told) => `Applied for this job through your confidential post “Sales Director” before: ${told ? 'they have been told who the client is' : 'they have not been told who the client is'}`;
+const NAMES_KESTREL = { subject: 'About Kestrel', body: 'Kestrel Logistics would like to meet you.' };
+/** Remove somebody who came from The Book from their job: they go back to The Book. Resolves to their entry's id. */
+async function backToBook(m, id) {
+  const gone = m.ok(await m.rec.del(`/applications/${id}`));
+  assert.equal(gone.returned, true);
+  return gone.id;
+}
+/** Book an interview and tell the candidate. Resolves to the interview, the notice the recruiter was shown, and the subjects of what was sent. */
+async function invite(m, id, extra = {}) {
+  m.sent.length = 0;
+  const made = m.ok(await m.rec.post('/interviews', { application_id: id, title: 'First call', starts_at: inDays(3), notify: true, location: 'By phone', panel: [], ...extra }));
+  return { id: made.id, notice: made.notice, sent: m.sent.map((mail_) => mail_.subject) };
+}
+/** Whether a hand-written message that names Kestrel would be stopped for this person. */
+const stopsKestrel = async (m, id) => m.ok(await m.rec.post(`/applications/${id}/emails/check`, NAMES_KESTREL)).names_client;
+/** How many people each list says applied through Kestrel's post: the post's own tab, and the list of posts under Jobs. */
+const appliedThrough = async (m, jobId = m.sales) => [await m.applied(jobId), m.ok(await m.boss.get('/board/posts')).find((post) => post.job_id === jobId).applied];
+/** No application says "Our website" that the board has no record of, and nobody in The Book says it. */
+const ourWebsiteIsTheBoards = (m) => assert.deepEqual(m.read(`SELECT id FROM applications WHERE source = 'our_website' AND (job_id IS NULL OR id NOT IN (SELECT application_id FROM board_applications))`), []);
+/** Nothing is set aside for an application or a post that is gone, and nothing is both set aside and noted for the same application and post. */
+const nothingAstray = (m) => assert.deepEqual(m.read(
+  `SELECT k.application_id FROM post_applications_set_aside k LEFT JOIN applications a ON a.id = k.application_id LEFT JOIN board_posts p ON p.id = k.post_id
+   LEFT JOIN board_applications b ON b.application_id = k.application_id AND b.post_id = k.post_id WHERE a.id IS NULL OR p.id IS NULL OR b.application_id IS NOT NULL`), []);
+
+test('put back on the job they applied for through its confidential post, somebody is that post\'s applicant again, told or not told as they were, whichever way they are put back', async () => {
+  const m = await meeting();
+  const [before] = await appliedThrough(m);
+  // Four people came through the post, and the agency joined an entry it held on each to their application. Ada, Cy
+  // and Dee have not been told who the client is; Ben has. Dee has also applied on Kestrel's own careers page for
+  // another job, so Kestrel keeps a record of her when she leaves this one.
+  const ada = await throughPostWithEntry(m, m.salesPost, m.sales, 'Ada Whitlock', 'ada@example.com', { resume: resume('Ada, written for the post', 'Ada for the post.pdf') });
+  const ben = await throughPostWithEntry(m, m.salesPost, m.sales, 'Ben Okonjo', 'ben@example.com');
+  const cy = await throughPostWithEntry(m, m.salesPost, m.sales, 'Cy Lindgren', 'cy@example.com');
+  const dee = await throughPostWithEntry(m, m.salesPost, m.sales, 'Dee Marlow', 'dee@example.com');
+  assert.equal(m.ok(await m.rec.putJson(`/applications/${ben}/client-known`, { known: true })).client_known, true);
+  m.ok(await m.onCareers(m.dispatch, { name: 'Dee Marlow', email: 'dee@example.com' }));
+  const deeAtKestrel = (await m.detail(m.rec, dee)).candidate.id;
+  const all = [ada, ben, cy, dee];
+  const was = {};
+  for (const id of all) was[id] = { board: (await m.detail(m.rec, id)).board, noted: m.noted(id) };
+  assert.deepEqual([was[ada], was[ben].noted, was[ben].board.client_known_by_name, await appliedThrough(m)],
+    [{ board: { title: 'Sales Director', client_known: false, client_known_at: null, client_known_by_name: null }, noted: UNTOLD }, TOLD, 'Dana Recruiter', [before + 4, before + 4]]);
+
+  // All four are removed from the job and go back to The Book. The board has no record of them, neither list counts
+  // them, and what it had noted is set aside as it was.
+  for (const id of all) assert.equal(await backToBook(m, id), id);
+  for (const id of all) assert.deepEqual([(await m.detail(m.rec, id)).board, m.noted(id), setAside(m, id)], [null, [], was[id].noted]);
+  assert.deepEqual(await appliedThrough(m), [before, before]);
+  const when = Date.parse(m.read('SELECT set_aside_at FROM post_applications_set_aside WHERE application_id = ?', ada)[0].set_aside_at);
+  assert.ok(when <= Date.now() && when > Date.now() - 60000, 'it says when they left the job');
+  // In The Book nothing reads it: no tick, no warning, and a message that names Kestrel is not looked at.
+  assert.deepEqual([(await m.rec.putJson(`/applications/${ada}/client-known`, { known: true })).status, await stopsKestrel(m, ada)], [400, false]);
+  // The agency gives Ada's entry a résumé of its own while she is there.
+  assert.equal(m.ok(await m.rec.upload('/applications', { name: 'Ada Whitlock', email: 'ada@example.com', resume: resume('Ada, as the agency holds her', 'Ada CV (agency).pdf') })).id, ada);
+
+  // Each is put back on the same job another way: from the profile ("Add to a job"); from the profile at a later
+  // stage; by Add candidate with the job chosen, which is also what the extension sends; and from the profile where
+  // the client already has a record of the person, which the entry is joined to.
+  assert.deepEqual(m.ok(await addToJob(m.rec, ada, { job_id: m.sales })), { id: ada, merged: false });
+  const stages = m.ok(await m.boss.get(`/jobs/${m.sales}`)).stages;
+  assert.deepEqual(m.ok(await addToJob(m.rec, ben, { job_id: m.sales, stage_id: stages[1].id })), { id: ben, merged: false });
+  assert.deepEqual(m.ok(await m.rec.upload('/applications', { job_id: m.sales, stage_id: stages[0].id, source: 'linkedin', name: 'Cy Lindgren', email: 'cy@example.com' })),
+    { id: cy, known: true, merged: true, name: 'Cy Lindgren', general: false, moved: true, joined: false });
+  const asked = await addToJob(m.rec, dee, { job_id: m.sales });
+  assert.deepEqual([asked.status, asked.body.code, asked.body.matches.map((match) => match.candidate_id)], [409, 'duplicate_in_client', [deeAtKestrel]]);
+  assert.deepEqual(m.ok(await addToJob(m.rec, dee, { job_id: m.sales, into: deeAtKestrel })), { id: dee, merged: true });
+
+  // Each is exactly what they were to the board: the same post, the title they saw, and told or not told, by whom
+  // and when. Nothing is left set aside, and both lists count them again.
+  for (const id of all) assert.deepEqual([(await m.detail(m.rec, id)).board, m.noted(id), setAside(m, id)], [was[id].board, was[id].noted, []], `application ${id}`);
+  assert.deepEqual(await appliedThrough(m), [before + 4, before + 4]);
+  nothingAstray(m);
+  // The agency's history says so, in a line of the board's own.
+  const line = async (id) => (await m.detail(m.rec, id)).activities.filter((a) => a.type === 'board').map((a) => a.detail);
+  assert.deepEqual([await line(ada), await line(ben), await line(cy), await line(dee)], [[BACK_LINE(false)], [BACK_LINE(true), 'Marked as knowing who the client is'], [BACK_LINE(false)], [BACK_LINE(false)]]);
+
+  // The agency put them on the job this time, so the source stays "Agency sourced": "Our website" is only ever on
+  // an application as it was made on the board. What Ada wrote for the post, the consent she gave there and the
+  // résumé she sent stay where her return to The Book put them, with the agency; the application carries the
+  // entry's own résumé, like any entry put on a job.
+  const adaNow = await m.detail(m.rec, ada);
+  assert.deepEqual([adaNow.application.source, adaNow.application.cover_note, adaNow.application.consent_at, adaNow.application.resume_name, adaNow.earlier_resumes.map((r) => r.name)],
+    ['agency_sourced', null, null, 'Ada CV (agency).pdf', ['Ada for the post.pdf']]);
+  assert.ok(adaNow.notes.some((n) => n.private === 1 && n.body.includes('They applied through your confidential post “Sales Director” and had not been told who the client is.') && n.body.includes('POST-NOTE from Ada Whitlock')));
+  for (const id of all) assert.equal((await m.detail(m.rec, id)).application.source, 'agency_sourced');
+  ourWebsiteIsTheBoards(m);
+  // Kestrel's hiring team is shown somebody the agency added: nothing of the post, the tick, or what the agency keeps.
+  const atKestrel = await m.detail(m.kim, ada);
+  assert.deepEqual([atKestrel.application.source, atKestrel.application.cover_note, atKestrel.application.resume_name, atKestrel.notes, atKestrel.emails, atKestrel.activities.map((a) => a.detail), atKestrel.earlier_resumes, 'board' in atKestrel],
+    ['agency_sourced', null, 'Ada CV (agency).pdf', [], [], ['Added to Head of Sales at Applied'], [], false]);
+  assert.equal(/confidential|Sales Director|our client|website|POST-NOTE|AGENCY-NOTE|told who|for the post/i.test(JSON.stringify(atKestrel)), false, JSON.stringify(atKestrel));
+  assert.deepEqual(m.ok(await m.kim.get('/dashboard')).recent.filter((r) => r.application_id === ada).map((r) => r.detail), ['Added to Head of Sales at Applied']);
+  // The release that is live now would show that hiring team the same, and takes her for an applicant of the post
+  // who has not been told, as this one does.
+  const { board: adaBoard, ...adaLive } = m.asLive(ada);
+  assert.deepEqual([adaBoard, adaLive], [['Sales Director'], await m.asShown(m.kim, ada)]);
+
+  // So what The Book sends Ada by itself keeps the client's name from her again: the invitation is reworded, one
+  // that would name Kestrel all the same is held back, and a hand-written one that names Kestrel is refused until
+  // the recruiter has seen the warning.
+  const first = await invite(m, ada);
+  assert.deepEqual([first.notice, first.sent], [undefined, ['Interview for Sales Director at our client']]);
+  assert.equal(/Kestrel|Head of Sales/.test(m.sent[0].text), false, m.sent[0].text);
+  const held = m.ok(await m.rec.patch(`/interviews/${first.id}`, { starts_at: inDays(4), location: 'Kestrel Logistics, 12 Dock Road', notify: true }));
+  assert.match(held.notice, /^The e-mail was not sent: it names the client, and this candidate applied through your confidential post/);
+  const refused = await m.rec.post(`/applications/${ada}/emails`, NAMES_KESTREL);
+  assert.deepEqual([refused.status, refused.body.code, m.sent.length, await stopsKestrel(m, ada)], [409, 'names_client', 1, true]);
+  for (const id of [cy, dee]) assert.deepEqual([(await invite(m, id)).sent, await stopsKestrel(m, id)], [['Interview for Sales Director at our client'], true]);
+  // Ben had been told, and is written to like anybody on the job.
+  assert.deepEqual([(await invite(m, ben, { location: 'Kestrel Logistics, 12 Dock Road' })).sent, await stopsKestrel(m, ben)], [['Interview for Head of Sales at Kestrel Logistics'], false]);
+  // The tick is offered for Ada, and once it is made she is written to like anybody too.
+  assert.equal(m.ok(await m.rec.putJson(`/applications/${ada}/client-known`, { known: true })).client_known, true);
+  assert.deepEqual([m.noted(ada), await stopsKestrel(m, ada), m.ok(await m.rec.post(`/applications/${ada}/emails`, NAMES_KESTREL)).delivery], [TOLD, false, 'sent']);
+
+  // They leave the job a second time. The board's record is set aside again as it is by now: Ada has been told
+  // since, Cy has not. The agency's note says so, and says nothing of an application of their own, since there was
+  // none this time. Ada's entry keeps the résumé the agency gave it: it was never one she sent this client.
+  for (const id of [ada, cy]) assert.equal(await backToBook(m, id), id);
+  assert.deepEqual([setAside(m, ada), setAside(m, cy), m.noted(ada), m.noted(cy), await appliedThrough(m)], [TOLD, UNTOLD, [], [], [before + 2, before + 2]]);
+  const second = (detail_) => detail_.notes.filter((n) => n.body.startsWith('From their time on')).map((n) => [n.private, n.body.split('\n\n')]);
+  assert.deepEqual(second(await m.detail(m.rec, cy)), [[1, ['From their time on Head of Sales at Kestrel Logistics. Kept for the agency only.', 'They applied through your confidential post “Sales Director” and had not been told who the client is.']]]);
+  assert.deepEqual(second(await m.detail(m.rec, ada)), [[1, ['From their time on Head of Sales at Kestrel Logistics. Kept for the agency only.', 'They applied through your confidential post “Sales Director” and had since been told who the client is.']]]);
+  const adaBack = await m.detail(m.rec, ada);
+  assert.deepEqual([adaBack.application.general, adaBack.application.resume_name, adaBack.earlier_resumes.map((r) => r.name), adaBack.application.source], [true, 'Ada CV (agency).pdf', ['Ada for the post.pdf'], 'agency_sourced']);
+  // And a third time on the job, each is again what they were when they left it.
+  for (const id of [ada, cy]) assert.deepEqual(m.ok(await addToJob(m.rec, id, { job_id: m.sales })), { id, merged: false });
+  assert.deepEqual([m.noted(ada), m.noted(cy), setAside(m, ada), setAside(m, cy), await appliedThrough(m)], [TOLD, UNTOLD, [], [], [before + 4, before + 4]]);
+  assert.deepEqual([(await invite(m, cy)).sent, await stopsKestrel(m, cy), await stopsKestrel(m, ada)], [['Interview for Sales Director at our client'], true, false]);
+  ourWebsiteIsTheBoards(m);
+  nothingAstray(m);
+});
+
+test('an entry joined to an application that is already on the post\'s job: the person is still somebody who came through the post, and an application the board has a record of keeps it', async () => {
+  const m = await meeting();
+  const [before] = await appliedThrough(m);
+  const eli = await throughPostWithEntry(m, m.salesPost, m.sales, 'Eli Navarro', 'eli@example.com');
+  const fay = await throughPostWithEntry(m, m.salesPost, m.sales, 'Fay Oduya', 'fay@example.com');
+  assert.equal(m.ok(await m.rec.putJson(`/applications/${fay}/client-known`, { known: true })).client_known, true);
+  for (const id of [eli, fay]) assert.equal(await backToBook(m, id), id);
+  assert.deepEqual([setAside(m, eli), setAside(m, fay), await appliedThrough(m)], [UNTOLD, TOLD, [before, before]]);
+
+  // Eli then applies for the same job on Kestrel's own careers page, where it is advertised under its real title:
+  // he does not know it is the job he applied for through the post. Kestrel gets a record of its own, as for anybody.
+  m.sent.length = 0;
+  m.ok(await m.onCareers(m.sales, { name: 'Eli Navarro', email: 'eli@example.com', cover_note: 'DIRECT-NOTE from Eli' }));
+  const direct = await m.inJob(m.sales, 'eli@example.com');
+  assert.notEqual(direct, eli);
+  assert.deepEqual([m.to('eli@example.com').map((mail_) => mail_.subject), m.noted(direct), (await m.detail(m.rec, direct)).board], [['We received your application for Head of Sales'], [], null]);
+  // The agency joins his entry to that application. One person is in a job once, so the entry is folded into it,
+  // and with it what the board had set aside: he is somebody who came through the post and has not been told.
+  const record = (await m.detail(m.rec, direct)).candidate.id;
+  const asked = await addToJob(m.rec, eli, { job_id: m.sales });
+  assert.deepEqual([asked.status, asked.body.code, asked.body.join.candidate_id], [409, 'already_in_job', record]);
+  assert.deepEqual(m.ok(await addToJob(m.rec, eli, { job_id: m.sales, into: record })), { id: direct, merged: true });
+  assert.deepEqual([m.noted(direct), setAside(m, direct), setAside(m, eli), (await m.detail(m.rec, direct)).board.client_known], [[{ ...UNTOLD[0], direct: 1 }], [], [], false]);
+  assert.deepEqual((await m.detail(m.rec, direct)).activities.filter((a) => a.type === 'board').map((a) => a.detail), [BACK_LINE(false)]);
+  // What he wrote to Kestrel on its own form is still his, on the application, for its hiring team to read; the
+  // post and the tick are not.
+  const shown = await m.detail(m.kim, direct);
+  assert.deepEqual([shown.application.source, shown.application.cover_note, shown.activities.map((a) => a.detail), 'board' in shown], ['careers_page', 'DIRECT-NOTE from Eli', ['Applied via careers page'], false]);
+  assert.equal(/confidential|Sales Director|our client|told who|POST-NOTE|AGENCY-NOTE/i.test(JSON.stringify(shown)), false, JSON.stringify(shown));
+  // He has applied on the careers page once and been answered once, like anybody: applying there again brings no
+  // second confirmation, which would tell him the two are one job.
+  m.sent.length = 0;
+  m.ok(await m.onCareers(m.sales, { name: 'Eli Navarro', email: 'eli@example.com' }));
+  assert.deepEqual(m.to('eli@example.com'), []);
+  // And what The Book sends him by itself keeps the client's name from him.
+  assert.deepEqual([(await invite(m, direct)).sent, await stopsKestrel(m, direct)], [['Interview for Sales Director at our client'], true]);
+
+  // Fay, who had been told, applies through the post again while she is in The Book. That is a new application as
+  // far as the board can tell, from somebody who has not been told. The agency joins her entry to it: the board's
+  // record of the application stays as it is, the newer of the two, and nothing is left set aside.
+  m.ok(await m.onBoard(m.salesPost, { name: 'Fay Oduya', email: 'fay@example.com' }));
+  const again = await m.inJob(m.sales, 'fay@example.com');
+  assert.deepEqual([again === fay, m.noted(again)], [false, UNTOLD]);
+  assert.deepEqual(m.ok(await addToJob(m.rec, fay, { job_id: m.sales, into: (await m.detail(m.rec, again)).candidate.id })), { id: again, merged: true });
+  assert.deepEqual([m.noted(again), setAside(m, again), setAside(m, fay), (await m.detail(m.rec, again)).application.source], [UNTOLD, [], [], 'our_website']);
+  assert.deepEqual(await appliedThrough(m), [before + 2, before + 2]);
+  ourWebsiteIsTheBoards(m);
+  nothingAstray(m);
+});
+
+test('on another client\'s job, or another job of the same client, nothing of the post goes with them; added to the post\'s job from there, they are its applicant again', async () => {
+  const m = await meeting();
+  const [sales] = await appliedThrough(m), [nurse] = await appliedThrough(m, m.nurse);
+  const nothingOfThePost = (answer) => assert.equal(/confidential|Sales Director|our client|website|POST-NOTE|AGENCY-NOTE|told who/i.test(JSON.stringify(answer)), false, JSON.stringify(answer));
+  const gil = await throughPostWithEntry(m, m.salesPost, m.sales, 'Gil Arnesen', 'gil@example.com');
+  assert.equal(await backToBook(m, gil), gil);
+
+  // Lumen's job, which has a confidential post of its own. Gil is on it like anyone the agency adds: the board has
+  // no record of him, neither post counts him, and what The Book sends is in Lumen's name. What was set aside for
+  // Kestrel's post stays where nothing reads it.
+  assert.deepEqual(m.ok(await addToJob(m.rec, gil, { job_id: m.nurse })), { id: gil, merged: false });
+  assert.deepEqual([(await m.detail(m.rec, gil)).board, m.noted(gil), setAside(m, gil), await appliedThrough(m, m.nurse), await appliedThrough(m)], [null, [], UNTOLD, [nurse, nurse], [sales, sales]]);
+  const ward = await invite(m, gil, { location: 'Lumen Health, 3 King Street' });
+  assert.deepEqual([ward.notice, ward.sent, (await m.rec.putJson(`/applications/${gil}/client-known`, { known: true })).status], [undefined, ['Interview for Nurse Lead at Lumen Health'], 400]);
+  nothingOfThePost(await m.detail(m.lena, gil));
+  // (Somebody else on Lumen's job applied through Lumen's own post in an earlier test, which its hiring team may read.)
+  for (const answer of [await m.detail(m.lena, gil), m.ok(await m.lena.get('/applications?status=all')), m.ok(await m.lena.get('/dashboard')), m.ok(await m.lena.get('/reports')), m.ok(await m.lena.get('/interviews'))]) {
+    assert.equal(/kestrel|sales|our client|POST-NOTE|AGENCY-NOTE|told who/i.test(JSON.stringify(answer)), false, JSON.stringify(answer));
+  }
+  const { board: atLumen, ...liveAtLumen } = m.asLive(gil);
+  assert.deepEqual([atLumen, liveAtLumen], [[], await m.asShown(m.lena, gil)]);
+
+  // Back to The Book and on to another of Kestrel's jobs, which has no post: the same. An e-mail that names Kestrel
+  // is what anybody on that job is sent.
+  assert.equal(await backToBook(m, gil), gil);
+  assert.deepEqual(m.ok(await addToJob(m.rec, gil, { job_id: m.dispatch })), { id: gil, merged: false });
+  assert.deepEqual([(await m.detail(m.rec, gil)).board, m.noted(gil), setAside(m, gil), await appliedThrough(m)], [null, [], UNTOLD, [sales, sales]]);
+  const depot = await invite(m, gil, { location: 'Kestrel Logistics, 12 Dock Road' });
+  assert.deepEqual([depot.notice, depot.sent, await stopsKestrel(m, gil)], [undefined, ['Interview for Dispatcher at Kestrel Logistics'], false]);
+  nothingOfThePost(await m.detail(m.kim, gil));
+
+  // From there he is added to Head of Sales as well, as somebody already on a client's job is: a second application
+  // of the same record. On the job the post is for, he is its applicant again and has not been told; on the other
+  // job he is as he was.
+  const second = m.ok(await addToJob(m.rec, gil, { job_id: m.sales }));
+  assert.deepEqual([second.merged, second.id === gil], [false, false]);
+  assert.deepEqual([m.noted(second.id), m.noted(gil), (await m.detail(m.rec, second.id)).board.client_known, await appliedThrough(m)], [UNTOLD, [], false, [sales + 1, sales + 1]]);
+  assert.deepEqual((await m.detail(m.rec, second.id)).activities.filter((a) => a.type === 'board').map((a) => a.detail), [BACK_LINE(false)]);
+  assert.deepEqual([(await invite(m, second.id)).sent, await stopsKestrel(m, second.id), await stopsKestrel(m, gil)], [['Interview for Sales Director at our client'], true, false]);
+  const secondAtKestrel = await m.detail(m.kim, second.id);
+  assert.deepEqual([secondAtKestrel.activities.map((a) => a.detail), 'board' in secondAtKestrel], [['Scheduled First call', 'Added to Head of Sales at Applied'], false]);
+  nothingOfThePost({ ...secondAtKestrel, emails: [] });
+  assert.deepEqual(secondAtKestrel.emails.map((e) => e.subject), ['Interview for Sales Director at our client']);
+  // The second application never was in The Book, so removing it deletes it, and the board's record with it. The
+  // one on Dispatcher goes back to The Book, and from there on to Head of Sales: still somebody who has not been told.
+  assert.deepEqual(m.ok(await m.rec.del(`/applications/${second.id}`)), { ok: true });
+  assert.deepEqual([m.noted(second.id), setAside(m, gil), await appliedThrough(m)], [[], UNTOLD, [sales, sales]]);
+  assert.equal(await backToBook(m, gil), gil);
+  assert.deepEqual(m.ok(await addToJob(m.rec, gil, { job_id: m.sales })), { id: gil, merged: false });
+  assert.deepEqual([m.noted(gil), setAside(m, gil), await appliedThrough(m)], [UNTOLD, [], [sales + 1, sales + 1]]);
+
+  // The same when somebody on another of the client's jobs is added to the post's job by Add candidate (or the
+  // extension), which adds to the record the client has: Hal, on Dispatcher, is the post's applicant on Head of Sales.
+  const hal = await throughPostWithEntry(m, m.salesPost, m.sales, 'Hal Ibsen', 'hal@example.com');
+  assert.equal(await backToBook(m, hal), hal);
+  assert.deepEqual(m.ok(await addToJob(m.rec, hal, { job_id: m.dispatch })), { id: hal, merged: false });
+  const added = m.ok(await m.rec.upload('/applications', { job_id: m.sales, name: 'Hal Ibsen', email: 'hal@example.com', source: 'referral' }));
+  assert.deepEqual([added.known, added.general, added.id === hal, 'moved' in added], [true, false, false, false]);
+  assert.deepEqual([m.noted(added.id), m.noted(hal), setAside(m, hal), (await m.detail(m.rec, added.id)).application.source, await stopsKestrel(m, added.id)], [UNTOLD, [], UNTOLD, 'referral', true]);
+  assert.deepEqual(await appliedThrough(m), [sales + 2, sales + 2]);
+  ourWebsiteIsTheBoards(m);
+  nothingAstray(m);
+});
+
+test('the post edited or switched off in between changes nothing about who has been told; with the person, the entry or the job deleted, nothing is left set aside', async () => {
+  const m = await meeting();
+  const POST = { title: 'Planner (six months)', location: 'North of England', description: 'A six-month contract planning routes for a delivery business.', show_salary: false, hide_from_careers: true };
+  const planner = m.ok(await m.boss.post('/jobs', { client_id: m.kestrel, title: 'Route Planner', status: 'open' })).id;
+  const view = m.ok(await m.boss.putJson(`/jobs/${planner}/board`, { enabled: true, ...POST }));
+  assert.equal(view.state.live, true, JSON.stringify(view.check.problems));
+  const postId = m.read('SELECT id FROM board_posts WHERE job_id = ?', planner)[0].id;
+  const asSeen = [{ post_id: postId, public_title: 'Planner (six months)', known: 0, direct: 0 }];
+  const forPost = () => m.read('SELECT application_id FROM post_applications_set_aside WHERE post_id = ? ORDER BY application_id', postId).map((row) => row.application_id);
+  const people = {};
+  for (const name of ['Ivy Castellane', 'Jon Abiodun', 'Kit Sorrell', 'Lee Vantongeren']) {
+    const short = name.split(' ')[0].toLowerCase();
+    people[short] = await throughPostWithEntry(m, view.post.token, planner, name, `${short}@example.com`);
+    assert.equal(await backToBook(m, people[short]), people[short]);
+  }
+  const { ivy, jon, kit, lee } = people;
+  assert.deepEqual([forPost(), m.ok(await m.boss.get(`/jobs/${planner}/board`)).applied], [[ivy, jon, kit, lee].sort((a, b) => a - b), 0]);
+
+  // The post is given another title. Ivy, put back on the job, is written to under the title she saw.
+  const edited = m.ok(await m.boss.putJson(`/jobs/${planner}/board`, { enabled: true, ...POST, title: 'Senior Route Planner' }));
+  assert.deepEqual([edited.state.live, edited.post.title], [true, 'Senior Route Planner']);
+  assert.deepEqual(m.ok(await addToJob(m.rec, ivy, { job_id: planner })), { id: ivy, merged: false });
+  assert.deepEqual([m.noted(ivy), (await m.detail(m.rec, ivy)).board.title, (await invite(m, ivy)).sent], [asSeen, 'Planner (six months)', ['Interview for Planner (six months) at our client']]);
+  // The post is switched off. Jon still has not been told who the client is, and is put back as somebody who has not.
+  const off = m.ok(await m.boss.putJson(`/jobs/${planner}/board`, { enabled: false, ...POST, title: 'Senior Route Planner' }));
+  assert.equal(off.state.live, false);
+  assert.deepEqual(m.ok(await addToJob(m.rec, jon, { job_id: planner })), { id: jon, merged: false });
+  assert.deepEqual([m.noted(jon), await stopsKestrel(m, jon), (await invite(m, jon)).sent, m.ok(await m.boss.get(`/jobs/${planner}/board`)).applied, forPost()],
+    [asSeen, true, ['Interview for Planner (six months) at our client'], 2, [kit, lee].sort((a, b) => a - b)]);
+
+  // "Delete all data on this person" for Kit, who is in The Book: nothing is left of her, set aside or anywhere.
+  const kitsRecord = (await m.detail(m.rec, kit)).candidate.id;
+  assert.deepEqual(m.ok(await m.rec.del(`/candidates/${kitsRecord}`)), { ok: true, erased: 1 });
+  assert.deepEqual([setAside(m, kit), forPost(), m.read('SELECT id FROM candidates WHERE email = ?', 'kit@example.com'), m.read('SELECT id FROM applications WHERE id = ?', kit)], [[], [lee], [], []]);
+  nothingAstray(m);
+
+  // The job is deleted, and its post with it. Ivy and Jon came from The Book and go back to it; Lee was there
+  // already. Nothing is set aside for a post that no longer exists, for any of them.
+  assert.deepEqual(m.ok(await m.boss.del(`/jobs/${planner}`)), { ok: true });
+  assert.deepEqual([forPost(), m.read('SELECT application_id FROM board_applications WHERE post_id = ?', postId), m.read('SELECT id FROM board_posts WHERE id = ?', postId)], [[], [], []]);
+  for (const id of [ivy, jon, lee]) assert.deepEqual([(await m.detail(m.rec, id)).application.general, (await m.detail(m.rec, id)).board, setAside(m, id)], [true, null, []]);
+  // Lee, put on another of Kestrel's jobs afterwards, is on it like anyone.
+  assert.deepEqual(m.ok(await addToJob(m.rec, lee, { job_id: m.dispatch })), { id: lee, merged: false });
+  assert.deepEqual([m.noted(lee), (await invite(m, lee, { location: 'Kestrel Logistics, 12 Dock Road' })).sent], [[], ['Interview for Dispatcher at Kestrel Logistics']]);
+  // And an entry that is removed outright takes what was set aside for it.
+  const moe = await throughPostWithEntry(m, m.salesPost, m.sales, 'Moe Castellani', 'moe@example.com');
+  assert.equal(await backToBook(m, moe), moe);
+  assert.deepEqual(setAside(m, moe), UNTOLD);
+  assert.deepEqual(m.ok(await m.rec.del(`/applications/${moe}`)), { ok: true });
+  assert.deepEqual([setAside(m, moe), m.read('SELECT id FROM candidates WHERE email = ?', 'moe@example.com')], [[], []]);
+  nothingAstray(m);
+});
+
+test('an entry folded into another entry in The Book takes what was set aside with it, and "has not been told" is the one that counts when both had something', async () => {
+  const m = await meeting();
+  // Max was saved to The Book again while he was on the job. When he leaves it, his entry is folded into that one,
+  // since one person has one entry: what the board set aside goes with it.
+  const max = await throughPostWithEntry(m, m.salesPost, m.sales, 'Max Delacroix', 'max@example.com');
+  const twin = await m.inBook({ name: 'Max Delacroix', email: 'max@example.com' });
+  assert.equal(await backToBook(m, max), twin);
+  assert.deepEqual([(await m.rec.get(`/applications/${max}`)).status, setAside(m, max), setAside(m, twin), (await m.detail(m.rec, twin)).board], [404, [], UNTOLD, null]);
+  assert.deepEqual(m.ok(await addToJob(m.rec, twin, { job_id: m.sales })), { id: twin, merged: false });
+  // The entry that is on the job now is not the application he made on the board, and does not say it is.
+  assert.deepEqual([m.noted(twin), setAside(m, twin), (await m.detail(m.rec, twin)).application.source, (await invite(m, twin)).sent], [UNTOLD, [], 'agency_sourced', ['Interview for Sales Director at our client']]);
+
+  // Nia is in The Book twice, once under her address and once under her link, and the two are merged: the entry
+  // that is kept carries what was set aside for the one that went.
+  const nia = await throughPostWithEntry(m, m.salesPost, m.sales, 'Nia Castellanos', 'nia@example.com');
+  assert.equal(await backToBook(m, nia), nia);
+  const other = await m.inBook({ name: 'Nia Castellanos', linkedin: 'https://www.linkedin.com/in/nia-castellanos' });
+  const [from, into] = [(await m.detail(m.rec, nia)).candidate.id, (await m.detail(m.rec, other)).candidate.id];
+  assert.deepEqual(m.ok(await m.rec.post(`/candidates/${from}/merge`, { into })), { ok: true, id: into });
+  assert.deepEqual([setAside(m, nia), setAside(m, other)], [[], UNTOLD]);
+  assert.deepEqual(m.ok(await addToJob(m.rec, other, { job_id: m.sales })), { id: other, merged: false });
+  assert.deepEqual([m.noted(other), await stopsKestrel(m, other)], [UNTOLD, true]);
+
+  // Tia's entry is joined to an application she made on Kestrel's careers page for another job. What was set aside
+  // for the post goes with it and stays set aside, since that job is not the post's. When that application goes back
+  // to The Book and on to the post's job, she is somebody who came through the post and has not been told.
+  const tia = await throughPostWithEntry(m, m.salesPost, m.sales, 'Tia Rosenqvist', 'tia@example.com');
+  assert.equal(await backToBook(m, tia), tia);
+  m.ok(await m.onCareers(m.dispatch, { name: 'Tia Rosenqvist', email: 'tia@example.com' }));
+  const onDispatch = await m.inJob(m.dispatch, 'tia@example.com');
+  assert.deepEqual(m.ok(await addToJob(m.rec, tia, { job_id: m.dispatch, into: (await m.detail(m.rec, onDispatch)).candidate.id })), { id: onDispatch, merged: true });
+  assert.deepEqual([setAside(m, tia), setAside(m, onDispatch), m.noted(onDispatch), (await m.detail(m.rec, onDispatch)).board, await stopsKestrel(m, onDispatch)], [[], UNTOLD, [], null, false]);
+  assert.equal(await backToBook(m, onDispatch), onDispatch);
+  assert.deepEqual(m.ok(await addToJob(m.rec, onDispatch, { job_id: m.sales })), { id: onDispatch, merged: false });
+  assert.deepEqual([m.noted(onDispatch), setAside(m, onDispatch), await stopsKestrel(m, onDispatch)], [UNTOLD, [], true]);
+
+  // Ora applied through the post twice, under two addresses, and was told who the client is on one application
+  // only. Both go back to The Book and the two entries are merged, the one that says "told" being kept: together
+  // they say she has not been told, which is the safe one of the two.
+  const told = await throughPostWithEntry(m, m.salesPost, m.sales, 'Ora Benali', 'ora@example.com');
+  const untold = await throughPostWithEntry(m, m.salesPost, m.sales, 'Ora Benali', 'ora.work@example.com');
+  assert.equal(m.ok(await m.rec.putJson(`/applications/${told}/client-known`, { known: true })).client_known, true);
+  for (const id of [told, untold]) assert.equal(await backToBook(m, id), id);
+  assert.deepEqual([setAside(m, told), setAside(m, untold)], [TOLD, UNTOLD]);
+  const [going, kept] = [(await m.detail(m.rec, untold)).candidate.id, (await m.detail(m.rec, told)).candidate.id];
+  assert.deepEqual(m.ok(await m.rec.post(`/candidates/${going}/merge`, { into: kept })), { ok: true, id: kept });
+  assert.deepEqual([setAside(m, told), setAside(m, untold)], [UNTOLD, []]);
+  assert.deepEqual(m.ok(await addToJob(m.rec, told, { job_id: m.sales })), { id: told, merged: false });
+  assert.deepEqual([m.noted(told), await stopsKestrel(m, told)], [UNTOLD, true]);
+  ourWebsiteIsTheBoards(m);
+  nothingAstray(m);
+});
+
+test('two requests to put the same person on a job at once: one of them does, and the board\'s record is where they ended up, once', async () => {
+  const m = await meeting();
+  const [before] = await appliedThrough(m);
+  const names = [['Oz Petrenko', 'oz@example.com'], ['Pam Okwuosa', 'pam@example.com'], ['Quy Halvorsen', 'quy@example.com']];
+  const ids = [];
+  for (const [name, email] of names) {
+    const id = await throughPostWithEntry(m, m.salesPost, m.sales, name, email);
+    assert.equal(await backToBook(m, id), id);
+    ids.push(id);
+  }
+  const [oz, pam, quy] = ids;
+  // The same job, asked for twice in the same moment by two people.
+  const twice = await Promise.all([addToJob(m.rec, oz, { job_id: m.sales }), addToJob(m.boss, oz, { job_id: m.sales })]);
+  assert.deepEqual(twice.map((answer) => answer.status).sort(), [200, 409]);
+  assert.deepEqual([m.noted(oz), setAside(m, oz), await appliedThrough(m)], [UNTOLD, [], [before + 1, before + 1]]);
+  assert.deepEqual((await m.detail(m.rec, oz)).activities.filter((a) => a.type === 'board').map((a) => a.detail), [BACK_LINE(false)]);
+  // The post's job and another client's job, in the same moment: Pam is on one of them, and the board has a record
+  // of her exactly when that is the post's job. Otherwise it stays set aside.
+  const [toSales, toNurse] = await Promise.all([addToJob(m.rec, pam, { job_id: m.sales }), addToJob(m.boss, pam, { job_id: m.nurse })]);
+  assert.deepEqual([toSales.status, toNurse.status].sort(), [200, 400]);
+  const on = (await m.detail(m.rec, pam)).job.id;
+  assert.equal(on, toSales.status === 200 ? m.sales : m.nurse);
+  assert.deepEqual([m.noted(pam), setAside(m, pam)], on === m.sales ? [UNTOLD, []] : [[], UNTOLD]);
+  assert.deepEqual(await stopsKestrel(m, pam), on === m.sales);
+  // "Add to a job" on the profile and Add candidate with the job chosen, in the same moment.
+  const both = await Promise.all([addToJob(m.rec, quy, { job_id: m.sales }), m.boss.upload('/applications', { job_id: m.sales, name: 'Quy Halvorsen', email: 'quy@example.com' })]);
+  assert.deepEqual(both.map((answer) => answer.status).sort(), [200, 409]);
+  assert.deepEqual([m.noted(quy), setAside(m, quy), m.ok(await m.boss.get(`/applications?job_id=${m.sales}&status=all`)).filter((a) => a.email === 'quy@example.com').map((a) => a.id)], [UNTOLD, [], [quy]]);
+  assert.deepEqual(await appliedThrough(m), [before + 2 + (on === m.sales ? 1 : 0), before + 2 + (on === m.sales ? 1 : 0)]);
+  nothingAstray(m);
+  assert.equal(m.server.output().includes('constraint failed'), false, m.server.output());
+});
+
+test('an e-mail that names the client, still on its way while the person leaves the job: put back before it arrives it makes the tick, and after it arrives they count as not told until somebody ticks it', async () => {
+  const m = await meeting();
+  /** Start sending a message that names Kestrel, with the warning seen; wait until the provider has it, do `meanwhile`, then let the provider answer. */
+  const sendWhile = async (id, subject, meanwhile) => {
+    const had = m.sent.length;
+    m.hold = true;
+    const sending = m.rec.post(`/applications/${id}/emails`, { subject, body: 'Kestrel Logistics would like to meet you.', names_client_ok: true });
+    await until(async () => m.sent.length, (n) => n > had);
+    m.hold = false;
+    await meanwhile();
+    m.release();
+    return m.ok(await sending);
+  };
+  // Rhea leaves the job and is put back on it while the message is with the mail provider. Delivered, it has told
+  // her, and she is on the job it was about: the tick is made on the record the board has of her again.
+  const rhea = await throughPostWithEntry(m, m.salesPost, m.sales, 'Rhea Lindahl', 'rhea@example.com');
+  const there = await sendWhile(rhea, 'THERE-AND-BACK', async () => {
+    assert.equal(await backToBook(m, rhea), rhea);
+    assert.deepEqual(m.ok(await addToJob(m.rec, rhea, { job_id: m.sales })), { id: rhea, merged: false });
+    assert.deepEqual(m.noted(rhea), UNTOLD);
+  });
+  assert.deepEqual([there.delivery, m.noted(rhea), setAside(m, rhea), await stopsKestrel(m, rhea)], ['sent', TOLD, [], false]);
+  assert.deepEqual((await m.detail(m.rec, rhea)).activities.filter((a) => a.type === 'board').map((a) => a.detail), ['Told who the client is, by e-mail', BACK_LINE(false)]);
+  // It was sent before she was on the job this time, so the record of it is the agency's own.
+  assert.deepEqual((await m.detail(m.kim, rhea)).emails.map((e) => e.subject), []);
+  // Sven is still in The Book when the message arrives. Nothing is ticked there, and nothing that was set aside is
+  // touched: put back on the job he counts as not told, and the tick is there for the recruiter to make.
+  const sven = await throughPostWithEntry(m, m.salesPost, m.sales, 'Sven Aaltonen', 'sven@example.com');
+  const away = await sendWhile(sven, 'AWAY', async () => assert.equal(await backToBook(m, sven), sven));
+  assert.deepEqual([away.delivery, m.noted(sven), setAside(m, sven)], ['sent', [], UNTOLD]);
+  assert.deepEqual(m.ok(await addToJob(m.rec, sven, { job_id: m.sales })), { id: sven, merged: false });
+  assert.deepEqual([m.noted(sven), await stopsKestrel(m, sven)], [UNTOLD, true]);
+  assert.equal(m.ok(await m.rec.putJson(`/applications/${sven}/client-known`, { known: true })).client_known, true);
+  assert.equal(m.server.output().includes('constraint failed'), false, m.server.output());
+});
+
+test('nothing reads what the board has set aside but the step that puts somebody on a job', () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const TABLE = 'post_applications_set_aside';
+  const files = (dir) => fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? files(path.join(dir, entry.name)) : [path.join(dir, entry.name)]));
+  const naming = [...files('server'), ...files('src'), ...files('extension')].filter((file) => fs.readFileSync(path.join(root, file), 'utf8').includes(TABLE)).sort();
+  // The database code makes the table, the demo data empties it with the rest, and the board's own file uses it. No
+  // route, report, feed, e-mail or screen names it.
+  assert.deepEqual(naming, ['server/board.js', 'server/db.js', 'server/seed.js']);
+  // In the board's file, three functions name it: the one that sets a record aside when somebody leaves a job, the
+  // one that puts it back when they are put on the job again, and the one that moves it when an entry is folded
+  // into another application.
+  const source = fs.readFileSync(path.join(root, 'server', 'board.js'), 'utf8');
+  const within = new Set();
+  for (let at = source.indexOf(TABLE); at !== -1; at = source.indexOf(TABLE, at + 1)) {
+    within.add([...source.slice(0, at).matchAll(/^(?:export )?(?:async )?function (\w+)|^(?:export )?const (\w+) = /gm)].at(-1).slice(1).find(Boolean));
+  }
+  assert.deepEqual([...within], ['leftJob', 'putOnJob', 'entryFolded']);
+  // And each of the three is called from one place: leaving a job for The Book, being put on a job, and an entry being folded.
+  const api_ = fs.readFileSync(path.join(root, 'server', 'api.js'), 'utf8');
+  const calls = (name) => api_.split(`board.${name}(`).length - 1;
+  assert.deepEqual([calls('leftJob'), calls('putOnJob'), calls('entryFolded')], [1, 1, 2]);
+  assert.equal(api_.includes('const viaPost = board.putOnJob(applicationId, job.id, appliedDirectlyAt);'), true);
 });
 
 test('the demo data has people in The Book without a job', () => {

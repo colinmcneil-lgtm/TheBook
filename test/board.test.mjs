@@ -1312,9 +1312,11 @@ test('starting on a database made by the live code adds the board’s tables and
       assert.ok(now.startsWith(was) && /^,\s*account_executive_id INTEGER REFERENCES users\(id\) ON DELETE SET NULL$/.test(now.slice(was.length)), 'jobs was changed by more than its one new column');
     }
     // What is new: the board's five tables and their indexes. Whatever else was made belongs to another change (the
-    // three tables and five indexes of people saved without a job, and whatever comes later), not to the board:
-    // each is new, and a table among them is empty. (test/pool-upgrade.test.mjs holds every such addition to its rules,
-    // and shows that the release with the board in it adds exactly the board's own to a database from before it.)
+    // four tables and six indexes of people saved without a job, and whatever comes later), not to the board:
+    // each is new, and a table among them is empty. One of those four is about the board's applicants, for when one
+    // of them goes back to The Book (post_applications_set_aside); it came with that change and is in its tests.
+    // (test/pool-upgrade.test.mjs holds every such addition to its rules, and shows that the release with the board
+    // in it adds exactly the board's own to a database from before it.)
     const added = Object.keys(after.objects).filter((name) => !(name in before.objects)).sort();
     const own = ['idx_board_applications_post', 'idx_board_log_post', ...NEW].sort();
     assert.deepEqual(added.filter((name) => own.includes(name)), own);

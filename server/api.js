@@ -1421,6 +1421,7 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
           logActivity(appId, req.user.id, 'added', `Added to the pipeline (${SOURCE_LABELS[source].toLowerCase()})`);
           logArrival(appId, req.user.id, stage);
           reporting.arrivedIn(appId, stage);
+          onPostsJob(appId, job, req.user);
         }
       }
       // How somebody who came from The Book was matched is the agency's business, so the hiring team is not shown those lines.
@@ -2012,6 +2013,7 @@ function foldEntry(going, kept, userId) {
   moveCallsToEntry(going.id, kept.id);
   const spare = carryResume(going, kept, userId);
   q.run('UPDATE applications SET cover_note = COALESCE(cover_note, ?), owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', going.cover_note, going.owner_id, now(), kept.id);
+  board.entryFolded(going.id, kept.id); // what the board had noted about a post they once applied through stays set aside, on the entry that is kept
   q.run('DELETE FROM applications WHERE id = ?', going.id);
   foldedInto(going.id, kept.id); // a message still on its way to them is recorded there
   return spare;
@@ -2028,6 +2030,24 @@ function copyUpload(name) {
 }
 
 /**
+ * The agency has put somebody on a job, and this is their application in it (inside a transaction). Every way of
+ * doing that comes through here: an entry that becomes the job's application, an entry joined to the application
+ * the client's record already has in the job, and a new application for somebody on the client's record.
+ *
+ * Back on the very job they once applied for through its confidential post, they are that post's applicant again,
+ * told or not told who the client is as they were when they left it for The Book (see leftJob and putOnJob in
+ * board.js). So what The Book sends them by itself still keeps the client's name from somebody who has not been
+ * told. On any other job, nothing of the post. The line in the history is one of the board's own, which the client's
+ * hiring team is never shown.
+ */
+function onPostsJob(applicationId, job, user, { at, appliedDirectlyAt = null } = {}) {
+  const viaPost = board.putOnJob(applicationId, job.id, appliedDirectlyAt);
+  if (!viaPost) return;
+  logActivity(applicationId, user.id, 'board', `Applied for this job through your confidential post “${viaPost.title}” before: ${
+    viaPost.client_known ? 'they have been told who the client is' : 'they have not been told who the client is'}`, at ? { at } : undefined);
+}
+
+/**
  * The entry of someone in The Book becomes a job's application (inside a transaction). It keeps its id, so the
  * notes, résumé and calls on it stay where they are, and the agency goes on reading its whole history. The person
  * takes the job's client; or, when `into` is that client's own record of them, the entry moves onto that record and
@@ -2041,6 +2061,9 @@ function copyUpload(name) {
  * Returns the moment they joined the job, and the photo file that is left over when both records had one.
  */
 function entryToJob({ entry, person, job, stage, into, user }) {
+  // An entry goes on one job. Where two copies of the server share the data folder for a moment (a deploy), the
+  // other may have put this one on a job since it was read.
+  if (q.get('SELECT job_id FROM applications WHERE id = ?', entry.id)?.job_id !== null) bad(`${person.name} was put on a job a moment ago. Open their profile again.`, 409);
   const hired = stage.kind === 'hired';
   // The moment they join the job, set after everything already written on the entry. The client's hiring team is
   // shown the entry's history from this moment on, so what is written here carries exactly this time.
@@ -2075,6 +2098,7 @@ function entryToJob({ entry, person, job, stage, into, user }) {
   logActivity(entry.id, user.id, 'added', `Added to ${job.title} at ${stage.name}`, { at });
   logArrival(entry.id, user.id, stage, at);
   reporting.arrivedIn(entry.id, stage); // put straight into Hired, they are a placement like anyone added there
+  onPostsJob(entry.id, job, user, { at });
   return { at, sparePhoto: into?.photo_file && person.photo_file ? person.photo_file : null };
 }
 
@@ -2097,10 +2121,15 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
   // A covering note saved with the entry was never the candidate's word to this client, so it becomes an agency-only note.
   if (entry.cover_note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', there.id, user.id, `Saved with their entry in The Book: ${entry.cover_note}`, now());
   q.run('UPDATE applications SET owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', entry.owner_id, now(), there.id);
+  board.entryFolded(entry.id, there.id); // what the board had set aside for the entry is kept with the application it is folded into
   q.run('DELETE FROM applications WHERE id = ?', entry.id);
   foldedInto(entry.id, there.id); // a message still on its way to them is recorded there, for the agency
   const left = absorbRecord(person, into);
   logActivity(there.id, user.id, 'merged', `Joined with their entry in The Book, which had no job${alsoHad(left, 'That entry')}`, { agencyOnly: true });
+  // The entry may be that of somebody who applied for this very job through its confidential post and has not been
+  // told who the client is. Folded into an application the board has no record of, they are still that person.
+  // (An application they made on the client's careers page carries the consent they gave there, and when.)
+  onPostsJob(there.id, job, user, { appliedDirectlyAt: there.consent_at ?? null });
   return [spareResume, into.photo_file && person.photo_file ? person.photo_file : null];
 }
 
@@ -2141,13 +2170,17 @@ function returnToBook(a, user, said, made) {
   const answers = (Array.isArray(given) ? given : []).filter((x) => x && (x.question || x.answer));
   // An application made through the agency's confidential post has a record of that on the board's side: the title
   // they saw and whether they have been told who the client is. That belongs to this job and goes with it. The
-  // agency's note says what it was; nothing of it is on the entry that goes on to the next job.
+  // agency's note says what it was; nothing of it is on the entry that goes on to the next job. (The board sets it
+  // aside where only onPostsJob looks, and puts it back if they are put on this same job again.)
   const viaPost = board.leftJob(a.id);
   if (answers.length || a.cover_note || a.consent_at || viaPost) {
     const where = q.get('SELECT j.title, cl.name AS client FROM jobs j JOIN clients cl ON cl.id = j.client_id WHERE j.id = ?', a.job_id);
     const whose = where ? `${where.title} at ${where.client}` : 'the job they were on';
+    // Somebody the agency put back on the job they had once applied for through its post has nothing of their own
+    // on the application this time: only the board's record of them, which is set aside again.
+    const theirs = answers.length || a.cover_note || ownApplication(a);
     const kept = [
-      `From their own application for ${whose}${a.consent_at ? `, where they agreed to their data being processed on ${a.consent_at.slice(0, 10)}` : ''}. Kept for the agency only.`,
+      `${theirs ? 'From their own application for' : 'From their time on'} ${whose}${a.consent_at ? `, where they agreed to their data being processed on ${a.consent_at.slice(0, 10)}` : ''}. Kept for the agency only.`,
       viaPost,
       answers.length ? `Screening answers:\n${answers.map((x) => `${x.question || 'Question'}\n${x.answer || '(no answer)'}`).join('\n\n')}` : null,
       a.cover_note ? `Note from the candidate:\n${a.cover_note}` : null,
@@ -2261,6 +2294,7 @@ api.post('/applications/:id/add-to-job', agencyOnly, (req, res) => {
         logActivity(appId, req.user.id, 'added', `Added to ${job.title} at ${stage.name}`, { at: t });
         logArrival(appId, req.user.id, stage, t);
         reporting.arrivedIn(appId, stage);
+        onPostsJob(appId, job, req.user, { at: t });
         return appId;
       });
       return res.json({ id, merged: false });

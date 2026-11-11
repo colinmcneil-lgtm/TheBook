@@ -2,9 +2,10 @@
 //
 // The upgrade makes three columns optional (candidates.client_id, applications.job_id, applications.stage_id), adds
 // one empty column (applications.general_until) and two indexes. SQLite cannot change a column in place, so both
-// tables are rebuilt, on a database that holds real people. It also adds three new, empty tables: one for résumés
-// that a newer one replaced, and two for the history lines and e-mails that only the agency may read (the tables of
-// history lines and e-mails that are there already are not touched at all). These
+// tables are rebuilt, on a database that holds real people. It also adds four new, empty tables: one for résumés
+// that a newer one replaced, two for the history lines and e-mails that only the agency may read (the tables of
+// history lines and e-mails that are there already are not touched at all), and one for what the agency's jobs page
+// had noted about somebody who came through a confidential post and has gone back to The Book. These
 // tests build a database with the code as it was before, fill it with awkward data, start the code as it is now on
 // it, and compare everything: every row of every table, every id, the counters that stop a deleted row's id being
 // used again, every index, trigger and foreign key.
@@ -21,7 +22,7 @@
 //      tables, indexes, triggers and columns, the rows they add and the values they change, exactly as their own
 //      code leaves them.
 //   2. This change, written out by name (THIS_RELEASE and expectedAfter): the three columns that stop being
-//      required, the one column, the three tables and the five indexes it adds. Applied to what (1) left, that is
+//      required, the one column, the four tables and the six indexes it adds. Applied to what (1) left, that is
 //      what every table, index, trigger, column, counter and row that the newest release knows must be afterwards.
 //   3. A general rule for whatever else today's code adds (assertUpgraded): a feature that is newer than the newest
 //      release kept here. It may add tables, indexes, triggers and columns, and nothing else:
@@ -182,12 +183,12 @@ function openedBy(release, dataDir) {
 }
 
 /**
- * What this change adds to a database, by name: three tables with an index each, two more indexes, and one column.
+ * What this change adds to a database, by name: four tables with an index each, two more indexes, and one column.
  * It also lets three columns be empty, for which the two tables they are in are rebuilt (see expectedAfter).
  */
 const THIS_RELEASE = {
   made: ['index idx_agency_activities_app', 'index idx_agency_emails_app', 'index idx_apps_general', 'index idx_candidates_general_email', 'index idx_earlier_resumes_app',
-    'table agency_activities', 'table agency_emails', 'table earlier_resumes'],
+    'index idx_post_applications_set_aside_post', 'table agency_activities', 'table agency_emails', 'table earlier_resumes', 'table post_applications_set_aside'],
   columns: { applications: ['general_until'] },
 };
 
@@ -204,8 +205,8 @@ function withColumn(sql, table, column) {
 /**
  * What the snapshot of a database the newest release without this change has opened should be after the upgrade:
  * the same, except that the three columns are optional, applications has one more column that is empty in every
- * row, there are two more indexes, and there are three new tables with nothing in them. History lines and e-mails
- * are exactly as they were.
+ * row, there are two more indexes, and there are four new tables with nothing in them. History lines and e-mails
+ * are exactly as they were, and so is everything the agency's jobs page has noted.
  */
 function expectedAfter(before) {
   const want = plain(before);
@@ -220,6 +221,28 @@ function expectedAfter(before) {
     want.columns[table] = newToday().columns[table];
     want.foreignKeys[table] = [{ table: 'applications', from: 'application_id', to: 'id', on_update: 'NO ACTION', on_delete: 'CASCADE', match: 'NONE' }];
     want.indexes[table] = [{ name: index, unique: 0, origin: 'c', partial: 0, columns: ['application_id'] }];
+    want.counters = want.counters.filter((c) => c.name !== table);
+  }
+  // A fourth, made the same way and empty: what the agency's jobs page had noted about somebody who came through a
+  // confidential post, set aside when they go back to The Book. A row is for one application and one post, hangs
+  // from both and goes when either does; whoever made the tick it records may leave without taking the row along.
+  // It has no numbers of its own, so no counter.
+  {
+    const table = 'post_applications_set_aside', index = 'idx_post_applications_set_aside_post';
+    want.master.push(definedToday(table), definedToday(index));
+    want.rows[table] = [];
+    want.columns[table] = newToday().columns[table];
+    assert.deepEqual(want.columns[table].map((c) => [c.name, c.notnull, c.pk]),
+      [['application_id', 1, 1], ['post_id', 1, 2], ['public_title', 1, 0], ['client_known_at', 0, 0], ['client_known_by', 0, 0], ['direct_applied_at', 0, 0], ['set_aside_at', 1, 0]]);
+    want.foreignKeys[table] = [
+      { table: 'applications', from: 'application_id', to: 'id', on_update: 'NO ACTION', on_delete: 'CASCADE', match: 'NONE' },
+      { table: 'board_posts', from: 'post_id', to: 'id', on_update: 'NO ACTION', on_delete: 'CASCADE', match: 'NONE' },
+      { table: 'users', from: 'client_known_by', to: 'id', on_update: 'NO ACTION', on_delete: 'SET NULL', match: 'NONE' },
+    ].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    want.indexes[table] = [
+      { name: index, unique: 0, origin: 'c', partial: 0, columns: ['post_id'] },
+      { name: `sqlite_autoindex_${table}_1`, unique: 1, origin: 'pk', partial: 0, columns: ['application_id', 'post_id'] },
+    ];
     want.counters = want.counters.filter((c) => c.name !== table);
   }
   const column = (table, name) => want.columns[table].find((c) => c.name === name);
@@ -1058,10 +1081,23 @@ forEachBefore('after the upgrade the rules still hold: foreign keys, one record 
     assert.throws(() => newPost(1), /UNIQUE/, 'and a job that had a post');
     assert.throws(() => run(`INSERT INTO board_posts (job_id, token, created_at, updated_at) VALUES (4, 'aaaaaaaaaaaaaaaaaa', 'x', 'x')`), /UNIQUE/, 'and a post\'s address is still its own');
   }
+  // What the jobs page sets aside when somebody who came through a post goes back to The Book is this change's own
+  // table, made by this start on every database: it needs an application and a post that exist, is kept once for
+  // an application and a post, and goes with the application (here) or with the post (further down).
+  const setAside = (applicationId, postId) => run(`INSERT INTO post_applications_set_aside (application_id, post_id, public_title, set_aside_at) VALUES (?, ?, 'x', 'x')`, applicationId, postId);
+  assert.throws(() => setAside(999, post), /FOREIGN KEY/);
+  assert.throws(() => setAside(11, 999), /FOREIGN KEY/);
+  assert.throws(() => run(`INSERT INTO post_applications_set_aside (application_id, post_id, public_title, client_known_by, set_aside_at) VALUES (11, ?, 'x', 999, 'x')`, post), /FOREIGN KEY/);
+  setAside(11, post);
+  assert.throws(() => setAside(11, post), /UNIQUE|PRIMARY KEY/, 'set aside once for an application and a post');
+  setAside(4, post);                                             // for Aïsha, whose application stays
+  if (board) setAside(4, 3);                                     // and for the post of the job at Northline, which is deleted further down
   run('DELETE FROM applications WHERE id = 11');
   assert.equal(count('report_events', 'application_id = 11'), 0);
   assert.equal(count('todos', 'application_id = 11'), 0);
   assert.equal(count('board_applications', 'application_id = 11'), 0);
+  assert.equal(count('post_applications_set_aside', 'application_id = 11'), 0);
+  assert.equal(count('post_applications_set_aside'), board ? 2 : 1, 'and what is set aside for somebody else stays');
   assert.equal(Number(newApplication(10, 1, 1).lastInsertRowid), 12);
   const reportsBefore = count('report_events'), keysBefore = count('candidate_phone_keys');
 
@@ -1092,6 +1128,8 @@ forEachBefore('after the upgrade the rules still hold: foreign keys, one record 
   assert.equal(count('candidates', 'id = 2'), 1, 'the same person on file at another client is a record of its own');
   run('DELETE FROM jobs WHERE id = 3');                          // a job takes its applications with it
   assert.equal(count('applications', 'job_id = 3'), 0);
+  // and its post, with what was set aside for that post; what was set aside for another post stays
+  assert.deepEqual(db.prepare('SELECT application_id, post_id FROM post_applications_set_aside').all().map((k) => ({ ...k })), [{ application_id: 4, post_id: post }]);
   assert.equal(count('applications', 'id = 13'), 1, 'and leaves the entry of someone on no job alone');
   // The reports' moments went with the candidate (Kevin at Maple had none), the job (Kévin's placement at Northline) and nothing else.
   assert.equal(count('report_events'), reportsBefore - (reports ? 1 : 0));
@@ -1592,6 +1630,44 @@ function databaseFromFirstRelease(name) {
   start(FIRST.code, dataDir);
   return dataDir;
 }
+
+// Rolled back. The release that is live knows nothing of what this one sets aside when somebody who came through a
+// confidential post goes back to The Book. It has to start on a database that holds such rows, leave them and
+// everything else as they are, and still take them away with the application or the post they hang from, which is
+// the database's own doing. When this version is back it finds them as they were.
+test('rolled back, the live release starts on a database that holds something set aside, and neither reads nor changes it', () => {
+  const dataDir = databaseFromBefore(LIVE, 'pool-rolled-back');
+  start(NOW, dataDir);
+  let db = open(dataDir);
+  db.prepare(`INSERT INTO post_applications_set_aside (application_id, post_id, public_title, client_known_at, client_known_by, direct_applied_at, set_aside_at) VALUES
+    (3, 1, 'Finance Lead', NULL, NULL, NULL, ?), (4, 2, 'Payroll Specialist', ?, 2, NULL, ?), (8, 3, 'Dental Hygienist', NULL, NULL, ?, ?)`).run(at('11-08'), at('11-06'), at('11-08'), at('11-07'), at('11-09'));
+  db.close();
+  const withRows = snapshot(dataDir);
+  assert.equal(withRows.rows.post_applications_set_aside.length, 3);
+
+  start(LIVE.code, dataDir);
+  assertSame(snapshot(dataDir), withRows, 'after the live release has started on it');
+  start(LIVE.code, dataDir);
+  assertSame(snapshot(dataDir), withRows, 'after the live release has started on it a second time');
+  // The live release's own code never names the table: it cannot read it, show it or write to it.
+  assert.equal(fs.readFileSync(LIVE.code, 'utf8').includes('post_applications_set_aside'), false);
+
+  // While rolled back, an application and a post are deleted, as that release deletes them: with one statement
+  // each. What was set aside for them goes with them, and the rest stays.
+  db = open(dataDir);
+  db.exec('DELETE FROM applications WHERE id = 3');
+  db.exec('DELETE FROM board_posts WHERE id = 3');
+  db.exec('DELETE FROM users WHERE id = 2');                     // and somebody who had made a tick leaves for good
+  const left = () => db.prepare('SELECT application_id, post_id, public_title, client_known_at, client_known_by FROM post_applications_set_aside').all().map((k) => ({ ...k }));
+  assert.deepEqual(left(), [{ application_id: 4, post_id: 2, public_title: 'Payroll Specialist', client_known_at: at('11-06'), client_known_by: null }]);
+  assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+  db.close();
+  const rolledBack = snapshot(dataDir);
+
+  // This version again: nothing is rebuilt, added or lost.
+  start(NOW, dataDir);
+  assertSame(snapshot(dataDir), rolledBack, 'after this version has started on it again');
+});
 
 test('the first release\'s database code kept here is the code that was released', (t) => {
   let released;

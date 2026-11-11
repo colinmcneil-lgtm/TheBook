@@ -429,7 +429,8 @@ test('starting on a database from before fills in each job’s account executive
   // new and are covered by its own upgrade test. So are the tables and indexes of people saved without a job, which
   // are listed here, and every table among them is empty. Nothing else may appear.)
   const notTheBoards = (name) => !/^(idx_)?board_/.test(name);
-  const THE_BOOKS = ['agency_activities', 'agency_emails', 'earlier_resumes', 'idx_agency_activities_app', 'idx_agency_emails_app', 'idx_apps_general', 'idx_candidates_general_email', 'idx_earlier_resumes_app'];
+  const THE_BOOKS = ['agency_activities', 'agency_emails', 'earlier_resumes', 'post_applications_set_aside', 'idx_agency_activities_app', 'idx_agency_emails_app', 'idx_apps_general', 'idx_candidates_general_email',
+    'idx_earlier_resumes_app', 'idx_post_applications_set_aside_post'];
   assert.deepEqual(Object.keys(first.objects).filter(notTheBoards).sort(), [...Object.keys(before.objects), ...THE_BOOKS].sort(), 'nothing was added beside the column');
   for (const table of THE_BOOKS.filter((name) => first.rows[name])) assert.deepEqual(first.rows[table], [], `${table} is empty`);
   // (Starting also does what it did before this version: it notes when the server first ran and files candidates' names for looking up.)

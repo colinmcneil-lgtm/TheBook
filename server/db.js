@@ -830,6 +830,27 @@ addColumn('board_posts', 'round_salary', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('board_posts', 'renew', 'INTEGER NOT NULL DEFAULT 0');
 // When somebody who came through the post first applied for the same job on the client's careers page (see board.js).
 addColumn('board_applications', 'direct_applied_at', 'TEXT');
+// Part of people saved without a job, and here because it points at a post. Somebody who came through a post and
+// was in The Book before goes back to The Book when they leave the job. What the board had noted about their
+// application is taken out of board_applications then, so that none of it is on the entry if it goes on another
+// client's job, and is set aside here. Nothing reads this table but the step that puts somebody on a job (putOnJob
+// in board.js): when they go back on the job the post is for, the row is put back as it was, so the person is again
+// somebody who came through the post and has, or has not, been told who the client is. A row goes with its
+// application and with its post. It is made here, after applications has been rebuilt (see rebuildTable), so a
+// first start on an older database does not have it yet while that table is dropped and made again. A release from
+// before this one neither reads nor writes it.
+db.exec(`
+CREATE TABLE IF NOT EXISTS post_applications_set_aside (
+  application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  post_id INTEGER NOT NULL REFERENCES board_posts(id) ON DELETE CASCADE,
+  public_title TEXT NOT NULL,                        -- as in board_applications, when the person left the job
+  client_known_at TEXT,
+  client_known_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  direct_applied_at TEXT,
+  set_aside_at TEXT NOT NULL,                        -- when they left the job
+  PRIMARY KEY (application_id, post_id)
+);
+CREATE INDEX IF NOT EXISTS idx_post_applications_set_aside_post ON post_applications_set_aside(post_id);`);
 // ---------- end of our website's jobs page ----------
 
 export const q = {

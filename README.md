@@ -186,33 +186,62 @@ candidate in the app, and put on a job later when the right role comes up.
     reads. They are still somebody who came through the post and has not been told who the client is.
   - *One address is sent three e-mails an hour at most* by the public forms, as before. What the agency sent
     somebody while they were in The Book counts towards that, wherever it is kept now.
-  - *Put on a job that has a confidential post from The Book,* somebody is on it like anyone the agency adds:
-    the board has no record of them, the post's count of applicants does not include them, and what The Book sends
-    them is in the client's name. If they then apply through the post themselves, the form answers as it does for
-    anybody, and they are in the job once.
+  - *Put on a job that has a confidential post from The Book,* somebody who never applied through that post is on
+    it like anyone the agency adds: the board has no record of them, the post's count of applicants does not
+    include them, and what The Book sends them is in the client's name. If they then apply through the post
+    themselves, the form answers as it does for anybody, and they are in the job once.
   - *Somebody who came through a post and goes back to The Book* (they were in The Book before and are removed
     from the job, or the job is deleted): what the board noted about their application belonged to that job and
-    goes with it, namely the post, the title they saw and the "Knows who the client is" tick. The agency's own note
+    comes off it, namely the post, the title they saw and the "Knows who the client is" tick. The agency's own note
     on their entry says which post it was and whether they had been told ("They applied through your confidential
     post ... and had not been told who the client is"), with the note they wrote and the consent they gave; the
-    source becomes "Agency sourced". Put on another client's job, that client's hiring team is shown none of it,
-    the tick is not offered, and e-mails are about the new job in the new client's name. **If you put them back on
-    the same job**, they are on it like anyone you add: The Book no longer holds back e-mails that name the client,
-    so read the note first.
+    source becomes "Agency sourced". Put on another client's job, or on another job of the same client, that
+    job's hiring team is shown none of it, the tick is not offered, and e-mails are about the new job in its
+    client's name.
+  - *Put back on the same job,* they are the post's applicant again, as they were when they left it: somebody who
+    has not been told who the client is, or somebody who has, with the tick as it was made. So what The Book sends
+    them by itself uses the title they applied under and says "our client" again, an e-mail that would name the
+    client all the same is held back, a hand-written one that names the client is refused until you have seen the
+    warning, and "Knows who the client is" is there to tick. The post counts them among its applicants again, and
+    their history says so in a line the hiring team is not shown.
+    - *However they are put back:* "Add to a job" on their profile, Add candidate or the extension with the job
+      chosen, and joining their entry to a record the client already has. It makes no difference if they were on
+      another job in between, if their entry was folded into another entry in The Book, if the post has been
+      switched off, or if it has been given another title (they are written to under the title they saw). Somebody
+      who is on another of the client's jobs by then, and is added to the post's job from there as a second
+      application, is the post's applicant on that one.
+    - *Joined to an application that is already in the job:* if they applied for the same job on the client's
+      careers page in the meantime, the entry is folded into that application, and they are still somebody who came
+      through the post and has not been told. If the application was made through the post, the board's record of
+      it stays as it is: it is the newer of the two.
+    - *What is not put back:* the source stays "Agency sourced", because this time the agency put them on the job,
+      and the reports count them under it. The note they wrote for the post, the consent they gave and the résumé
+      they sent stay where going back to The Book put them: in the agency's note and under Earlier résumés. The
+      hiring team sees somebody the agency added, with the résumé on their entry.
+    - *Where it is kept meanwhile.* While they are away from the job, what the board had noted is set aside in a
+      table of its own. Nothing reads it but the step that puts somebody on a job: no screen, list, report, feed
+      or e-mail shows it to anybody, the agency included. It is deleted with the person ("Delete all data on this
+      person" leaves nothing of it) and with the job, since the post goes with its job. When two entries in The
+      Book are merged into one, that one keeps it; where each had something set aside for the same post, "has not
+      been told" is the one that counts.
   - *E-mails.* An automatic e-mail that is held back because it would name the client, and a hand-written one
     that is refused until you have seen the warning, are recorded nowhere: not on the application and not in the
     agency's own table. One you send anyway makes the tick when it is delivered, on the application that came
     through the post; if the person has left that job by the time the mail provider answers, nothing is ticked and
-    the record is the agency's own, as for any e-mail from before a job. An e-mail sent to somebody in The Book
-    while their entry is being joined to an application they made through a post is recorded there for the agency
-    only, and they still count as not having been told.
+    the record is the agency's own, as for any e-mail from before a job. Put back on that job later, they count as
+    not told until you tick it; if they are back on it by the time the mail provider answers, the tick is made.
+    An e-mail sent to somebody in The Book while their entry is being joined to an application they made through
+    a post is recorded there for the agency only, and they still count as not having been told.
   - *"Our website" is only ever an application made on the board.* It cannot be chosen when saving somebody to
-    The Book or when adding somebody to another of a client's jobs, and nobody in The Book carries it.
+    The Book or when adding somebody to another of a client's jobs, and nobody in The Book carries it. Somebody
+    the agency puts back on the job they once applied for through a post does not get it back either, although the
+    board has its record of them again.
 
 The first start after this was added changes the database in place: three columns stop being required, one empty
-column is added to applications, three empty tables are added (earlier résumés, and the history lines and e-mails
-only the agency reads), and nothing else about existing people or applications changes. The tables of history
-lines and e-mails that are there already are not touched. The two tables that are rebuilt for this keep
+column is added to applications, four empty tables are added (earlier résumés, the history lines and e-mails only
+the agency reads, and what the jobs page had noted about somebody who has gone back to The Book), and nothing else
+about existing people or applications changes. The tables of history lines and e-mails that are there already
+are not touched, and neither is anything the jobs page has noted. The two tables that are rebuilt for this keep
 every index and trigger they had, including ones an earlier version made and this one no longer makes.
 `test/pool-upgrade.test.mjs` builds a database with the code from before, fills it, upgrades it and compares every
 row, id, counter, index, trigger and foreign key. "Before" is six releases, each kept word for word under
@@ -234,7 +263,7 @@ three places:
    which shows what the releases in between do to the database: the tables, indexes, triggers and columns they
    add, the rows they add and the values they change.
 2. **This change, by name.** Its own differences are applied to what that leaves: three columns that stop being
-   required, one column, three tables and five indexes. So a database last opened by any of the six gets the
+   required, one column, four tables and six indexes. So a database last opened by any of the six gets the
    releases it missed and this change in one start, and ends up the same whichever way it came. Everything the
    live release knows has to be exactly that afterwards: every table, index and trigger as it was written, every
    column, foreign key and id counter, and every row under its id with every value.
@@ -314,6 +343,12 @@ did, because the first start gives each job that was there its creator.
     nobody), then roll back.
   - Somebody who came through a confidential post and has since gone back to The Book, or on to another job, has
     no record on the board any more, so the old version does not take them for an applicant of that post either.
+    What this version set aside for them is in a table the old version neither reads nor writes: it starts with
+    the table there and leaves every row as it is (a row still goes when its person or its post is deleted), and
+    this version finds them when it is back. Somebody who was put back on the post's job before you rolled back
+    has the board's record again, so the old version keeps the client's name from them as this one does. The old
+    version puts nothing back itself: do not add somebody who came through a post to that post's job again while
+    rolled back, or they are written to in the client's name.
 `test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview (and, where this meets the
 agency's jobs page, a stand-in for the mail provider), on four ports: the fifteenth,
 sixteenth, eleventh and twelfth from `ORACLE_TEST_PORT`, or four in a row from `POOL_TEST_PORT` when that is set
@@ -592,8 +627,8 @@ is linked beside it. The client's own screening questions and privacy notice are
   client’s hiring team" and "Our client ...", in what The Book sends and in the e-mail window alike.
 - Somebody who is in The Book without a job and applies here is answered like anybody else, and what is noted
   about an applicant here (the title they saw, the tick) stays with the job they applied for: it does not follow
-  them back to The Book or on to another client's job. "People in The Book without a job" above says how the two
-  are kept apart.
+  them back to The Book or on to another client's job, and it is theirs again if they are put back on that job.
+  "People in The Book without a job" above says how the two are kept apart.
 
 ### Getting it onto your own website
 
