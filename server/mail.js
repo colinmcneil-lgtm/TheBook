@@ -102,6 +102,20 @@ export async function notify({ to, subject, body }) {
 }
 
 /**
+ * One e-mail to an admin who asked for it in Settings, to see for themselves that delivery works. Connecting
+ * delivery only stores a key and an address: whether the provider accepts them (a sending domain that is not
+ * verified yet, a key that was mistyped) only shows when something is sent. Unlike notify(), this throws what the
+ * provider answered, so the screen can say it.
+ */
+export async function sendTest(to, agencyName) {
+  await deliver({
+    to,
+    subject: `A test e-mail from ${agencyName}`,
+    body: `This is a test from your hiring workspace${appUrl() ? ` (${appUrl()})` : ''}.\n\nIt arrived, so e-mail delivery is working: e-mails to candidates and notifications to your team are being sent.`,
+  });
+}
+
+/**
  * Send one of the built-in templates (application_received, rejection, interview_invite). `allow`, when given, is
  * shown the finished subject and message and can hold the e-mail back: nothing is sent or recorded, and the answer
  * is { held: true }. It is how an e-mail that would name the client is kept from somebody who applied through a

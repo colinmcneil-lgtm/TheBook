@@ -173,6 +173,27 @@ test('a request for somebody on no job, and an e-mail that cannot be sent, are b
   assert.match(mail.to('marcus@agency.example')[0].text, /Job: Not on a job yet/);
 });
 
+test('an admin can send themselves a test e-mail, and is told what the mail provider said when it refuses', async () => {
+  const before = mail.sent.length;
+  assert.deepEqual(ok(await alex.post('/settings/test-email', {})), { ok: true, to: 'alex@agency.example' });
+  const [sent] = mail.sent.slice(before);
+  assert.deepEqual(sent.to, ['alex@agency.example']);
+  assert.match(sent.subject, /^A test e-mail from /);
+  assert.equal(mail.sent.length, before + 1, 'one e-mail, to the admin and nobody else');
+  // The provider refuses: the admin is told, in the provider's words.
+  mail.failing = true;
+  try {
+    const refused = await alex.post('/settings/test-email', {});
+    assert.equal(refused.status, 502);
+    assert.equal(refused.body.error, 'The test email was not sent. Resend answered: stand-in is down');
+  } finally { mail.failing = false; }
+  // It is the admins': not a recruiter's, not a client's user's, not a visitor's.
+  assert.equal((await priya.post('/settings/test-email', {})).status, 403);
+  assert.equal((await maya.post('/settings/test-email', {})).status, 403);
+  assert.equal((await session(server.base).post('/settings/test-email', {})).status, 401);
+  assert.equal(mail.sent.length, before + 1);
+});
+
 // ---------- the reviewer's Inbox, and the count ----------
 
 test('the Inbox lists what is waiting on you, oldest first, with the candidate, the job and client, who asked, when and the note', async () => {

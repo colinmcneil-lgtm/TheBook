@@ -188,6 +188,8 @@ function Agency() {
   const [photos, setPhotos] = useState(clientPhotos);
   const [save, busy] = useAction(async () => { await api.put('/settings', { agencyName: name, clientPhotos: photos }); await reloadMe(); toast('Saved'); });
   const metaview = useMetaview();
+  // Connected only means a key and an address are set. This sends one e-mail to the admin who asks, to show it works.
+  const [sendTest, testing] = useAction(async () => { const { to } = await api.post('/settings/test-email'); toast(`Test email sent to ${to}. If it is not there in a minute, look in spam.`); });
   return (
     <div className="max-w-lg space-y-6">
       <Card>
@@ -211,6 +213,8 @@ function Agency() {
             <>
               <p>Emails to candidates are sent through your mail server and recorded on each candidate.</p>
               <p>Admins are emailed when someone requests an account, and people are emailed a link to set their password when their request is approved.</p>
+              <p>Your team is also emailed when somebody asks them to review a candidate.</p>
+              {isAdmin && <p><Button size="sm" busy={testing} onClick={sendTest}>Send me a test email</Button></p>}
             </>
           ) : (
             <>

@@ -1302,6 +1302,9 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   when someone requests an account, and people are emailed their link to set a password when their request is
   approved. Set `APP_URL` to the workspace's address (Railway is detected automatically): without it the app
   does not know its own address, so it emails no link and shows it to the approver instead.
+  Once it is connected, an admin can press **Send me a test email** on the Email delivery card in Settings. It
+  sends one e-mail to that admin and, if the mail provider refuses it (a sending domain that is not verified yet, a
+  mistyped key), says what the provider answered.
 
 ### If your workspace had the calendar or the phone line
 
