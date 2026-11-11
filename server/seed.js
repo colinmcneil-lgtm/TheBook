@@ -67,6 +67,10 @@ tx(() => {
   setSetting('agency_name', 'Harbour Talent Partners');
   const alex = user('alex@harbourtalent.example', 'Alex Morgan', 'admin', null, 'Founder & Talent Partner');
   const priya = user('priya@harbourtalent.example', 'Priya Nair', 'recruiter', null, 'Senior Recruiter');
+  // A third person on the team, so the dashboard's job board has more than two columns. Added without drawing a
+  // random number, so that everything made after this point is the same demo as before.
+  const marcus = q.insert('INSERT INTO users (email, password_hash, name, role, client_id, title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'marcus@harbourtalent.example', hash(PASSWORD), 'Marcus Bell', 'recruiter', null, 'Recruiter', new Date(Date.now() - 90 * DAY).toISOString());
 
   const client = (name, slug, color, industry, location, tagline, about, model, retainer, fee, startedDays) =>
     q.insert(
@@ -162,6 +166,10 @@ tx(() => {
         'Filled. Closed after the hire started.'), size: 8, hires: 1, closedSpan: 50, panel: [dev, alex] },
   ];
   q.run('UPDATE jobs SET openings = 3 WHERE id = ?', jobs[0].id);
+  // Every job has an account executive: the person on the team who created it. The demo's jobs are spread over the
+  // three of them, in the order of the list above, so the job board has a column for each.
+  const executives = [priya, alex, marcus, priya, marcus, priya, alex, alex, alex];
+  jobs.forEach((j, i) => q.run('UPDATE jobs SET created_by = ?, account_executive_id = ? WHERE id = ?', executives[i], executives[i], j.id));
 
   // Recruiter briefs: what the team sourcing each role needs to know.
   const brief = (jobId, data) => q.run('UPDATE jobs SET brief = ? WHERE id = ?', JSON.stringify(data), jobId);
@@ -660,8 +668,11 @@ What is on offer
   cameThroughThePost(planner, plannerPost, 'Ffion Castellanos', 1.1, 'I plan stock for a cycling brand at the moment and would like a bigger range to look after.');
 });
 
-console.log(`Demo data loaded.
+// Any job made further down this file (the one behind the second confidential post) belongs to whoever made it,
+  // as a job made in the app does.
+  q.run('UPDATE jobs SET account_executive_id = created_by WHERE account_executive_id IS NULL AND created_by IS NOT NULL');
+  console.log(`Demo data loaded.
   Agency owner:  alex@harbourtalent.example / ${PASSWORD}
-  Recruiter:     priya@harbourtalent.example / ${PASSWORD}
+  Recruiters:    priya@harbourtalent.example and marcus@harbourtalent.example / ${PASSWORD}
   Client user:   maya@lumenhealth.example / ${PASSWORD}  (sees Lumen Health only)
-  Job board:     /board  (two confidential posts)`);
+  Website jobs:  /board  (two confidential posts)`);

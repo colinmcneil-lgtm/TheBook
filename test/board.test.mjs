@@ -1300,12 +1300,17 @@ test('starting on a database made by the live code adds the board’s tables and
     // again by another change, so that somebody can be saved to The Book without a job: a candidate no longer has to
     // have a client, nor an application a job and a stage, and an application has one new column. Nothing else about
     // the two is different (test/pool-upgrade.test.mjs is about that upgrade).
+    // (The jobs table gains one column at its end for the job's account executive, a later feature with an upgrade test of its own.)
     const rebuilt = (table) => before.objects[table].replace(`CREATE TABLE ${table} (`, `CREATE TABLE "${table}" (`);
     const expected = { ...before.objects,
       candidates: rebuilt('candidates').replace('client_id INTEGER NOT NULL REFERENCES', 'client_id INTEGER REFERENCES'),
       applications: rebuilt('applications').replace('job_id INTEGER NOT NULL REFERENCES', 'job_id INTEGER REFERENCES').replace('stage_id INTEGER NOT NULL REFERENCES', 'stage_id INTEGER REFERENCES')
         .replace('owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,', 'owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL, general_until TEXT,') };
-    for (const [name, sql] of Object.entries(expected)) assert.equal(after.objects[name], sql, `${name} was changed or dropped`);
+    for (const [name, sql] of Object.entries(expected)) {
+      if (name !== 'jobs') { assert.equal(after.objects[name], sql, `${name} was changed or dropped`); continue; }
+      const was = /\(([\s\S]*)\)/.exec(sql)[1], now = /\(([\s\S]*)\)/.exec(after.objects.jobs)[1];
+      assert.ok(now.startsWith(was) && /^,\s*account_executive_id INTEGER REFERENCES users\(id\) ON DELETE SET NULL$/.test(now.slice(was.length)), 'jobs was changed by more than its one new column');
+    }
     // What is new: the board's five tables and their indexes. Whatever else was made belongs to another change (the
     // three tables and five indexes of people saved without a job, and whatever comes later), not to the board:
     // each is new, and a table among them is empty. (test/pool-upgrade.test.mjs holds every such addition to its rules,
@@ -1324,7 +1329,9 @@ test('starting on a database made by the live code adds the board’s tables and
     // the one column applications gained is empty in the row that was there.
     const theirs = (s) => /^(reports_|todos_)/.test(s.key);
     const plain = (value) => JSON.parse(JSON.stringify(value));
-    assert.deepEqual(plain({ ...settled, settings: settled.settings.filter((s) => !theirs(s)) }),
+    // Each job's account executive is filled in on start from who created it: that column is the later feature's, not the board's.
+    const jobsAsTheyWere = settled.jobs.map(({ account_executive_id, ...job }) => job);
+    assert.deepEqual(plain({ ...settled, jobs: jobsAsTheyWere, settings: settled.settings.filter((s) => !theirs(s)) }),
       plain({ ...before.rows, settings: before.rows.settings.filter((s) => !theirs(s)), applications: before.rows.applications.map((row) => ({ ...row, general_until: null })) }));
     assert.ok(!after.rows.settings.some((s) => s.key.startsWith('board_')));   // the board's settings are only written when an admin saves them
     db.close();

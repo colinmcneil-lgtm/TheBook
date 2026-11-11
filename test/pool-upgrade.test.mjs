@@ -11,7 +11,7 @@
 //
 // "Before" is every release a database may have been last opened by (BEFORES below), each kept word for word under
 // test/fixtures/, and every test is run on a database last opened by each. The newest of them is the release that
-// is live. The first release's database code is kept as well (test/fixtures/first-release/), for the tests at the end.
+// is live (account executives and the dashboard's job board). The first release's database code is kept as well (test/fixtures/first-release/), for the tests at the end.
 //
 // What a database must end up as comes from three places, and none of them is a list of what other features add:
 //
@@ -63,7 +63,7 @@ const NOW = path.join(ROOT, 'server', 'db.js');
 // the newer releases have no way to hold some of the oldest data any more (phone calls, the calendar). `use` is what
 // using the release adds to that database, in the tables it brought, and `leaves` the highest id each of those
 // tables has then given out. The last entry is the release that is live: what a database is compared against.
-// (fill, fillReports, fillTodos and fillBoard are further down.)
+// (fill, fillReports, fillTodos, fillBoard and fillAccounts are further down.)
 const BEFORES = [
   { name: 'the release before the review fixes (5f16829)', folder: 'before-pool', commit: '5f168294b6e98be5423fd4fa15c720ac577423a9', use: fill,
     leaves: { applications: 10, calls: 6, candidates: 9, interviews: 5, invites: 2, notes: 6, phone_calls: 4, users: 6 } },
@@ -77,10 +77,14 @@ const BEFORES = [
   { name: 'the release with To do and interview editing (d1b664a)', folder: 'before-pool-d1b664a', commit: 'd1b664a20c4d1c87e3f135c834027ab35f99633d', after: 'before-pool-6f279a9', use: fillTodos,
     leaves: { todos: 12 } },
   // The agency's own jobs page: confidential posts, and what is noted about the people who applied through one.
-  { name: 'the live release, with jobs on the agency\'s website (09368bb)', folder: 'before-pool-09368bb', commit: '09368bbf8785aa62cdc8edabc3fc61f3dd631bbd', after: 'before-pool-d1b664a', use: fillBoard,
+  { name: 'the release with jobs on the agency\'s website (09368bb)', folder: 'before-pool-09368bb', commit: '09368bbf8785aa62cdc8edabc3fc61f3dd631bbd', after: 'before-pool-d1b664a', use: fillBoard,
     leaves: { board_log: 6, board_names: 3, board_overrules: 2, board_posts: 4 } },
+  // Every job has an account executive: one column on jobs, filled from who created each job the first time this
+  // release opens a database. It brought no table of its own.
+  { name: 'the live release, with account executives and the job board (f7c16e5)', folder: 'before-pool-f7c16e5', commit: 'f7c16e590b94311c18d490b9393756c3089be5b3', after: 'before-pool-09368bb', use: fillAccounts,
+    leaves: {} },
 ].map((b) => ({ ...b, code: path.join(HERE, 'fixtures', b.folder, 'db.js') }));
-const [OLDER, NEWER, REPORTS, TODOS, BOARD] = BEFORES;
+const [OLDER, NEWER, REPORTS, TODOS, BOARD, ACCOUNTS] = BEFORES;
 const LIVE = BEFORES.at(-1);
 /** The releases a database last opened by this one has been through, oldest first, itself last. */
 const through = (release) => (release.after ? [...through(BEFORES.find((b) => b.folder === release.after)), release] : [release]);
@@ -634,7 +638,7 @@ function fillReports(dataDir) {
 }
 
 /**
- * What using the live release adds to that: the two settings To do keeps (when it first ran on the workspace, and
+ * What using the release with To do adds to that: the two settings To do keeps (when it first ran on the workspace, and
  * when the lists were last brought up to date), and people's to-do lists. A job on two people's lists, one of them
  * ticked; somebody to prep whom The Book added for an interview that is coming up, with a note; the debrief of an
  * interview that was held, ticked; somebody added by hand with no interview; an item The Book set aside when its
@@ -670,7 +674,7 @@ function fillTodos(dataDir) {
 }
 
 /**
- * What using the live release adds to that: the agency's jobs page. The board's own settings; its confirmation
+ * What using the release with the agency's jobs page adds to that: the page itself. The board's own settings; its confirmation
  * e-mail, in the agency's edited wording; a post that is public, one the check took down, one whose job is paused,
  * and one removed again from the end of the table; a word an admin overruled, and one withdrawn again; each post's
  * history, with a line removed from the middle; other names for two clients; and what is noted about the people who
@@ -709,6 +713,25 @@ function fillBoard(dataDir) {
   run('DELETE FROM board_log WHERE id = 4');
   run('DELETE FROM board_names WHERE id = 3');
   run('DELETE FROM board_posts WHERE id = 4');   // what was noted about Li's application goes with it
+  db.exec('COMMIT');
+  db.close();
+}
+
+/**
+ * What using the live release adds to that: account executives. When it first opened the database it gave every
+ * job its creator, Dana. Since then one job has been handed on to the admin, one to a recruiter who has since left
+ * (they keep it until it is handed on again), and one has nobody: its account executive came back as a client's
+ * user, which leaves the job without one until an admin names somebody. The first job is still its creator's. The
+ * column points at users and is on jobs, which this change does not rebuild; jobs is what applications, one of the
+ * two tables it does rebuild, hang off.
+ */
+function fillAccounts(dataDir) {
+  const db = open(dataDir);
+  const run = (sql, ...p) => db.prepare(sql).run(...p);
+  db.exec('BEGIN');
+  run('UPDATE jobs SET account_executive_id = 1 WHERE id = 2');     // handed on to Alex
+  run('UPDATE jobs SET account_executive_id = NULL WHERE id = 3');  // nobody
+  run('UPDATE jobs SET account_executive_id = 3 WHERE id = 4');     // Sam's, who has left
   db.exec('COMMIT');
   db.close();
 }
@@ -753,7 +776,7 @@ forEachBefore('upgrading changes nothing but the three columns, the new column, 
   const dataDir = databaseFromBefore(release, 'pool-upgrade');
   const before = snapshot(dataDir);
   // What the database holds is what the releases it has been through leave (see BEFORES and the fill functions).
-  const reviewed = release !== OLDER, reports = used(release, REPORTS), todos = used(release, TODOS), board = used(release, BOARD);
+  const reviewed = release !== OLDER, reports = used(release, REPORTS), todos = used(release, TODOS), board = used(release, BOARD), accounts = used(release, ACCOUNTS);
   // Whether the release that made it had already given history lines their newer types is as the list above says.
   assert.equal(before.rows.settings.some((row) => row.key === 'activity_types_v2'), reviewed);
   assert.equal(before.master.some((m) => m.name === 'idx_activities_recent'), reviewed);
@@ -792,6 +815,11 @@ forEachBefore('upgrading changes nothing but the three columns, the new column, 
     assert.deepEqual(before.rows.applications.filter((a) => a.source === 'our_website').map((a) => a.id), [6, 7]);
     assert.equal(before.rows.email_templates.find((row) => row.key === 'board_application_received').subject, 'We have your application ({{agency_name}})');
   }
+  // Account executives, likewise: the column is there only where the release that left the database had it, with a
+  // job that is still its creator's, one handed on, one with nobody and one that belongs to somebody who has left.
+  assert.equal(before.columns.jobs.some((c) => c.name === 'account_executive_id'), accounts);
+  const executives = (shot) => shot.rows.jobs.map((j) => [j.id, j.created_by, j.account_executive_id]);
+  if (accounts) assert.deepEqual(executives(before), [[1, 2, 2], [2, 2, 1], [3, 2, null], [4, 2, 3]]);
   for (const [table, column] of [['candidates', 'client_id'], ['applications', 'job_id'], ['applications', 'stage_id']]) {
     assert.equal(before.columns[table].find((c) => c.name === column).notnull, 1, `${table}.${column} is required before the upgrade`);
   }
@@ -805,14 +833,19 @@ forEachBefore('upgrading changes nothing but the three columns, the new column, 
   const others = assertUpgraded(upgraded, expectedAfter(byLive), 'after the upgrade');
   sayOthers(t, others, 'after the upgrade');
   // By name: what this start made and added is this change's own and, for a database from before the live release,
-  // what the releases in between make (the reports and Metaview, To do, the agency's jobs page). Nothing else.
+  // what the releases in between make (the reports and Metaview, To do, the agency's jobs page, account executives).
+  // Nothing else.
   assertAddedOnly(before, byLive, upgraded, others, 'after the upgrade');
   if (release === LIVE) {
     assert.deepEqual(upgraded.master.filter((m) => !before.master.some((x) => x.name === m.name)).map((m) => `${m.type} ${m.name}`).filter((name) => !others.made.includes(name)), THIS_RELEASE.made,
       'from the live release, the first start makes this change\'s own tables and indexes and, but for a newer feature\'s, nothing else');
     assert.deepEqual(upgraded.rows.todos, before.rows.todos, 'every item on a to-do list is as it was');
     for (const table of ['board_posts', 'board_applications', 'board_log', 'board_overrules', 'board_names']) assert.deepEqual(upgraded.rows[table], before.rows[table], `every row of ${table} is as it was`);
+    assert.deepEqual(upgraded.rows.jobs, before.rows.jobs, 'every job is as it was: a job handed on, and a job with nobody, are not given their creator again');
   }
+  // A database from before account executives is given them in this start, as the live release gives them: each job
+  // its creator, who is on the agency's team here. Nothing is filled in a second time on a database that had them.
+  assert.deepEqual(executives(upgraded), accounts ? executives(before) : [[1, 2, 2], [2, 2, 2], [3, 2, 2], [4, 2, 2]]);
   // Everything an earlier release made is still there, written as it was, but for the two tables that were rebuilt:
   // every other table, and every index and trigger, those of the rebuilt tables included.
   for (const m of byLive.master) {
@@ -823,7 +856,8 @@ forEachBefore('upgrading changes nothing but the three columns, the new column, 
   // Said once more without the helper: no row of any table from before is missing or has another id, and the only
   // values that differ are the ones the releases in between change themselves when they first open the database
   // (each is what the live release makes it). One such change is known: the types of the history lines listed above,
-  // on a database that still had the old ones.
+  // on a database that still had the old ones. (Each job's account executive, filled in on a database from before
+  // the live release, is a new column and not a changed value; it is looked at above.)
   const changed = [];
   for (const [table, rows] of Object.entries(before.rows)) {
     for (const row of rows) {
@@ -1079,6 +1113,14 @@ forEachBefore('after the upgrade the rules still hold: foreign keys, one record 
     assert.deepEqual(db.prepare('SELECT id FROM board_overrules ORDER BY id').all().map((o) => o.id), [1]);
   }
   assert.throws(() => run('DELETE FROM stages WHERE id = 4'), /FOREIGN KEY/, 'a stage with somebody in it cannot be removed');
+  // A job's account executive is somebody on file, whether the release that left the database had the column or
+  // this start added it; a job whose account executive is removed outright is left with nobody, and is still there.
+  assert.throws(() => run('UPDATE jobs SET account_executive_id = 999 WHERE id = 1'), /FOREIGN KEY/);
+  const joiner = Number(run(`INSERT INTO users (email, password_hash, name, role, created_at) VALUES ('joiner@agency.example', 'salt:hash', 'New Joiner', 'recruiter', 'x')`).lastInsertRowid);
+  assert.equal(joiner, 7, 'a user\'s number carries on from the highest ever given out');
+  run('UPDATE jobs SET account_executive_id = ? WHERE id = 1', joiner);
+  run('DELETE FROM users WHERE id = ?', joiner);
+  assert.deepEqual({ ...get('SELECT id, created_by, account_executive_id FROM jobs WHERE id = 1') }, { id: 1, created_by: 2, account_executive_id: null });
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   db.close();
 });
@@ -1352,7 +1394,11 @@ forEachBefore('a disk that fills up during the upgrade is reported as a full dis
   assert.doesNotMatch(run.stderr, /cannot rollback/);
   const left = snapshot(dataDir);
   assert.deepEqual(left.problems, { integrity: [{ integrity_check: 'ok' }], foreignKeys: [] });
-  for (const table of Object.keys(before.rows)) assert.deepEqual(left.rows[table], before.rows[table], `${table} after the start that ran out of disk`);
+  // One thing a release up to the live one does comes before the tables are rebuilt, and is saved by then: on a
+  // database from before account executives, each job has been given its creator, as the live release gives it.
+  // No row of any other table differs, and no job differs in anything else.
+  for (const table of Object.keys(before.rows)) assert.deepEqual(left.rows[table], table === 'jobs' ? byLive.rows.jobs : before.rows[table], `${table} after the start that ran out of disk`);
+  assert.deepEqual(left.rows.jobs.map(({ account_executive_id, ...job }) => job), before.rows.jobs.map(({ account_executive_id, ...job }) => job), 'every job is otherwise as it was');
   assert.equal(left.master.some((m) => /__new$/.test(m.name)), false, 'no half-built table is left behind');
   start(NOW, dataDir);
   assertUpgraded(snapshot(dataDir), expectedAfter(byLive), 'after the next start, with room on the disk');

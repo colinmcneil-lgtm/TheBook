@@ -105,6 +105,18 @@ export function Checkbox({ label, hint, ...props }) {
     </label>
   );
 }
+/** A small on/off switch with its label beside it, for a setting that takes effect as soon as it is flipped. */
+export function Switch({ checked, onChange, label, className }) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
+      className={cx('inline-flex items-center gap-2 rounded text-[13px] font-medium text-stone-600 hover:text-stone-900', className)}>
+      <span className={cx('relative h-[18px] w-8 shrink-0 rounded-full transition-colors', checked ? 'bg-brand-700' : 'bg-stone-300')}>
+        <span className={cx('absolute top-0.5 left-0.5 size-3.5 rounded-full bg-white shadow-sm transition-transform', checked && 'translate-x-3.5')} />
+      </span>
+      {label}
+    </button>
+  );
+}
 
 const BADGE_TONES = {
   gray: 'bg-stone-100 text-stone-700 ring-stone-200',

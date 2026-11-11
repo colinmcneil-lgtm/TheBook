@@ -93,15 +93,15 @@ test('the app starts on a database that still has the old tables, and nothing in
     assert.deepEqual(counts(all), { phone_calls: 2, phone_webhooks: 1, phone_recordings_owed: 1, phone_calls_erased: 1, calendar_links: 1, calendar_events: 2 });
     // Every table, index and trigger that was there is still there, exactly as it was written.
     const now = objects(all);
-    // (stages and offers each gain one column for the reports, added in place like the calls columns; they are
-    // checked below. So are the two tables that were rebuilt so that somebody can be saved without a job. History
-    // lines and e-mails are among the tables that are exactly as they were: what the agency keeps on people who were
-    // in The Book before a job goes in two new tables of its own.)
-    const GAINED = { calls: null, stages: 'with_client', offers: 'accepted_at', candidates: null, applications: null };
+    // (stages and offers each gain one column for the reports, and jobs one for its account executive, added in place
+    // like the calls columns; they are checked below. So are the two tables that were rebuilt so that somebody can be
+    // saved without a job. History lines and e-mails are among the tables that are exactly as they were: what the
+    // agency keeps on people who were in The Book before a job goes in two new tables of its own.)
+    const GAINED = { calls: null, stages: 'with_client', offers: 'accepted_at', jobs: 'account_executive_id', candidates: null, applications: null };
     for (const name of ['activities', 'emails']) assert.ok(schemaBefore[name], `${name} was there before`);
     for (const name of ['agency_activities', 'agency_emails']) assert.ok(now[name] && !schemaBefore[name], `${name} is new`);
     for (const [name, sql] of Object.entries(schemaBefore)) if (!(name in GAINED)) assert.equal(now[name], sql, `${name} was changed or dropped`);
-    for (const table of ['stages', 'offers']) {
+    for (const table of ['stages', 'offers', 'jobs']) {
       const before = /\(([\s\S]*)\)/.exec(schemaBefore[table])[1], after = /\(([\s\S]*)\)/.exec(now[table])[1];
       assert.ok(after.startsWith(before) && after.slice(before.length).includes(GAINED[table]), `${table} was changed by more than its one new column`);
     }
