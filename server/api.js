@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { q, now, tx, scrub, keepForAgency, UPLOAD_DIR, getSetting, setSetting, createStages, agencyStageName, DEFAULT_CRITERIA, DEFAULT_INTERVIEW_STAGES } from './db.js';
-import { sendMail, sendTemplate, sendTest, foldedInto, mailConfigured, notify, appUrl } from './mail.js';
+import { sendMail, sendTemplate, sendTest, foldedInto, mailConfigured, candidateMailOn, notify, appUrl } from './mail.js';
 import { registerAutofill } from './autofill.js';
 import { registerOracle, callFilesOf, removeCallFiles, detachCallsFrom, forgetDraftsFor, moveCalls, moveCallsToEntry, moveEntryCallsToRecord, forgetSavedNote } from './oracle.js';
 import { registerMetaview, conversationsWith, forgetConversations } from './metaview.js';
@@ -585,7 +585,7 @@ api.get('/me', (req, res) => {
   const clients = isAgency(req.user)
     ? q.all(`SELECT id, name, slug, brand_color, currency, status FROM clients ORDER BY name`)
     : q.all(`SELECT id, name, slug, brand_color, currency, status FROM clients WHERE id = ?`, req.user.client_id);
-  res.json({ user: publicUser(req.user), agencyName: getSetting('agency_name', 'Agency'), clients, mailConfigured: mailConfigured(), clientPhotos: getSetting('client_photos', '1') === '1' });
+  res.json({ user: publicUser(req.user), agencyName: getSetting('agency_name', 'Agency'), clients, mailConfigured: mailConfigured(), candidateMail: candidateMailOn(), clientPhotos: getSetting('client_photos', '1') === '1' });
 });
 
 api.post('/me/password', (req, res) => {
@@ -627,6 +627,8 @@ api.put('/settings', adminOnly, (req, res) => {
   if (!clean(req.body?.agencyName)) bad('Agency name is required.');
   setSetting('agency_name', clean(req.body.agencyName, 120));
   if (typeof req.body.clientPhotos === 'boolean') setSetting('client_photos', req.body.clientPhotos ? '1' : '0');
+  // Whether the workspace writes to candidates at all (see candidateMailOn in mail.js). Off until an admin says so.
+  if (typeof req.body.candidateMail === 'boolean') setSetting('candidate_mail', req.body.candidateMail ? '1' : '0');
   res.json({ ok: true });
 });
 

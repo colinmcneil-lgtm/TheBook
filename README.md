@@ -1295,6 +1295,11 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   either lump every visitor together or be trivially bypassed.
 - **Connect email** in one of two ways (see `.env.example`). Until you do, emails are saved on the candidate's
   record and clearly marked as not sent.
+  **Connecting it does not start e-mails to candidates.** Application confirmations, interview invitations,
+  rejections and messages written from a profile go on being saved on the candidate's record, marked "Saved, not
+  sent", until an admin switches on **Send emails to candidates** on the Email delivery card in Settings; the screens
+  that would send one say so. E-mails to your own team (account requests, password links, review requests, a
+  confidential post that came down) are sent as soon as delivery is connected, whatever the switch says.
   - `RESEND_API_KEY` and `MAIL_FROM`: sends through [Resend](https://resend.com)'s web API. Use this on Railway,
     whose Hobby plan blocks SMTP. Create a Resend account, verify your sending domain there, create an API key,
     and set `MAIL_FROM` to an address on that domain, for example `Your Agency <hiring@youragency.com>`.

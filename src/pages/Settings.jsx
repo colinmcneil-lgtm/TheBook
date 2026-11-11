@@ -3,7 +3,7 @@ import { useLocation, useSearchParams } from 'react-router-dom';
 import { Check, Copy, Download, LoaderCircle, Plus, RefreshCw, UserPlus, Trash2 } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, ago, fmtDate } from '../lib.js';
-import { Checkbox, Avatar, Badge, Button, Card, CardHeader, Field, Input, Modal, Page, Tabs, Textarea, useAction, useToast } from '../ui.jsx';
+import { Checkbox, Avatar, Badge, Button, Card, CardHeader, Field, Input, Modal, Page, Switch, Tabs, Textarea, useAction, useToast } from '../ui.jsx';
 import { ApproveForm, InviteForm } from '../components/Forms.jsx';
 import { Notice } from '../oracle/bits.jsx';
 import { knownLine, readingLine } from '../oracle/calls.js';
@@ -182,12 +182,18 @@ function MetaviewCard({ metaview }) {
 }
 
 function Agency() {
-  const { agencyName, isAdmin, reloadMe, mailConfigured, clientPhotos } = useApp();
+  const { agencyName, isAdmin, reloadMe, mailConfigured, candidateMail, clientPhotos } = useApp();
   const toast = useToast();
   const [name, setName] = useState(agencyName);
   const [photos, setPhotos] = useState(clientPhotos);
   const [save, busy] = useAction(async () => { await api.put('/settings', { agencyName: name, clientPhotos: photos }); await reloadMe(); toast('Saved'); });
   const metaview = useMetaview();
+  // Whether the workspace writes to candidates. Saved the moment it is flipped: it is not part of the form above.
+  const [setCandidateMail, switching] = useAction(async (on) => {
+    await api.put('/settings', { agencyName, candidateMail: on });
+    await reloadMe();
+    toast(on ? 'Emails to candidates are now sent' : 'Emails to candidates are switched off');
+  });
   // Connected only means a key and an address are set. This sends one e-mail to the admin who asks, to show it works.
   const [sendTest, testing] = useAction(async () => { const { to } = await api.post('/settings/test-email'); toast(`Test email sent to ${to}. If it is not there in a minute, look in spam.`); });
   return (
@@ -211,9 +217,17 @@ function Agency() {
         <div className="space-y-2 p-4 text-sm leading-relaxed text-stone-600">
           {mailConfigured ? (
             <>
-              <p>Emails to candidates are sent through your mail server and recorded on each candidate.</p>
-              <p>Admins are emailed when someone requests an account, and people are emailed a link to set their password when their request is approved.</p>
-              <p>Your team is also emailed when somebody asks them to review a candidate.</p>
+              <p><b className="font-medium text-stone-900">Your team:</b> admins are emailed when someone requests an account, people are emailed a link to set their password when their request is approved, and anybody asked to review a candidate is emailed. These are always sent.</p>
+              <div className="rounded-lg border border-line p-3">
+                {isAdmin
+                  ? <Switch checked={Boolean(candidateMail)} onChange={(on) => !switching && setCandidateMail(on)} label="Send emails to candidates" />
+                  : <p className="font-medium text-stone-900">Emails to candidates are {candidateMail ? 'switched on' : 'switched off'}</p>}
+                <p className="mt-1.5 text-[13px]">
+                  {candidateMail
+                    ? 'Application confirmations, interview invitations, rejections and messages written from a profile are sent to the candidate and recorded on their profile.'
+                    : 'Application confirmations, interview invitations, rejections and messages written from a profile are saved on the candidate’s profile, marked “Saved, not sent”, and nothing goes to the candidate. Read the wording under Email templates before switching this on.'}
+                </p>
+              </div>
               {isAdmin && <p><Button size="sm" busy={testing} onClick={sendTest}>Send me a test email</Button></p>}
             </>
           ) : (

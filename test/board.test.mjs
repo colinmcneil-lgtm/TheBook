@@ -148,6 +148,7 @@ before(async () => {
   } });
   alex = session(server.base);
   ok(await alex.post('/setup', { agencyName: 'Harbour Talent', name: 'Alex Morgan', email: 'alex@harbourtalent.example', password: 'demo1234' }));
+  ok(await alex.putJson('/settings', { agencyName: 'Harbour Talent', candidateMail: true })); // e-mails to candidates are off until an admin switches them on
   // The client and the job are given numbers that could not be mistaken for anything else, so that the public
   // answers can be searched for them: a placeholder takes the number before, and is then removed.
   database((db) => db.exec(`INSERT INTO clients (id, name, slug, created_at) VALUES (73900, 'Placeholder', 'placeholder', '2026-11-01T00:00:00.000Z');

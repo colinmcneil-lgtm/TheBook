@@ -13,6 +13,15 @@ const RESEND_URL = process.env.RESEND_API_URL || 'https://api.resend.com/emails'
 export const mailConfigured = () => Boolean((resendKey && process.env.MAIL_FROM) || transport);
 export const mailProvider = () => (resendKey && process.env.MAIL_FROM ? 'Resend' : transport ? 'SMTP' : null);
 
+/**
+ * E-mails to candidates (application confirmations, interview invitations, rejections, messages written from a
+ * profile) are sent only once an admin has switched them on in Settings. Connecting delivery is not that decision:
+ * an agency may want its own team's notifications before it wants the workspace writing to candidates. Until then
+ * such an e-mail is saved on the candidate's record marked as not sent, exactly as when delivery is not connected.
+ * E-mails to the team (notify below) do not depend on this.
+ */
+export const candidateMailOn = () => mailConfigured() && getSetting('candidate_mail', '0') === '1';
+
 export const renderTemplate = (text, vars) => text.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, key) => (vars[key] ?? m));
 
 /** Hand one plain-text message to whichever provider is connected. Throws if delivery fails. */
@@ -58,8 +67,8 @@ export async function sendMail({ applicationId, to, subject, body, userId = null
   body = String(body);
   const began = now();
   const wasInBook = q.get('SELECT job_id FROM applications WHERE id = ?', applicationId)?.job_id == null;
-  let delivery = 'not_configured';
-  if (mailConfigured()) {
+  let delivery = 'not_configured'; // saved, not sent: delivery is not connected, or e-mails to candidates are switched off
+  if (candidateMailOn()) {
     try {
       await deliver({ to, subject, body });
       delivery = 'sent';
