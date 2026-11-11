@@ -121,6 +121,44 @@ test('a card on the board says how long the job has been open, its openings and 
   assert.deepEqual([empty.openings, empty.hires, empty.in_pipeline, empty.interviewing, empty.offers, empty.opened_at], [1, 0, 0, 0, 0, '2026-01-05T09:00:00.000Z']);
 });
 
+test('a card’s pipeline: every stage in order with how many are in it and who, the hired included and those who left not', async () => {
+  const { status, body } = await priya.get(`/jobs/${job.sales}/pipeline`);
+  assert.equal(status, 200);
+  assert.deepEqual(Object.keys(body), ['stages']);
+  assert.deepEqual(body.stages.map((s) => [s.name, s.kind, s.count, s.people.map((a) => a.name)]), [
+    ['Applied', 'applied', 1, ['Anna Applied']],
+    ['Recruiter screen', 'interview', 1, ['Ivo Interview']],
+    ['Final interview', 'interview', 1, ['Fay Final']],   // Rex, rejected at this stage, is not in it
+    ['Offer', 'offer', 1, ['Otto Offer']],                // nor Wim, who withdrew
+    ['Hired', 'hired', 1, ['Hana Hired']],
+  ]);
+  // Each person is sent with what the card draws and what opens their profile, and no more.
+  const anna = body.stages[0].people[0];
+  assert.deepEqual(Object.keys(anna).sort(), ['candidate_id', 'current_company', 'current_title', 'id', 'name', 'photo', 'status']);
+  assert.equal((await priya.get(`/applications/${anna.id}`)).status, 200);
+  // Those still in play are the number on the card.
+  const card = (await board(priya))[0].jobs.find((j) => j.id === job.sales);
+  assert.equal(body.stages.flatMap((s) => s.people).filter((a) => a.status === 'active').length, card.in_pipeline);
+  // A job with nobody in it has its stages, each at nought.
+  const empty = (await priya.get(`/jobs/${job.accounts}/pipeline`)).body.stages;
+  assert.ok(empty.length >= 3);
+  assert.deepEqual(empty.map((s) => [s.count, s.people]), empty.map(() => [0, []]));
+  // A long stage names its first eight, newest first, and says how many there are in all.
+  const stageId = body.stages[0].id;
+  for (let i = 1; i <= 9; i++) assert.equal((await alex.upload('/applications', { job_id: job.accounts, name: `Person ${i}`, email: `person.${i}@mail.example` })).status, 200);
+  const long = (await priya.get(`/jobs/${job.accounts}/pipeline`)).body.stages[0];
+  assert.equal(long.count, 9);
+  assert.equal(long.people.length, 8);
+  assert.equal(long.people.some((a) => a.name === 'Person 9'), true);
+  assert.notEqual(long.id, stageId);
+  // Taken off again, so the tests after this one find the job as it was.
+  for (const a of (await alex.get(`/applications?job_id=${job.accounts}&status=all`)).body) assert.equal((await alex.del(`/applications/${a.id}`)).status, 200);
+  assert.equal((await priya.get(`/jobs/${job.accounts}/pipeline`)).body.stages[0].count, 0);
+  // A job that is not there, and somebody who is not signed in.
+  assert.equal((await priya.get('/jobs/999999/pipeline')).status, 404);
+  assert.equal((await session(server.base).get(`/jobs/${job.sales}/pipeline`)).status, 401);
+});
+
 test('the switch adds paused and draft jobs to the board, after the open ones, and never closed ones', async () => {
   const all = await board(priya, '?board=all');
   assert.deepEqual(shape(all), [
@@ -337,6 +375,7 @@ test('a client’s user is sent no job board and nothing about who the account e
   assert.equal(answers['/jobs?account_executive=none'], answers['/jobs']);
   // And the routes that are about account executives are closed to her.
   assert.equal((await maya.get('/account-executives')).status, 403);
+  assert.equal((await maya.get(`/jobs/${job.sales}/pipeline`)).status, 403); // her own company's job, but the board is not hers
   assert.equal((await put(maya, `/jobs/${job.depot}`, { title: 'Depot Operations Lead', status: 'open', account_executive_id: id.priya })).status, 403);
   assert.equal((await maya.post('/jobs', { client_id: kestrel, title: 'Hers', account_executive_id: id.priya })).status, 403);
   assert.equal((await jobOf(alex, job.depot)).account_executive_id, id.marcus);

@@ -1,8 +1,11 @@
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
+@import "@fontsource-variable/newsreader";
 
 @theme {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Page titles only: a book-like serif that gives the workspace its name's character. Everything else stays in Inter. */
+  --font-display: "Newsreader Variable", Georgia, "Times New Roman", serif;
   /* The Book: deep teal with a warm sand accent, taken from the logo. */
   --color-brand-50: #edf6f7;
   --color-brand-100: #d5eaed;
@@ -16,8 +19,15 @@
   --color-brand-900: #033a44;
   --color-brand-950: #022a32;
   --color-gold: #e0b686;
-  --color-paper: #f6f5f1;
-  --color-line: #e4e2db;
+  /* The gold at reading strengths: a pale wash to sit text on, and an ink dark enough to read on it. */
+  --color-gold-50: #fbf3e6;
+  --color-gold-100: #f3e2c6;
+  --color-gold-200: #ebcda8;
+  --color-gold-800: #7a5420;
+  --color-gold-900: #4a3312;
+  --color-paper: #f4f2ec;
+  --color-line: #e3e0d8;
+  --color-hairline: #ece9e1;
 }
 
 html, body, #root { height: 100%; }
@@ -32,6 +42,10 @@ button, [role="button"], a, select, summary { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 :focus-visible { outline: 2px solid var(--color-brand-500); outline-offset: 2px; }
 .tabular { font-variant-numeric: tabular-nums; }
+/* Page and record titles. */
+.display { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.01em; font-feature-settings: normal; }
+/* A short piece of prose worth reading slowly: a recruiter's write-up, a pull quote. */
+.serif { font-family: var(--font-display); font-feature-settings: normal; }
 
 @keyframes slide-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes pop-in { from { transform: translateY(8px) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }

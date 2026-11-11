@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Briefcase, ChevronDown, ChevronLeft, ChevronRight, UserRoundX } from 'lucide-react';
-import { daysSince, plural } from '../lib.js';
-import { useApp } from '../state.jsx';
+import { ArrowUpRight, Briefcase, ChevronDown, ChevronLeft, ChevronRight, UserRoundX } from 'lucide-react';
+import { daysSince, photoUrl, plural } from '../lib.js';
+import { useApi, useApp, useOpenCandidate } from '../state.jsx';
 import { Avatar, Badge, Button, Card, CardHeader, ClientDot, Empty, Switch, cx } from '../ui.jsx';
 import { JobStatusBadge } from './bits.jsx';
 
@@ -64,26 +64,102 @@ function openFor(job) {
   return job.opened_at ? `Opened ${daysSince(job.opened_at)}d ago` : 'Not opened yet';
 }
 
-function JobCard({ job: j }) {
-  const { scope } = useApp();
+/**
+ * A job's pipeline, under its card: every stage in order, how many people are in it, and who they are (the first
+ * few of a long stage; the server decides how many). It is asked for when the card is opened, and again whenever
+ * something is saved (somebody moved to another stage from their profile, say), so it is never behind the job's own
+ * page. A name opens that person's profile over the dashboard.
+ */
+function Pipeline({ job, onShown }) {
+  const { bump } = useApp();
+  const openCandidate = useOpenCandidate();
+  const { data, error } = useApi(`/jobs/${job.id}/pipeline`);
+  const ready = Boolean(data);
+  useEffect(() => { if (ready) onShown(); }, [ready]);
+  // Trying again asks for the whole dashboard again too, so a job that has been deleted meanwhile leaves the board.
+  if (error) {
+    return (
+      <p role="alert" className="text-xs text-stone-600">
+        {error === 'Not found' ? 'This job is no longer there.' : `The pipeline could not be loaded: ${error}`}{' '}
+        <button type="button" onClick={bump} className="font-medium text-brand-700 hover:underline">{error === 'Not found' ? 'Refresh the board' : 'Try again'}</button>
+      </p>
+    );
+  }
+  if (!ready) return <p className="text-xs text-stone-500">Loading the pipeline…</p>;
+  // Straight to the job's Pipeline tab: the job would otherwise open on whichever tab this person used last.
+  const jobPipeline = `/jobs/${job.id}?tab=pipeline`;
   return (
-    <Link to={`/jobs/${j.id}`} className="block rounded-lg border border-line bg-white p-3 shadow-sm transition-shadow hover:shadow-md">
-      <span className="flex items-start justify-between gap-2">
-        <span className="line-clamp-2 text-sm leading-snug font-medium text-stone-900 [overflow-wrap:anywhere]" title={j.title}>{j.title}</span>
-        {j.status !== 'open' && <JobStatusBadge status={j.status} />}
-      </span>
-      {/* As everywhere else, the client is not repeated on every card when the workspace is showing one client only. */}
-      {!scope && <span className="mt-1 flex items-center gap-1.5 text-[13px] text-stone-600"><ClientDot color={j.brand_color} /><span className="truncate" title={j.client_name}>{j.client_name}</span></span>}
-      <span className="mt-0.5 block text-xs text-stone-500">{openFor(j)} · {j.hires} of {j.openings} filled</span>
-      <span className="tabular mt-2.5 grid grid-cols-3 gap-1 border-t border-line pt-2 text-center">
-        {[['Pipeline', j.in_pipeline], ['Interview', j.interviewing], ['Offer', j.offers]].map(([label, value]) => (
-          <span key={label}>
-            <span className={cx('block text-sm font-semibold', value ? 'text-stone-900' : 'text-stone-400')}>{value}</span>
-            <span className="block text-[11px] text-stone-500">{label}</span>
-          </span>
+    <>
+      <ol className="space-y-1.5">
+        {data.stages.map((stage) => (
+          <li key={stage.id} data-board-stage={stage.id}>
+            <span className={cx('tabular flex items-baseline justify-between gap-2 text-xs', stage.count ? 'font-semibold text-stone-800' : 'text-stone-400')}>
+              <span className="truncate" title={stage.name}>{stage.name}</span><span>{stage.count}</span>
+            </span>
+            {stage.count > 0 && (
+              <ul className="mt-0.5">
+                {stage.people.map((a) => (
+                  <li key={a.id}>
+                    <button type="button" onClick={() => openCandidate(a.id)} title={[a.name, a.current_title, a.current_company].filter(Boolean).join(' · ')}
+                      className="-mx-1 flex w-[calc(100%+0.5rem)] items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-stone-100">
+                      <Avatar name={a.name} size={20} src={photoUrl(a.candidate_id, a.photo)} />
+                      <span className="truncate text-[13px] text-stone-800">{a.name}</span>
+                    </button>
+                  </li>
+                ))}
+                {stage.count > stage.people.length && (
+                  <li><Link to={jobPipeline} className="block py-1 pl-7 text-xs text-brand-700 hover:underline">and {stage.count - stage.people.length} more</Link></li>
+                )}
+              </ul>
+            )}
+          </li>
         ))}
-      </span>
-    </Link>
+      </ol>
+      <Link to={jobPipeline} className="mt-2.5 inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline">Open job<ArrowUpRight className="size-3.5" /></Link>
+    </>
+  );
+}
+
+/**
+ * One job. A click on the card drops its pipeline down under it, and another folds it away; the arrow in the
+ * corner opens the job itself. Several cards can be open at once. Which are open is kept by the board, not here,
+ * so a card is still open after its column has been folded away and unfolded on a phone.
+ */
+function JobCard({ job: j, open, onToggle }) {
+  const { scope } = useApp();
+  const card = useRef(null);
+  const panel = `board-job-${j.id}-pipeline`;
+  // The pipeline can drop down below what is on screen (the last card in a tall column): bring it into view.
+  const shown = () => card.current?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  return (
+    <div ref={card} data-board-job={j.id} className={cx('relative rounded-lg border border-line bg-white transition-shadow hover:shadow-md', open ? 'shadow-md' : 'shadow-sm')}>
+      <button type="button" aria-expanded={open} aria-controls={panel} onClick={onToggle} className="block w-full rounded-lg p-3 text-left">
+        {/* Room on the right for the arrow that opens the job. */}
+        <span className="flex items-start justify-between gap-2 pr-8">
+          <span className="line-clamp-2 text-sm leading-snug font-medium text-stone-900 [overflow-wrap:anywhere]" title={j.title}>{j.title}</span>
+          {j.status !== 'open' && <JobStatusBadge status={j.status} />}
+        </span>
+        {/* As everywhere else, the client is not repeated on every card when the workspace is showing one client only. */}
+        {!scope && <span className="mt-1 flex items-center gap-1.5 text-[13px] text-stone-600"><ClientDot color={j.brand_color} /><span className="truncate" title={j.client_name}>{j.client_name}</span></span>}
+        <span className="mt-0.5 block text-xs text-stone-500">{openFor(j)} · {j.hires} of {j.openings} filled</span>
+        <span className="tabular mt-2.5 grid grid-cols-3 gap-1 border-t border-line pt-2 text-center">
+          {[['Pipeline', j.in_pipeline], ['Interview', j.interviewing], ['Offer', j.offers]].map(([label, value]) => (
+            <span key={label}>
+              <span className={cx('block text-sm font-semibold', value ? 'text-stone-900' : 'text-stone-400')}>{value}</span>
+              <span className="block text-[11px] text-stone-500">{label}</span>
+            </span>
+          ))}
+        </span>
+        <span className="mt-2 flex items-center justify-center gap-1 text-[11px] font-medium text-stone-500">
+          {open ? 'Hide pipeline' : 'Show pipeline'}<ChevronDown className={cx('size-3.5 transition-transform', open && 'rotate-180')} />
+        </span>
+      </button>
+      {/* Big enough to tap on a phone, where the rest of the card is the button that drops the pipeline down. */}
+      <Link to={`/jobs/${j.id}`} aria-label={`Open the job ${j.title}`} title="Open job" className="absolute top-0.5 right-0.5 rounded-md p-2.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700">
+        <ArrowUpRight className="size-4" />
+      </Link>
+      {open && <div id={panel} className="border-t border-line px-3 pt-2.5 pb-3"><Pipeline job={j} onShown={shown} /></div>}
+    </div>
   );
 }
 
@@ -92,7 +168,7 @@ function JobCard({ job: j }) {
  * itself, under its heading, so the others, the strip's scrollbar and the rest of the dashboard stay within reach.
  * On a phone the heading is a button that folds the jobs away, and a long column shows its first few until asked.
  */
-function Column({ column: c, wide, open, onToggle }) {
+function Column({ column: c, wide, open, onToggle, openJobs, onJob }) {
   const { isAdmin } = useApp();
   const [all, setAll] = useState(false);
   const name = c.id == null ? 'No account executive' : c.name;
@@ -134,7 +210,7 @@ function Column({ column: c, wide, open, onToggle }) {
           )}
           {/* The small margin and padding leave room for the cards' shadows, which a scrolling box would otherwise cut off. */}
           <div className={cx('flex flex-col gap-2', wide ? '-mx-1 -mb-1 min-h-0 flex-1 overflow-y-auto px-1 pb-1 [scrollbar-width:thin]' : c.id != null && 'mt-2')}>
-            {jobs.map((j) => <JobCard key={j.id} job={j} />)}
+            {jobs.map((j) => <JobCard key={j.id} job={j} open={openJobs.has(j.id)} onToggle={() => onJob(j.id)} />)}
             {!wide && c.jobs.length > FIRST_FEW && (
               <Button variant="ghost" size="sm" aria-expanded={all} onClick={() => setAll(!all)}>
                 {all ? `Show the first ${FIRST_FEW} only` : `Show all ${plural(c.jobs.length, 'job')}`}
@@ -158,6 +234,9 @@ export default function JobBoard({ columns, all, onAll }) {
   const [folded, setFolded] = useState({}); // the columns somebody has folded or unfolded by hand
   const isOpen = (c, i) => folded[key(c)] ?? i === 0;
   const { strip, more, step } = useSideways([wide, columns]);
+  // The cards whose pipeline is dropped down, by job. Kept here so that folding a column away does not close them.
+  const [openJobs, setOpenJobs] = useState(() => new Set());
+  const toggleJob = (id) => setOpenJobs((was) => { const next = new Set(was); if (!next.delete(id)) next.add(id); return next; });
   return (
     <Card>
       <CardHeader title="Job board" action={(
@@ -176,7 +255,7 @@ export default function JobBoard({ columns, all, onAll }) {
         <>
           <div ref={strip} className={cx('p-3', wide ? 'flex items-start gap-3 overflow-x-auto' : 'space-y-2')}>
             {columns.map((c, i) => (
-              <Column key={key(c)} column={c} wide={wide} open={isOpen(c, i)} onToggle={() => setFolded((f) => ({ ...f, [key(c)]: !isOpen(c, i) }))} />
+              <Column key={key(c)} column={c} wide={wide} open={isOpen(c, i)} onToggle={() => setFolded((f) => ({ ...f, [key(c)]: !isOpen(c, i) }))} openJobs={openJobs} onJob={toggleJob} />
             ))}
           </div>
           <p className="border-t border-line px-4 py-2.5 text-xs text-stone-500">

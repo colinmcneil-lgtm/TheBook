@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Search, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, plural, NO_JOB } from '../lib.js';
@@ -8,19 +9,31 @@ import { AddCandidateModal } from '../components/CandidateModals.jsx';
 
 const NOT_ON_A_JOB = 'none'; // the Job filter's choice for people saved to The Book without a job
 const BOOK = 'book';         // and the tab that shows them; the two are one choice, shown in both places
+const STATUSES = ['active', BOOK, 'hired', 'rejected', 'withdrawn', 'all'];
+// The tab the address asks for (?status=…), if it is one this user has: the "Not on a job yet" tab is the agency's.
+const statusIn = (params, isAgency) => {
+  const asked = params.get('status');
+  return STATUSES.includes(asked) && (asked !== BOOK || isAgency) ? asked : 'active';
+};
 
 export default function Candidates() {
   const { scope, isAgency } = useApp();
   const openCandidate = useOpenCandidate();
-  const [status, setStatus] = useState('active');
+  // The page can be opened already searching (?q=…, from the bar at the top) or already adding somebody (?new=1).
+  const [params, setParams] = useSearchParams();
+  const [status, setStatus] = useState(statusIn(params, isAgency));
   const [jobId, setJobId] = useState('');
   const [owner, setOwner] = useState('');
-  const [text, setText] = useState('');
-  const [query, setQuery] = useState('');
-  const [adding, setAdding] = useState(false);
+  const [text, setText] = useState(params.get('q') || '');
+  const [query, setQuery] = useState((params.get('q') || '').trim());
+  const [adding, setAdding] = useState(isAgency && params.get('new') === '1');
   useEffect(() => { const t = setTimeout(() => setQuery(text.trim()), 250); return () => clearTimeout(t); }, [text]);
   // Changing client keeps the "Not on a job yet" tab open: those people belong to no client, so it still means the same.
   useEffect(() => setJobId(''), [scope]);
+  // A search sent from the top bar replaces whatever was typed here.
+  useEffect(() => { if (params.has('q')) { setText(params.get('q')); setStatus(statusIn(params, isAgency)); } }, [params, isAgency]);
+  // Once the form is open the address no longer needs to say so: a refresh should not open it again.
+  useEffect(() => { if (params.get('new') === '1') { const next = new URLSearchParams(params); next.delete('new'); setParams(next, { replace: true }); } }, [params, setParams]);
 
   const { data: jobs } = useApi(url('/jobs', { client_id: scope }));
   // People saved to The Book without a job belong to no client and have no stage or outcome, so their tab asks for
@@ -71,6 +84,7 @@ export default function Candidates() {
           { id: 'hired', label: 'Hired' }, { id: 'rejected', label: 'Rejected' }, { id: 'withdrawn', label: 'Withdrawn' }, { id: 'all', label: 'Everyone' },
         ].filter(Boolean)} />
       {noJob && <p className="mb-4 text-sm text-stone-500">People you have saved to The Book without a job. Open one to add them to a job. Only your agency sees them.</p>}
+      {query && <p className="mb-3 text-[13px] text-stone-500" role="status">Showing people matching “{query}”{status === 'all' ? ', whatever stage they reached' : ''}.</p>}
       {rows ? <ApplicationsTable rows={rows} empty={noJob && !query && !owner ? 'Nobody is in The Book without a job. Use “Add candidate” or the browser extension and choose “No job yet”. If your extension has no such choice, download it again from Settings, Browser extension.' : undefined} /> : <Pending error={error} />}
       {adding && <AddCandidateModal onClose={() => setAdding(false)} onAdded={openCandidate} />}
     </Page>

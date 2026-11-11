@@ -78,9 +78,10 @@ candidate in the app, and put on a job later when the right role comes up.
 - **Where they are.** On the Candidates page, under their own tab, "Not on a job yet", which shows how many there
   are; "Everyone" lists them with everybody else. The other tabs (In process, Hired, Rejected, Withdrawn) are about
   a pipeline and leave them out, so "In process" shows the same people the dashboard's "Active candidates" counts.
-  They are in no job, client, pipeline board, inbox, dashboard figure or report, and a list for one client or one
-  job never contains them. They belong to the agency: client users never see them, and their notes are always
-  agency-only.
+  The search at the top of every page opens "Everyone", so it finds them too while the menu shows all clients. They
+  are in no job, client, pipeline board, inbox, dashboard figure or report, nor in the pipeline a card on the job
+  board drops down until they are put on that job, and a list for one client or one job never contains them. They
+  belong to the agency: client users never see them, and their notes are always agency-only.
 - **Who counts as the same person.** Among people saved without a job, the same rules as within a client: one
   record per e-mail address, or failing that per LinkedIn link. Saving somebody again adds what was sent to the
   entry they have and makes nothing new. An address or a link that is on an entry under a plainly different name
@@ -252,16 +253,18 @@ Metaview conversations and recorded report moments hanging off the two rebuilt t
 and interview editing (`before-pool-d1b664a/`), whose database is that one again with people's to-do lists
 hanging off the rebuilt applications table, the one with jobs on the agency's website
 (`before-pool-09368bb/`), whose database is that one once more with confidential posts and what the board notes
-about the people who applied through one, which hangs off applications too, and the one that is live, with account
-executives and the job board (`before-pool-f7c16e5/`), whose database is that one again with a job handed on to
-somebody else, a job that belongs to somebody who has left and a job with no account executive.
+about the people who applied through one, which hangs off applications too, and the one with account executives
+and the job board (`before-pool-f7c16e5/`), whose database is that one again with a job handed on to somebody else,
+a job that belongs to somebody who has left and a job with no account executive. That last one's database code is
+still the live release's: what went live after it (the new look, and a job's pipeline under its card on the job
+board, b979c5f) did not change `server/db.js` or `server/links.js`, so it needs no folder of its own.
 
 What a database must end up as is not written out by hand, and neither is what other features add. It comes from
 three places:
 
-1. **The releases from before, run as they are.** A copy is opened by the newest of them (the one that is live),
-   which shows what the releases in between do to the database: the tables, indexes, triggers and columns they
-   add, the rows they add and the values they change.
+1. **The releases from before, run as they are.** A copy is opened by the newest of them (whose database code is
+   the live one), which shows what the releases in between do to the database: the tables, indexes, triggers and
+   columns they add, the rows they add and the values they change.
 2. **This change, by name.** Its own differences are applied to what that leaves: three columns that stop being
    required, one column, four tables and six indexes. So a database last opened by any of the six gets the
    releases it missed and this change in one start, and ends up the same whichever way it came. Everything the
@@ -372,7 +375,12 @@ beside each job and can be narrowed to one person's jobs, and the job form has a
 - **The job board.** On the dashboard, for the agency: one column for each account executive, headed with their name,
   their initials and how many jobs they have, and under it a card for each job with its title, the client, how long
   it has been open, its openings and how many are filled, and how many people are in its pipeline, at interview and
-  at offer. A click opens the job. Your own column comes first, then the others by name. The board shows open jobs;
+  at offer. A click on a card drops the job's pipeline down under it: every stage in order, how many people are in
+  it and who they are (the first eight of a long stage, newest first; "and 12 more" opens the job's Pipeline tab, which
+  has everybody), and a click on a name opens that person's profile over the dashboard. The people are the ones the
+  job's Pipeline tab shows, so somebody hired is under Hired, though the card's Pipeline number counts only those
+  still in play. Another click folds it away, several cards can be open at once, and the arrow in the card's corner
+  opens the job itself. Your own column comes first, then the others by name. The board shows open jobs;
   the switch **Include paused and draft** adds those (closed jobs are never on it), and it follows the client chosen
   in the menu. Somebody with no jobs in view has no column. In a wide window the columns sit side by side and scroll
   sideways when there are many, with the scrollbar or the two arrows in the board's heading; a column is never taller

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CalendarDays, ChevronDown, Copy, ExternalLink, Pencil, Trash2, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
-import { api, url, daysSince, fmtDate, photoUrl, salaryRange, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
+import { api, url, daysSince, fmtDate, photoUrl, salaryRange, sourceName, plural, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
 import { Avatar, Badge, Button, Card, Empty, Menu, Page, Stars, Tabs, useAction, useToast, cx } from '../ui.jsx';
 import { JobStatusBadge, ReviewBadge } from '../components/bits.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
@@ -15,8 +15,33 @@ const tabKey = (user) => `thebook.jobtab.${user.id}`;
 const lastTab = (user) => { try { return localStorage.getItem(tabKey(user)); } catch { return null; } };
 import { AddCandidateModal } from '../components/CandidateModals.jsx';
 
+// A card goes quiet after this many days in one stage with nothing booked.
+const QUIET_DAYS = 7;
+const isQuiet = (a) => !a.next_interview && daysSince(a.stage_entered_at) >= QUIET_DAYS;
+
+/** The pipeline's shape in one line: who is where, and what is in danger of stalling. */
+function Funnel({ stages, apps }) {
+  const at = (kind) => apps.filter((a) => a.status === 'active' && stages.find((s) => s.id === a.stage_id)?.kind === kind).length;
+  const quiet = apps.filter((a) => a.status === 'active' && isQuiet(a)).length;
+  const withTeam = apps.filter((a) => a.review_status === 'pending').length;
+  const steps = [[at('applied'), 'applied'], [at('interview'), 'interviewing'], [at('offer'), 'at offer'], [apps.filter((a) => a.status === 'hired').length, 'hired']];
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px] text-stone-600">
+      {steps.map(([n, label], i) => (
+        <React.Fragment key={label}>
+          {i > 0 && <span className="text-stone-400" aria-hidden="true">→</span>}
+          <span><b className="tabular font-semibold text-stone-900">{n}</b> {label}</span>
+        </React.Fragment>
+      ))}
+      <span className="flex-1" />
+      {quiet > 0 && <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-gold" aria-hidden="true" />{quiet} going quiet ({QUIET_DAYS}+ days in a stage, nothing booked)</span>}
+      {withTeam > 0 && <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-brand-400" aria-hidden="true" />{withTeam} with the hiring team</span>}
+    </div>
+  );
+}
+
 function Board({ stages, apps }) {
-  const { bump } = useApp();
+  const { bump, isAgency } = useApp();
   const toast = useToast();
   const open = useOpenCandidate();
   const [moved, setMoved] = useState({}); // optimistic stage for cards that were just dropped
@@ -43,55 +68,70 @@ function Board({ stages, apps }) {
   };
 
   return (
-    <div className="-mx-4 overflow-x-auto px-4 pb-4 sm:-mx-8 sm:px-8">
-      <div className="flex min-w-max gap-3">
-        {stages.map((stage) => {
-          const cards = apps.filter((a) => (moved[a.id] ?? a.stage_id) === stage.id);
-          return (
-            <section
-              key={stage.id}
-              aria-label={stage.name}
-              onDragOver={(e) => { e.preventDefault(); setOver(stage.id); }}
-              onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget) && setOver(null)}
-              onDrop={(e) => drop(e, stage)}
-              className={cx('flex w-64 shrink-0 flex-col rounded-xl border p-2 transition-colors', over === stage.id ? 'border-brand-400 bg-brand-50' : 'border-transparent bg-stone-200/50')}
-            >
-              <h3 className="flex items-center justify-between px-1.5 pt-1 pb-2 text-[13px] font-semibold text-stone-700">
-                {stage.name}
-                <span className="tabular rounded-full bg-white px-1.5 text-xs font-medium text-stone-500">{cards.length}</span>
-              </h3>
-              <div className="flex min-h-24 flex-col gap-2">
-                {cards.map((a) => (
-                  <div
-                    key={a.id}
-                    role="button"
-                    tabIndex={0}
-                    draggable
-                    onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), open(a.id))}
-                    onDragStart={(e) => { e.dataTransfer.setData('text/plain', String(a.id)); e.dataTransfer.effectAllowed = 'move'; }}
-                    onClick={() => open(a.id)}
-                    className="block rounded-lg border border-line bg-white p-3 text-left shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Avatar name={a.name} size={24} src={photoUrl(a.candidate_id, a.photo)} />
-                      <span className="truncate text-sm font-medium text-stone-900">{a.name}</span>
-                    </span>
-                    {(a.current_title || a.current_company) && <span className="mt-1 block truncate text-xs text-stone-500">{[a.current_title, a.current_company].filter(Boolean).join(' at ')}</span>}
-                    <span className="mt-2 flex flex-wrap items-center gap-1.5">
-                      {a.rating ? <Stars value={a.rating} size={11} /> : null}
-                      <ReviewBadge status={a.review_status} />
-                      {a.next_interview && <Badge tone="blue" icon={CalendarDays}>{fmtDate(a.next_interview)}</Badge>}
-                      <span className="tabular ml-auto text-xs text-stone-400" title="Days in this stage">{daysSince(a.stage_entered_at)}d</span>
-                    </span>
-                  </div>
-                ))}
-                {!cards.length && <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-stone-300 text-xs text-stone-400">Drop here</div>}
-              </div>
-            </section>
-          );
-        })}
+    <>
+      <Funnel stages={stages} apps={apps} />
+      <div className="-mx-4 overflow-x-auto px-4 pb-4 sm:-mx-8 sm:px-8">
+        <div className="flex min-w-max items-start gap-4">
+          {stages.map((stage) => {
+            const cards = apps.filter((a) => (moved[a.id] ?? a.stage_id) === stage.id);
+            return (
+              <section
+                key={stage.id}
+                aria-label={stage.name}
+                onDragOver={(e) => { e.preventDefault(); setOver(stage.id); }}
+                onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget) && setOver(null)}
+                onDrop={(e) => drop(e, stage)}
+                className={cx('flex w-[272px] shrink-0 flex-col rounded-xl border p-1.5 transition-colors', over === stage.id ? 'border-brand-300 bg-brand-50' : 'border-transparent')}
+              >
+                <h3 className="flex items-center gap-2 px-1.5 pt-1 pb-2.5 text-[13px] font-semibold text-stone-900">
+                  {stage.name}
+                  <span className="tabular text-xs font-medium text-stone-500">{cards.length}</span>
+                </h3>
+                <div className="flex min-h-24 flex-col gap-2.5">
+                  {cards.map((a) => {
+                    const quiet = a.status === 'active' && isQuiet(a);
+                    const company = [a.current_title, a.current_company].filter(Boolean).join(' at ');
+                    return (
+                      <div
+                        key={a.id}
+                        role="button"
+                        tabIndex={0}
+                        draggable
+                        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), open(a.id))}
+                        onDragStart={(e) => { e.dataTransfer.setData('text/plain', String(a.id)); e.dataTransfer.effectAllowed = 'move'; }}
+                        onClick={() => open(a.id)}
+                        className={cx('block rounded-[10px] border bg-white px-3.5 py-3 text-left shadow-[0_1px_1px_rgba(27,31,30,0.03)] transition-[border-color,box-shadow] hover:border-brand-200 hover:shadow-[0_2px_8px_rgba(3,58,68,0.08)] active:cursor-grabbing', quiet ? 'border-gold-200' : 'border-line')}
+                      >
+                        <span className="flex items-center gap-2.5">
+                          <Avatar name={a.name} size={28} src={photoUrl(a.candidate_id, a.photo)} />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium text-stone-900">{a.name}</span>
+                            {company && <span className="block truncate text-xs text-stone-500">{company}</span>}
+                          </span>
+                        </span>
+                        {(a.rating || a.review_status === 'pending') && (
+                          <span className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                            {a.rating ? <Stars value={a.rating} size={12} /> : null}
+                            <ReviewBadge status={a.review_status} />
+                          </span>
+                        )}
+                        <span className="mt-2 flex items-center justify-between gap-2 text-xs text-stone-500">
+                          {a.next_interview ? <Badge tone="green" icon={CalendarDays}>{fmtDate(a.next_interview)}</Badge>
+                            : stage.kind === 'interview' && a.status === 'active' ? <span className="font-medium text-gold-800">Nothing booked</span>
+                            : <Badge>{sourceName(a.source, isAgency)}</Badge>}
+                          <span className={cx('tabular', quiet && 'font-medium text-gold-800')} title="Days in this stage">{daysSince(a.stage_entered_at)}d{quiet ? ' · quiet' : ''}</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {!cards.length && <div className="flex flex-1 items-center justify-center rounded-[10px] border border-dashed border-stone-300 px-4 py-7 text-[13px] text-stone-500">Drop a candidate here</div>}
+                </div>
+              </section>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -194,6 +234,7 @@ export default function JobDetail() {
       wide
       title={<span className="flex flex-wrap items-center gap-2.5">{job.title}<JobStatusBadge status={job.status} /></span>}
       subtitle={[job.client_name, job.location, WORK_MODES[job.work_mode], salaryRange(job.salary_min, job.salary_max, job.currency),
+        job.status === 'open' && job.opened_at && `Open ${plural(daysSince(job.opened_at), 'day')}`,
         // Whose job it is, for the agency. A client's user is never sent it.
         isAgency && (job.account_executive_name ? `Account executive: ${job.account_executive_name}` : 'No account executive')].filter(Boolean).join(' · ')}
       actions={

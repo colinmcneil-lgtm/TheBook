@@ -99,7 +99,9 @@ export default function Jobs() {
   // The list of confidential posts has an address of its own (/jobs?view=board), so Settings can link to it.
   const [status, setStatusState] = useState(isAgency && params.get('view') === 'board' ? 'board' : 'open');
   const setStatus = (s) => { setStatusState(s); setParams(s === 'board' ? { view: 'board' } : {}, { replace: true }); };
-  const [creating, setCreating] = useState(false);
+  // /jobs?new=1 (the bar at the top) opens the form straight away; the address then forgets it, so a refresh does not.
+  const [creating, setCreating] = useState(isAgency && params.get('new') === '1');
+  useEffect(() => { if (params.get('new') === '1') { const next = new URLSearchParams(params); next.delete('new'); setParams(next, { replace: true }); } }, [params, setParams]);
   // The agency can narrow the list to one account executive's jobs: '' is everybody's, 'me' their own, 'none' the jobs with nobody.
   const [executive, setExecutive] = useState('');
   useEffect(() => setExecutive(''), [scope]); // somebody chosen for one client may have no jobs at the next

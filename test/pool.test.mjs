@@ -2250,6 +2250,47 @@ test('account executives and the job board: somebody on no job is in no column a
   assert.equal((await dana.del(`/applications/${una}`)).status, 200);
 });
 
+test('a card\'s pipeline on the job board: somebody on no job is never in it; put on the job they are, under their stage, and their name opens their profile on the job', async () => {
+  const pipelineOf = async (who, jobId) => {
+    const res = await who.get(`/jobs/${jobId}/pipeline`);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    return res.body.stages;
+  };
+  const allJobs = [job.accountant, job.payroll, job.hygienist, job.temp];
+  const everyPipeline = async () => Promise.all(allJobs.map((id) => pipelineOf(alex, id)));
+  const before = await everyPipeline();
+
+  // Saved without a job, with a photo: in no job's pipeline, under any stage, and no count moves.
+  const vera = await saved(sam, { name: 'Vera Lindqvist', email: 'vera.lindqvist@example.com', current_title: 'Payroll Lead', photo: { name: 'vera.png', bytes: PNG } });
+  assert.deepEqual(await everyPipeline(), before);
+  assert.equal(JSON.stringify(await everyPipeline()).includes('Vera'), false);
+
+  // Put on a job straight into its second stage: she is in that stage, newest first, with the same id her entry had,
+  // and that id opens her profile as the job's application (not as somebody in The Book).
+  const stage = job.accountantStages[1];
+  assert.equal((await addToJob(dana, vera, { job_id: job.accountant, stage_id: stage.id })).status, 200);
+  const now = await pipelineOf(alex, job.accountant);
+  const was = before[0];
+  assert.deepEqual(now.map((s) => [s.id, s.count]), was.map((s) => [s.id, s.count + (s.id === stage.id ? 1 : 0)]));
+  const here = now.find((s) => s.id === stage.id).people;
+  assert.deepEqual([here[0].id, here[0].name, here[0].status, here[0].current_title, Boolean(here[0].photo)], [vera, 'Vera Lindqvist', 'active', 'Payroll Lead', true]);
+  const profile = await detail(alex, here[0].id);
+  assert.deepEqual([profile.application.general, profile.job.id, profile.application.stage_id], [false, job.accountant, stage.id]);
+  // The other jobs' pipelines did not notice, and the hiring team is not sent the board's pipeline, of this job or any.
+  assert.deepEqual((await everyPipeline()).slice(1), before.slice(1));
+  assert.equal((await maya.get(`/jobs/${job.accountant}/pipeline`)).status, 403);
+
+  // Hired, she is under Hired, as on the job's own Pipeline tab.
+  const hired = job.accountantStages.at(-1);
+  assert.equal((await dana.post(`/applications/${vera}/move`, { stage_id: hired.id })).status, 200);
+  assert.deepEqual((await pipelineOf(alex, job.accountant)).find((s) => s.id === hired.id).people.filter((a) => a.id === vera).map((a) => a.status), ['hired']);
+
+  // Removed from the job she goes back to The Book, and out of its pipeline: every pipeline is as it was.
+  assert.equal((await dana.del(`/applications/${vera}`)).body.returned, true);
+  assert.deepEqual(await everyPipeline(), before);
+  assert.equal((await dana.del(`/applications/${vera}`)).status, 200);
+});
+
 // ---------- where this meets the agency's own jobs page ----------
 // "Jobs on our website" came with the release before this one: a confidential advert for a client's job on a public
 // board in the agency's name, with its own application form. Somebody who applies there has not been told who the
