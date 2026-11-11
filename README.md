@@ -108,12 +108,15 @@ candidate in the app, and put on a job later when the right role comes up.
   put on another job, what happened on the first job stays in their history, for the agency only, and is neither
   shown to the second job's hiring team nor listed under the second job.
 - **However you add them, it is the same entry.** "Add to a job" on their profile, choosing a job in the
-  extension, and Add candidate in the app with a job chosen all do this: there is no way to end up with a second
-  record of somebody who was in The Book. Add candidate and the extension recognise them by e-mail address or
-  LinkedIn link when the name agrees. Found by their link with a different e-mail address typed, their entry keeps
+  extension, and Add candidate in the app with a job chosen all do this, so somebody who was in The Book does not
+  end up with a second record. Add candidate and the extension recognise them by e-mail address or LinkedIn link
+  when the name agrees; typed under a different name ("Bob" for "Robert"), or with only a link when their entry has
+  none, they are not recognised and are added as somebody new, so add them from their profile when in doubt. Found by their link with a different e-mail address typed, their entry keeps
   the address it has and the history says which one was typed (for the agency only), as it does for a client's
   record. The other way round, "No job yet" for somebody who is already on a client's job shows you where they
-  are instead of saving them a second time.
+  are instead of saving them a second time ("already in your workspace"). That is the screens' doing: Add candidate
+  and the extension look the person up first. If the look-up fails they are saved, and each profile then points to
+  the other (see "One person, more than one record" below).
 - **When the client already has a record of them.** From their profile you are asked whether to join the two; from
   Add candidate and the extension, which add to the client's existing record anyway, the entry is joined to it.
   The entry then moves onto the client's record. Where the two disagreed (another e-mail address, phone number,

@@ -1,7 +1,7 @@
 // Upgrading a database made before people could be saved to The Book without a job. Run with `npm test`.
 //
 // The upgrade makes three columns optional (candidates.client_id, applications.job_id, applications.stage_id), adds
-// one empty column (applications.general_until) and two indexes. SQLite cannot change a column in place, so both
+// one empty column (applications.general_until) and six indexes. SQLite cannot change a column in place, so both
 // tables are rebuilt, on a database that holds real people. It also adds four new, empty tables: one for résumés
 // that a newer one replaced, two for the history lines and e-mails that only the agency may read (the tables of
 // history lines and e-mails that are there already are not touched at all), and one for what the agency's jobs page
@@ -82,7 +82,7 @@ const BEFORES = [
     leaves: { board_log: 6, board_names: 3, board_overrules: 2, board_posts: 4 } },
   // Every job has an account executive: one column on jobs, filled from who created each job the first time this
   // release opens a database. It brought no table of its own.
-  { name: 'the live release, with account executives and the job board (f7c16e5)', folder: 'before-pool-f7c16e5', commit: 'f7c16e590b94311c18d490b9393756c3089be5b3', after: 'before-pool-09368bb', use: fillAccounts,
+  { name: 'the live release\'s database code, with account executives and the job board (f7c16e5)', folder: 'before-pool-f7c16e5', commit: 'f7c16e590b94311c18d490b9393756c3089be5b3', after: 'before-pool-09368bb', use: fillAccounts,
     leaves: {} },
 ].map((b) => ({ ...b, code: path.join(HERE, 'fixtures', b.folder, 'db.js') }));
 const [OLDER, NEWER, REPORTS, TODOS, BOARD, ACCOUNTS] = BEFORES;

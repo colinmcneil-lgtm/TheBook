@@ -336,14 +336,16 @@ function markKnown() {
   // record under another name is not this person: that is left to the workspace to answer, as it is for a job.
   const here = book ? !someoneElse && (known.find((k) => !k.job_id) || known[0]) : known.find((k) => k.job_id === jobId);
   $('submit').disabled = Boolean(here);
-  $('submit').textContent = book ? (here ? 'Already in The Book' : 'Add to The Book') : here ? 'Already in this job' : 'Add to pipeline';
+  // "In The Book" is said of somebody saved without a job; somebody on a client's job is in the workspace.
+  $('submit').textContent = book ? (here ? (here.job_id ? 'Already in your workspace' : 'Already in The Book') : 'Add to The Book') : here ? 'Already in this job' : 'Add to pipeline';
   if (!known.length) return;
   let lead = 'Already in your workspace';
   if (someoneElse) {
     lead = `This email address or profile link is on ${who}'s record. Check it before you add this person.`;
   } else if (who && book) {
     // With no job in the workspace there is nothing below to choose.
-    lead = `${who} is already in The Book${noJobYet ? ', not on a job yet' : ''}.${jobs.length ? ' To add them to a job, choose the job below.' : ''}`;
+    lead = known.some((k) => !k.job_id) ? `${who} is already in The Book${noJobYet ? ', not on a job yet' : ''}.${jobs.length ? ' To add them to a job, choose the job below.' : ''}`
+      : `${who} is already in your workspace, so they are not added to The Book as well.${jobs.length ? ' To add them to another job, choose the job below.' : ''}`;
   } else if (who) {
     lead = here ? `${who} is already in this job.`
       : noJobYet ? `${who} is already in The Book, not on a job yet. This adds them to the job you chose.`

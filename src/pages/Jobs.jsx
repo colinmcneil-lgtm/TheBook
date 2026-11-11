@@ -101,7 +101,12 @@ export default function Jobs() {
   const setStatus = (s) => { setStatusState(s); setParams(s === 'board' ? { view: 'board' } : {}, { replace: true }); };
   // /jobs?new=1 (the bar at the top) opens the form straight away; the address then forgets it, so a refresh does not.
   const [creating, setCreating] = useState(isAgency && params.get('new') === '1');
-  useEffect(() => { if (params.get('new') === '1') { const next = new URLSearchParams(params); next.delete('new'); setParams(next, { replace: true }); } }, [params, setParams]);
+  // Also when this page is already open: New job in the bar at the top only changes the address.
+  useEffect(() => {
+    if (params.get('new') !== '1') return;
+    if (isAgency) setCreating(true);
+    const next = new URLSearchParams(params); next.delete('new'); setParams(next, { replace: true });
+  }, [params, setParams, isAgency]);
   // The agency can narrow the list to one account executive's jobs: '' is everybody's, 'me' their own, 'none' the jobs with nobody.
   const [executive, setExecutive] = useState('');
   useEffect(() => setExecutive(''), [scope]); // somebody chosen for one client may have no jobs at the next

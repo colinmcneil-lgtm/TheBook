@@ -32,8 +32,13 @@ export default function Candidates() {
   useEffect(() => setJobId(''), [scope]);
   // A search sent from the top bar replaces whatever was typed here.
   useEffect(() => { if (params.has('q')) { setText(params.get('q')); setStatus(statusIn(params, isAgency)); } }, [params, isAgency]);
-  // Once the form is open the address no longer needs to say so: a refresh should not open it again.
-  useEffect(() => { if (params.get('new') === '1') { const next = new URLSearchParams(params); next.delete('new'); setParams(next, { replace: true }); } }, [params, setParams]);
+  // ?new=1 opens the form, also when this page is already open (Add candidate in the bar at the top). Once it is
+  // open the address no longer needs to say so: a refresh should not open it again.
+  useEffect(() => {
+    if (params.get('new') !== '1') return;
+    if (isAgency) setAdding(true);
+    const next = new URLSearchParams(params); next.delete('new'); setParams(next, { replace: true });
+  }, [params, setParams, isAgency]);
 
   const { data: jobs } = useApi(url('/jobs', { client_id: scope }));
   // People saved to The Book without a job belong to no client and have no stage or outcome, so their tab asks for
