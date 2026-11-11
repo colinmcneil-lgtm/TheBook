@@ -24,7 +24,7 @@ function AuthFrame({ agencyName, children }) {
         </div>
       </div>
       <div className="hidden bg-brand-950 px-16 py-12 text-brand-100 lg:flex lg:flex-col lg:justify-center">
-        <p className="max-w-md text-3xl leading-snug font-semibold tracking-tight text-white">
+        <p className="display max-w-md text-[34px] leading-snug text-white">
           One hiring workspace for every company you are embedded in.
         </p>
         <ul className="mt-8 max-w-md space-y-4 text-[15px] leading-relaxed text-brand-200">
@@ -68,7 +68,7 @@ export default function Login({ onDone }) {
     return (
       <AuthFrame agencyName={boot.agencyName}>
         <CircleCheck className="size-10 text-brand-600" />
-        <h1 className="mt-4 text-2xl font-semibold tracking-tight">Request sent</h1>
+        <h1 className="mt-4 display text-[28px] leading-tight">Request sent</h1>
         <p className="mt-2 text-sm leading-relaxed text-stone-600">
           Thanks, {form.name.split(' ')[0]}. If you do not already have an account, your request is now with {agency}. Once it is approved you will get a link
           to set your password and sign in as<span className="font-medium text-stone-900"> {form.email}</span>.
@@ -81,7 +81,7 @@ export default function Login({ onDone }) {
   const signup = mode === 'signup';
   return (
     <AuthFrame agencyName={boot.agencyName}>
-      <h1 className="text-2xl font-semibold tracking-tight">{setup ? 'Set up your workspace' : signup ? 'Create your account' : 'Sign in'}</h1>
+      <h1 className="display text-[28px] leading-tight">{setup ? 'Set up your workspace' : signup ? 'Create your account' : 'Sign in'}</h1>
       <p className="mt-1.5 text-sm text-stone-500">
         {setup ? 'Create the owner account for your agency. You can invite your team and your clients afterwards.'
           : signup ? `Tell us who you are. ${boot.agencyName || 'The agency'} will confirm your account, connect it to your company's hiring and send you a link to set your password.`
@@ -130,7 +130,7 @@ export function Join() {
   if (error) {
     return (
       <AuthFrame>
-        <h1 className="text-2xl font-semibold tracking-tight">This link cannot be used</h1>
+        <h1 className="display text-[28px] leading-tight">This link cannot be used</h1>
         <p className="mt-2 text-sm leading-relaxed text-stone-600">{error}</p>
         <a href="/" className={`mt-6 inline-block text-sm ${switchLink}`}>Go to sign in</a>
       </AuthFrame>
@@ -140,7 +140,7 @@ export function Join() {
   const where = invite.role === 'client' ? `${invite.clientName}'s hiring team` : `the ${invite.agencyName} team`;
   return (
     <AuthFrame agencyName={invite.agencyName}>
-      <h1 className="text-2xl font-semibold tracking-tight">Join {where}</h1>
+      <h1 className="display text-[28px] leading-tight">Join {where}</h1>
       <p className="mt-1.5 text-sm text-stone-500">
         {invite.role === 'client'
           ? `${invite.agencyName} runs hiring for ${invite.clientName} here. Create your account to review candidates, give interview feedback and follow each role.`

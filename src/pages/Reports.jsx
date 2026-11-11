@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Printer } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, fmtDate, money } from '../lib.js';
-import { Button, Card, CardHeader, Page, Select, Stat, cx } from '../ui.jsx';
+import { Button, Card, CardHeader, Page, Select, Stat, StatStrip, cx } from '../ui.jsx';
 import { ReportTabs, IndividualReport, ClientsReport, useReportView } from './ReportViews.jsx';
 
 const RANGES = [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['', 'All time']];
@@ -99,13 +99,13 @@ function Overview() {
       {isAgency && <ReportTabs />}
       {!data ? <Pending error={error} /> : (
         <div className="space-y-6">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <StatStrip cols={5}>
             <Stat label="Applicants" value={data.totals.applicants} />
             <Stat label="Reached interview" value={data.totals.interviewed} hint={`${pct(data.totals.interviewed, data.totals.applicants)} of applicants`} />
             <Stat label="Hires" value={data.totals.hires} />
             <Stat label="Average time to hire" value={data.totals.avg_days_to_hire != null ? `${data.totals.avg_days_to_hire} days` : '–'} hint="application to hired" />
             <Stat label="Offer acceptance" value={data.totals.offer_acceptance != null ? `${data.totals.offer_acceptance}%` : '–'} hint="of offers decided" />
-          </div>
+          </StatStrip>
 
           {isAgency && data.revenue?.length > 0 && (
             <Card className="no-print">

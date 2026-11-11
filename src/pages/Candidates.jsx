@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Search, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { url, plural } from '../lib.js';
@@ -6,17 +7,25 @@ import { Button, Input, Page, Select, Tabs } from '../ui.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
 import { AddCandidateModal } from '../components/CandidateModals.jsx';
 
+const STATUSES = ['active', 'hired', 'rejected', 'withdrawn', 'all'];
+
 export default function Candidates() {
   const { scope, isAgency } = useApp();
   const openCandidate = useOpenCandidate();
-  const [status, setStatus] = useState('active');
+  // The page can be opened already searching (?q=…, from the bar at the top) or already adding somebody (?new=1).
+  const [params, setParams] = useSearchParams();
+  const [status, setStatus] = useState(STATUSES.includes(params.get('status')) ? params.get('status') : 'active');
   const [jobId, setJobId] = useState('');
   const [owner, setOwner] = useState('');
-  const [text, setText] = useState('');
-  const [query, setQuery] = useState('');
-  const [adding, setAdding] = useState(false);
+  const [text, setText] = useState(params.get('q') || '');
+  const [query, setQuery] = useState((params.get('q') || '').trim());
+  const [adding, setAdding] = useState(isAgency && params.get('new') === '1');
   useEffect(() => { const t = setTimeout(() => setQuery(text.trim()), 250); return () => clearTimeout(t); }, [text]);
   useEffect(() => setJobId(''), [scope]);
+  // A search sent from the top bar replaces whatever was typed here.
+  useEffect(() => { if (params.has('q')) { setText(params.get('q')); setStatus(STATUSES.includes(params.get('status')) ? params.get('status') : 'active'); } }, [params]);
+  // Once the form is open the address no longer needs to say so: a refresh should not open it again.
+  useEffect(() => { if (params.get('new') === '1') { const next = new URLSearchParams(params); next.delete('new'); setParams(next, { replace: true }); } }, [params, setParams]);
 
   const { data: jobs } = useApi(url('/jobs', { client_id: scope }));
   const { data: rows, error } = useApi(url('/applications', { client_id: scope, status, job_id: jobId, q: query, owner }));
@@ -47,6 +56,7 @@ export default function Candidates() {
       </div>
       <Tabs className="mb-4" value={status} onChange={setStatus}
         tabs={[{ id: 'active', label: 'In process' }, { id: 'hired', label: 'Hired' }, { id: 'rejected', label: 'Rejected' }, { id: 'withdrawn', label: 'Withdrawn' }, { id: 'all', label: 'Everyone' }]} />
+      {query && <p className="mb-3 text-[13px] text-stone-500" role="status">Showing people matching “{query}”{status === 'all' ? ', whatever stage they reached' : ''}.</p>}
       {rows ? <ApplicationsTable rows={rows} /> : <Pending error={error} />}
       {adding && <AddCandidateModal onClose={() => setAdding(false)} onAdded={openCandidate} />}
     </Page>

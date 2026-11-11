@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Copy, ExternalLink, Pencil, Plus, UserPlus, Briefcase } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
 import { api, url, fmtDate, ENGAGEMENTS } from '../lib.js';
-import { Avatar, Badge, Button, Card, CardHeader, Empty, Page, Stat, useAction, useToast } from '../ui.jsx';
+import { Avatar, Badge, Button, Card, CardHeader, Empty, Page, Stat, StatStrip, useAction, useToast } from '../ui.jsx';
 import { JobList } from './Jobs.jsx';
 import { engagementSummary } from './Clients.jsx';
 import { ClientForm, InviteForm } from '../components/Forms.jsx';
@@ -37,13 +37,13 @@ export default function ClientDetail() {
       }
     >
       <Link to="/clients" className="-mt-3 mb-4 inline-flex items-center gap-1 text-[13px] text-stone-500 hover:text-stone-800"><ArrowLeft className="size-3.5" />All clients</Link>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <StatStrip cols={5}>
         <Stat label="Open roles" value={client.open_jobs} />
         <Stat label="New applicants" value={client.new_applicants} />
         <Stat label="In process" value={client.active_candidates} />
         <Stat label="Interviews booked" value={client.upcoming_interviews} />
         <Stat label="Hires" value={client.hires} />
-      </div>
+      </StatStrip>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1.6fr_1fr]">
         <div className="min-w-0 space-y-3">

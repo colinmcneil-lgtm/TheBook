@@ -11,6 +11,7 @@ import { CallStatus, MetaviewMark, callName, callWhen, fmtLength, madeBy, useLiv
 import { kindLine, oraclePath } from '../oracle/calls.js';
 import { ChannelBadge, problemOf } from '../oracle/metaview.jsx';
 import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, ReviewModal, OfferModal, PlacementFeeModal, EditCandidateModal } from './CandidateModals.jsx';
+import { ReviewBadge } from './bits.jsx';
 
 const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
 const DELIVERY = { sent: { label: 'Sent', tone: 'green' }, failed: { label: 'Delivery failed', tone: 'red' }, not_configured: { label: 'Saved, not sent', tone: 'amber' } };
@@ -84,10 +85,11 @@ function CandidateView({ data, onClose }) {
     <>
       <div className="border-b border-line bg-white px-5 pt-4 sm:px-6">
         <div className="flex items-start gap-4">
-          <Avatar name={candidate.name} size={candidate.photo ? 64 : 48} src={photoUrl(candidate.id, candidate.photo)} />
+          <Avatar name={candidate.name} size={candidate.photo ? 64 : 52} src={photoUrl(candidate.id, candidate.photo)} />
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg font-semibold tracking-tight text-stone-900">{candidate.name}</h2>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h2 className="display text-[26px] leading-tight text-stone-900">{candidate.name}</h2>
+              {app.review_status === 'pending' && app.status === 'active' && <ReviewBadge status={app.review_status} />}
               {app.status === 'rejected' && <Badge tone="red">Rejected</Badge>}
               {app.status === 'withdrawn' && <Badge tone="gray">Withdrawn</Badge>}
               {app.status === 'hired' && <Badge tone="green" icon={Check}>Hired</Badge>}
@@ -96,7 +98,8 @@ function CandidateView({ data, onClose }) {
               <p className="text-sm text-stone-600">{[candidate.current_title, candidate.current_company].filter(Boolean).join(' at ')}</p>
             )}
             <p className="mt-0.5 text-sm text-stone-500">
-              For <Link to={`/jobs/${job.id}`} className="font-medium text-brand-700 hover:underline">{job.title}</Link> · {client.name}
+              For <Link to={`/jobs/${job.id}`} className="font-medium text-brand-700 hover:underline">{job.title}</Link> at {client.name}
+              {active && <> · {stage.name} · {since(app.stage_entered_at)} in stage</>}
             </p>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-stone-600">
               {candidate.email
@@ -168,13 +171,13 @@ function CandidateView({ data, onClose }) {
           </div>
         )}
         {scorecardsDue.map((i) => (
-          <div key={i.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <div key={i.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gold-200 bg-gold-50 px-4 py-3 text-sm text-gold-900">
             <span><span className="font-medium">Your scorecard is due</span> for {i.title} on {fmtDate(i.starts_at)}.</span>
             <Button size="sm" variant="primary" icon={ClipboardCheck} onClick={() => setModal({ scorecard: i })}>Add scorecard</Button>
           </div>
         ))}
         {duplicates.map((d) => (
-          <div key={d.candidate_id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <div key={d.candidate_id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gold-200 bg-gold-50 px-4 py-3 text-sm text-gold-900">
             <span className="min-w-0 flex-1 basis-56">
               <span className="font-medium">Possible duplicate of {d.name}</span>
               {d.job_title ? `, who is in ${d.job_title}${d.status === 'active' && d.stage_name ? ` (${d.stage_name})` : ''}` : ''}. Both records have the same LinkedIn link.
@@ -216,13 +219,22 @@ function ReviewBanner({ data, onDecide }) {
   const pending = app.review_status === 'pending';
   const approved = app.review_status === 'approved';
   return (
-    <Card className={cx('overflow-hidden', pending && 'border-amber-300')}>
-      <div className={cx('flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 text-sm', pending ? 'bg-amber-50 text-amber-950' : approved ? 'bg-brand-50 text-brand-900' : 'bg-red-50 text-red-900')}>
-        <span className="inline-flex items-center gap-2 font-medium">
-          {pending ? <Hourglass className="size-4" /> : approved ? <CircleCheck className="size-4" /> : <CircleAlert className="size-4" />}
-          {pending
-            ? isAgency ? `Waiting for the ${data.client.name} hiring team to review` : 'Waiting for your review'
-            : `${approved ? 'Approved for interview' : 'Declined'} by ${app.reviewed_by_name || 'the hiring team'} · ${fmtDate(app.reviewed_at)}`}
+    <Card className="overflow-hidden">
+      <div className={cx('flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm', pending ? 'bg-gold-50 text-gold-900' : approved ? 'bg-brand-50 text-brand-900' : 'bg-red-50 text-red-900')}>
+        <span className="flex min-w-0 flex-1 basis-56 items-center gap-3">
+          <span className={cx('flex size-8 shrink-0 items-center justify-center rounded-lg', pending ? 'bg-gold-100 text-gold-800' : approved ? 'bg-brand-100 text-brand-800' : 'bg-red-100 text-red-800')}>
+            {pending ? <Hourglass className="size-4" /> : approved ? <CircleCheck className="size-4" /> : <CircleAlert className="size-4" />}
+          </span>
+          <span className="min-w-0">
+            <span className="block font-semibold">
+              {pending
+                ? isAgency ? `Waiting for the ${data.client.name} hiring team` : 'Waiting for your review'
+                : `${approved ? 'Approved for interview' : 'Declined'} by ${app.reviewed_by_name || 'the hiring team'}`}
+            </span>
+            <span className="block text-xs opacity-80">
+              {pending ? `Submitted${app.submitted_by_name ? ` by ${app.submitted_by_name}` : ''} with the write-up below` : fmtDate(app.reviewed_at)}
+            </span>
+          </span>
         </span>
         {pending && app.status === 'active' && (
           <span className="flex gap-2">
@@ -233,8 +245,8 @@ function ReviewBanner({ data, onDecide }) {
       </div>
       <div className="space-y-3 px-4 py-3">
         <div>
-          <div className="text-xs font-medium tracking-wide text-stone-500 uppercase">Recruiter write-up{app.submitted_by_name ? ` · ${app.submitted_by_name}` : ''}</div>
-          <p className="mt-1 text-sm leading-relaxed whitespace-pre-wrap text-stone-800">{app.submission_note}</p>
+          <div className="text-[11px] font-semibold tracking-wider text-stone-500 uppercase">Recruiter write-up</div>
+          <p className="serif mt-1.5 text-[17px] leading-relaxed whitespace-pre-wrap text-stone-900">{app.submission_note}</p>
         </div>
         {app.review_note && (
           <div>

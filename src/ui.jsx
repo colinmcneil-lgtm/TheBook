@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { X, Star, LoaderCircle, RefreshCw } from 'lucide-react';
+import { X, Star, LoaderCircle, RefreshCw, ChevronRight } from 'lucide-react';
 
 const cx = (...parts) => parts.filter(Boolean).join(' ');
 export { cx };
@@ -121,7 +121,7 @@ export function Switch({ checked, onChange, label, className }) {
 const BADGE_TONES = {
   gray: 'bg-stone-100 text-stone-700 ring-stone-200',
   green: 'bg-brand-50 text-brand-700 ring-brand-200',
-  amber: 'bg-amber-50 text-amber-800 ring-amber-200',
+  amber: 'bg-gold-50 text-gold-800 ring-gold-200',
   red: 'bg-red-50 text-red-700 ring-red-200',
   blue: 'bg-sky-50 text-sky-800 ring-sky-200',
   violet: 'bg-violet-50 text-violet-800 ring-violet-200',
@@ -166,10 +166,10 @@ export function Card({ className, children, ...props }) {
 }
 export function CardHeader({ title, action, count }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+    <div className="flex items-center justify-between gap-3 border-b border-hairline px-4 py-3">
       <h2 className="text-sm font-semibold text-stone-900">
         {title}
-        {count != null && <span className="ml-1.5 font-normal text-stone-400">{count}</span>}
+        {count != null && <span className="ml-1.5 font-normal text-stone-500">{count}</span>}
       </h2>
       {action}
     </div>
@@ -312,7 +312,7 @@ export function Drawer({ onClose, children, label }) {
   useEscape(onClose);
   return (
     <div className="animate-fade-in fixed inset-0 z-50 flex justify-end bg-stone-950/30" style={belowRecordingBar} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-label={label} className="animate-slide-in flex h-full w-full max-w-[880px] flex-col bg-paper shadow-2xl">
+      <div role="dialog" aria-modal="true" aria-label={label} className="animate-slide-in flex h-full w-full max-w-[900px] flex-col border-l border-line bg-paper shadow-2xl shadow-brand-950/20">
         {children}
       </div>
     </div>
@@ -372,8 +372,8 @@ export function Page({ title, subtitle, actions, children, wide }) {
     <div className={cx('mx-auto w-full px-4 py-6 sm:px-8 sm:py-8', wide ? 'max-w-none' : 'max-w-6xl')}>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-[22px] font-semibold tracking-tight text-stone-900">{title}</h1>
-          {subtitle && <p className="mt-0.5 text-sm text-stone-500">{subtitle}</p>}
+          <h1 className="display text-[28px] leading-tight text-stone-900 sm:text-[30px]">{title}</h1>
+          {subtitle && <p className="mt-1 text-sm text-stone-500">{subtitle}</p>}
         </div>
         {actions && <div className="no-print flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
@@ -382,14 +382,40 @@ export function Page({ title, subtitle, actions, children, wide }) {
   );
 }
 
-export function Stat({ label, value, hint, to, Link }) {
+/** A row of figures in one strip, divided by hairlines rather than boxed one by one. Holds `Stat`s. */
+export function StatStrip({ cols = 6, children, className }) {
+  const wide = { 4: 'md:grid-cols-4', 5: 'md:grid-cols-5', 6: 'md:grid-cols-3 xl:grid-cols-6' }[cols];
+  return <div className={cx('grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line', wide, className)}>{children}</div>;
+}
+export function Stat({ label, value, hint, to, Link, accent }) {
   const body = (
     <>
-      <div className="text-[13px] text-stone-500">{label}</div>
-      <div className="tabular mt-1 text-2xl font-semibold tracking-tight text-stone-900">{value}</div>
-      {hint && <div className="mt-0.5 text-xs text-stone-500">{hint}</div>}
+      <div className="text-xs font-medium text-stone-500">{label}</div>
+      <div className={cx('tabular mt-1.5 text-[28px] leading-none font-semibold tracking-tight', accent ? 'text-brand-700' : 'text-stone-900')}>{value}</div>
+      {hint && <div className="mt-2 text-xs text-stone-500">{hint}</div>}
     </>
   );
-  const cls = 'block rounded-xl border border-line bg-white px-4 py-3.5';
-  return to && Link ? <Link to={to} className={cx(cls, 'transition-colors hover:border-brand-300')}>{body}</Link> : <div className={cls}>{body}</div>;
+  const cls = 'block bg-white px-5 py-4';
+  return to && Link ? <Link to={to} className={cx(cls, 'transition-colors hover:bg-brand-50/60')}>{body}</Link> : <div className={cls}>{body}</div>;
+}
+
+/**
+ * One line in a list of things to open: an icon in a soft square, a title with a quieter line under it, something
+ * on the right and a chevron. Rows sit one under another inside a Card, divided by hairlines.
+ */
+export function ListRow({ icon: Icon, title, detail, trailing, onClick, to, Link, className }) {
+  const inner = (
+    <>
+      {Icon && <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700"><Icon className="size-4" /></span>}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-stone-900">{title}</span>
+        {detail && <span className="block truncate text-xs text-stone-500">{detail}</span>}
+      </span>
+      {trailing}
+      <ChevronRight className="size-4 shrink-0 text-stone-400" />
+    </>
+  );
+  const cls = cx('flex w-full items-center gap-3.5 px-4 py-3 text-left transition-colors hover:bg-stone-50', className);
+  if (to && Link) return <Link to={to} className={cls}>{inner}</Link>;
+  return <button type="button" onClick={onClick} className={cls}>{inner}</button>;
 }
