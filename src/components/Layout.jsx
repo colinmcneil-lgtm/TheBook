@@ -45,7 +45,7 @@ class Bar extends React.Component {
 function ScopeSwitcher() {
   const { clients, scope, scopeClient, setScope, isAgency } = useApp();
   const trigger = (
-    <button type="button" className="flex h-10 w-full items-center gap-2.5 rounded-lg bg-white/5 px-2.5 text-left text-sm text-white ring-1 ring-white/10 hover:bg-white/10">
+    <button type="button" className="flex h-9 w-full items-center gap-2.5 rounded-lg bg-white/5 px-2.5 text-left text-[13.5px] text-white ring-1 ring-white/10 hover:bg-white/10">
       {scopeClient ? <ClientDot color={scopeClient.brand_color} className="ring-2 ring-white/20" /> : <Building2 className="size-4 text-brand-300" />}
       <span className="min-w-0 flex-1 truncate font-medium">{scopeClient ? scopeClient.name : 'All clients'}</span>
       {isAgency && <ChevronsUpDown className="size-4 text-brand-300" />}
@@ -117,45 +117,63 @@ export default function Layout({ children }) {
   useEffect(() => setOpen(false), [location.pathname]);
 
   const inboxCount = counts ? (isAgency ? counts.new_applicants : counts.pending_review) : 0;
-  const nav = [
-    { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-    isAgency && { to: '/todo', label: 'To do', icon: ListTodo, count: counts?.todo },
-    { to: '/inbox', label: isAgency ? 'Inbox' : 'To review', icon: Inbox, count: inboxCount },
-    { to: '/jobs', label: 'Jobs', icon: Briefcase },
-    { to: '/candidates', label: 'Candidates', icon: Users },
-    { to: '/interviews', label: 'Interviews', icon: CalendarDays, count: counts?.scorecards_due },
-    isAgency && { to: '/otterview', label: 'Otterview', icon: AudioLines, recording },
-    { to: '/reports', label: 'Reports', icon: ChartColumn },
-    isAgency && { to: '/clients', label: 'Clients', icon: Building2 },
-    { to: '/settings', label: 'Settings', icon: Settings, count: counts?.pending_accounts },
-  ].filter(Boolean);
+  // The pages in three groups: what is waiting today, the hiring itself, and the agency (or, for a client's user, their company) around it.
+  const groups = [
+    { label: 'Today', items: [
+      { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+      isAgency && { to: '/todo', label: 'To do', icon: ListTodo, count: counts?.todo },
+      { to: '/inbox', label: isAgency ? 'Inbox' : 'To review', icon: Inbox, count: inboxCount },
+    ] },
+    { label: 'Hiring', items: [
+      { to: '/jobs', label: 'Jobs', icon: Briefcase },
+      { to: '/candidates', label: 'Candidates', icon: Users },
+      { to: '/interviews', label: 'Interviews', icon: CalendarDays, count: counts?.scorecards_due },
+      isAgency && { to: '/otterview', label: 'Otterview', icon: AudioLines, recording },
+    ] },
+    { label: isAgency ? 'Agency' : 'Company', items: [
+      { to: '/reports', label: 'Reports', icon: ChartColumn },
+      isAgency && { to: '/clients', label: 'Clients', icon: Building2 },
+      { to: '/settings', label: 'Settings', icon: Settings, count: counts?.pending_accounts },
+    ] },
+  ].map((g) => ({ ...g, items: g.items.filter(Boolean) }));
 
   const sidebar = (
     <div className="flex h-full flex-col bg-brand-950 text-brand-100">
-      <div className="flex items-center gap-2.5 px-4 pt-5 pb-4">
-        <Logo size={30} />
+      <div className="flex items-center gap-3 px-4 pt-5 pb-4">
+        <Logo size={34} />
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-white">{agencyName}</div>
-          <div className="text-xs text-brand-300">Hiring workspace</div>
+          <div className="display line-clamp-2 text-[19px] leading-tight text-white [overflow-wrap:anywhere]" title={agencyName}>{agencyName}</div>
+          <div className="mt-0.5 text-[11px] font-medium tracking-[0.08em] text-brand-300 uppercase">Hiring workspace</div>
         </div>
       </div>
-      <div className="px-3 pb-3"><ScopeSwitcher /></div>
-      <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-1" aria-label="Main">
-        {nav.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            className={({ isActive }) => cx(
-              'flex h-[38px] items-center gap-2.5 rounded-lg px-2.5 text-sm font-medium transition-colors',
-              isActive ? 'bg-white/10 text-white' : 'text-brand-200 hover:bg-white/5 hover:text-white',
-            )}
-          >
-            <item.icon className="size-[18px] opacity-85" />
-            <span className="flex-1">{item.label}</span>
-            {item.count > 0 && <span className="tabular inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gold px-1.5 text-xs font-semibold text-brand-950">{item.count}</span>}
-            {item.recording && <span className="size-2 rounded-full bg-red-500 ring-2 ring-red-500/30" role="img" aria-label="Recording" />}
-          </NavLink>
+      <div className="px-3 pb-2"><ScopeSwitcher /></div>
+      <nav className="flex-1 overflow-y-auto px-3 pb-3" aria-label="Main">
+        {groups.map((g) => (
+          <div key={g.label}>
+            <div className="px-2.5 pt-4 pb-1.5 text-[11px] font-semibold tracking-[0.08em] text-brand-300/80 uppercase">{g.label}</div>
+            <div className="space-y-0.5">
+              {g.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  className={({ isActive }) => cx(
+                    'flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13.5px] font-medium transition-colors',
+                    isActive ? 'bg-white/10 text-white' : 'text-brand-200 hover:bg-white/5 hover:text-white',
+                  )}
+                >
+                  {({ isActive }) => (
+                    <>
+                      <item.icon className={cx('size-[17px]', isActive ? 'text-gold' : 'opacity-70')} />
+                      <span className="flex-1">{item.label}</span>
+                      {item.count > 0 && <span className="tabular inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gold px-1.5 text-xs font-semibold text-brand-950">{item.count}</span>}
+                      {item.recording && <span className="size-2 rounded-full bg-red-500 ring-2 ring-red-500/30" role="img" aria-label="Recording" />}
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
       <div className="flex items-center gap-2.5 border-t border-white/10 px-4 py-3">
