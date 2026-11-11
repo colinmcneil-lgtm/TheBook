@@ -202,13 +202,29 @@ test('the menu’s count: what is waiting on you, in view of the client chosen, 
   assert.deepEqual([(await nav(orla)).reviews, (await nav(orla)).to_review], [1, 1]);
 });
 
+test('one open request for each candidate and person holds across their jobs: the same record on a second job cannot be put to the same person again', async () => {
+  job.ops = ok(await alex.post('/jobs', { client_id: kestrel, title: 'Operations Lead', status: 'open', description: 'A role.' })).id;
+  const onSales = await add({ job_id: job.sales, name: 'Tom Twice', email: 'tom@mail.example' });
+  const onOps = await add({ job_id: job.ops, name: 'Tom Twice', email: 'tom@mail.example' });
+  const [a, b] = [onSales, onOps].map((x) => rows('SELECT candidate_id FROM applications WHERE id = ?', x)[0].candidate_id);
+  assert.equal(a, b, 'one record, on two jobs');
+  const first = ok(await ask(alex, onSales, id.marcus)).id;
+  refused(await ask(priya, onOps, id.marcus), 409, /^Marcus Bell has already been asked to review Tom Twice, on their profile for Head of Sales at Kestrel Logistics, and has not answered yet\.$/);
+  const forOrla = ok(await ask(priya, onOps, id.orla)).id;
+  assert.equal((await nav(marcus)).to_review, 2, 'Nora, and Tom once');
+  // Closed, he can be asked again on either.
+  ok(await alex.post(`/reviews/${first}/cancel`));
+  ok(await priya.post(`/reviews/${ok(await ask(priya, onOps, id.marcus)).id}/cancel`));
+  ok(await priya.post(`/reviews/${forOrla}/cancel`));
+});
+
 // ---------- answering, and the answer coming back ----------
 
 test('only the person asked answers, once, with Good to go or Not a fit and a comment; the answer goes back to whoever asked', async () => {
   const [forIvo] = (await inbox(priya)).waiting;
   refused(await alex.post(`/reviews/${forIvo.id}/answer`, { answer: 'good_to_go' }), 403, /Only the person who was asked can answer/);
   refused(await marcus.post(`/reviews/${forIvo.id}/answer`, { answer: 'good_to_go' }), 403);
-  for (const answer of [undefined, 'yes', 'Good to go', '', 1]) refused(await priya.post(`/reviews/${forIvo.id}/answer`, { answer }), 400, /Choose Good to go or Not a fit/);
+  for (const answer of [undefined, 'yes', 'Good to go', '', 1, ['good_to_go'], { good_to_go: true }]) refused(await priya.post(`/reviews/${forIvo.id}/answer`, { answer }), 400, /Choose Good to go or Not a fit/);
   refused(await priya.post('/reviews/999999/answer', { answer: 'good_to_go' }), 404);
   // Rejecting the candidate does not close the request: Priya can still answer.
   ok(await alex.post(`/applications/${app.ivo}/reject`, { reason: 'Not a match' }));
@@ -224,6 +240,13 @@ test('only the person asked answers, once, with Good to go or Not a fit and a co
   const { answers } = await inbox(alex);
   assert.deepEqual(answers.map((r) => [r.name, r.reviewer_name, r.answer, r.comment, r.can_mark_done]), [['Ivo Interview', 'Priya Nair', 'good_to_go', COMMENT, true]]);
   assert.deepEqual([(await nav(alex)).reviews, (await nav(alex)).to_review], [2, 1]);
+  // The answer follows the client chosen in the menu, in the count as in the Inbox: Ivo is Kestrel's.
+  assert.deepEqual([(await nav(alex, `?client_id=${kestrel}`)).reviews, (await nav(alex, `?client_id=${lumen}`)).reviews], [2, 1]);
+  assert.deepEqual([(await inbox(alex, `?client_id=${kestrel}`)).answers.length, (await inbox(alex, `?client_id=${lumen}`)).answers.length], [1, 0]);
+  // Only whoever asked is offered Done on the profile.
+  for (const [who, can] of [[alex, true], [priya, false], [marcus, false]]) {
+    assert.equal((await reviewsOf(who, app.ivo)).reviews.find((r) => r.id === forIvo.id).can_mark_done, can);
+  }
   // Answered, it can no longer be taken back.
   refused(await alex.post(`/reviews/${forIvo.id}/cancel`), 409, /answered already/);
 });
@@ -262,6 +285,25 @@ test('whoever asked, or an admin, can take a request back; nobody else can', asy
   // Taken back, Orla can be asked again.
   const again = ok(await ask(priya, app.lena, id.orla));
   ok(await priya.post(`/reviews/${again.id}/cancel`));
+});
+
+test('the profile always has every open request and every answer still in somebody’s Inbox, however many closed ones come after', async () => {
+  const hal = await add({ name: 'Hal History', email: 'hal@mail.example' });
+  const open = ok(await ask(alex, hal, id.priya, 'The oldest, and still open')).id;
+  const answered = ok(await ask(alex, hal, id.marcus)).id;
+  ok(await marcus.post(`/reviews/${answered}/answer`, { answer: 'not_a_fit' }));
+  for (let i = 0; i < 21; i += 1) ok(await marcus.post(`/reviews/${ok(await ask(marcus, hal, id.orla)).id}/cancel`));
+  const mine = (await reviewsOf(priya, hal)).reviews;
+  assert.deepEqual(mine.find((r) => r.id === open)?.yours_to_answer, true, 'Priya can answer it on the profile');
+  const forAlex = (await reviewsOf(alex, hal)).reviews;
+  assert.deepEqual([forAlex.find((r) => r.id === open)?.can_cancel, forAlex.find((r) => r.id === answered)?.can_mark_done], [true, true]);
+  assert.equal(forAlex.length, 22, 'the two, and the 20 newest of the rest');
+  assert.deepEqual(forAlex.map((r) => r.id), [...forAlex.map((r) => r.id)].sort((x, y) => y - x), 'newest first');
+  // Once done, the answer is history like the rest, and the 20 newest of those are shown.
+  ok(await alex.post(`/reviews/${answered}/done`));
+  assert.deepEqual((await reviewsOf(alex, hal)).reviews.map((r) => r.id).includes(answered), false);
+  ok(await priya.post(`/reviews/${open}/answer`, { answer: 'good_to_go' }));
+  ok(await alex.post(`/reviews/${open}/done`));
 });
 
 // ---------- somebody who can no longer answer ----------
@@ -358,7 +400,7 @@ test('nothing about a review is written to the tables the live release reads for
 
 // ---------- what happens around a request ----------
 
-test('folding two entries in The Book into one moves the requests with it, dropping an open one that the kept entry already has', async () => {
+test('folding two entries in The Book into one moves the requests with it, taking back an open one that the kept entry already has', async () => {
   const keptId = await add({ name: 'Ruth Merge', email: 'ruth@mail.example' });
   const goingId = await add({ name: 'Ruth Merge', email: 'ruth.other@mail.example' });
   const [kept, going] = [keptId, goingId].map((a) => rows('SELECT candidate_id FROM applications WHERE id = ?', a)[0].candidate_id);
@@ -370,8 +412,12 @@ test('folding two entries in The Book into one moves the requests with it, dropp
 
   ok(await alex.post(`/candidates/${going}/merge`, { into: kept }));
   assert.deepEqual(rows('SELECT id FROM applications WHERE id = ?', goingId), [], 'the other entry is gone');
-  const now = rows('SELECT id, application_id FROM team_reviews WHERE id IN (?, ?, ?, ?) ORDER BY id', onKept, twin, moves, answered);
-  assert.deepEqual(now, [{ id: onKept, application_id: keptId }, { id: moves, application_id: keptId }, { id: answered, application_id: keptId }]);
+  const now = rows('SELECT id, application_id, cancelled_at IS NOT NULL AS cancelled, cancelled_by FROM team_reviews WHERE id IN (?, ?, ?, ?) ORDER BY id', onKept, twin, moves, answered);
+  // The second open one to Priya is taken back, by whoever merged them, and kept in the history so Marcus can see it.
+  assert.deepEqual(now, [{ id: onKept, application_id: keptId, cancelled: 0, cancelled_by: null }, { id: twin, application_id: keptId, cancelled: 1, cancelled_by: id.alex },
+    { id: moves, application_id: keptId, cancelled: 0, cancelled_by: null }, { id: answered, application_id: keptId, cancelled: 0, cancelled_by: null }]);
+  const history = (await reviewsOf(marcus, keptId)).reviews.find((r) => r.id === twin);
+  assert.deepEqual([history.open, history.asked_by_name, history.note, history.cancelled_by_name], [false, 'Marcus Bell', 'The same person asked again, on the other entry', 'Alex Morgan']);
   assert.deepEqual((await inbox(priya)).waiting.filter((r) => r.name === 'Ruth Merge').map((r) => [r.id, r.application_id]), [[onKept, keptId]]);
   assert.deepEqual((await inbox(orla)).waiting.filter((r) => r.name === 'Ruth Merge').map((r) => r.application_id), [keptId]);
   assert.equal(rows('SELECT COUNT(*) AS n FROM team_reviews WHERE application_id NOT IN (SELECT id FROM applications)')[0].n, 0, 'nothing points at nothing');
@@ -387,8 +433,8 @@ test('an entry joined to the application a client’s record has in the job take
   const record = rows('SELECT candidate_id FROM applications WHERE id = ?', there)[0].candidate_id;
   const joined = ok(await alex.post(`/applications/${entry}/add-to-job`, { job_id: job.sales, into: record }));
   assert.deepEqual([joined.id, joined.merged], [there, true]);
-  assert.deepEqual(rows('SELECT id, application_id FROM team_reviews WHERE id IN (?, ?, ?) ORDER BY id', onEntry, twin, onThere),
-    [{ id: onEntry, application_id: there }, { id: onThere, application_id: there }]);
+  assert.deepEqual(rows('SELECT id, application_id, cancelled_by FROM team_reviews WHERE id IN (?, ?, ?) ORDER BY id', onEntry, twin, onThere),
+    [{ id: onEntry, application_id: there, cancelled_by: null }, { id: twin, application_id: there, cancelled_by: id.alex }, { id: onThere, application_id: there, cancelled_by: null }]);
   // Still nothing for Maya, though the application is her company's.
   assert.equal(JSON.stringify(ok(await maya.get(`/applications/${there}`))).includes('Asked while Jo was in The Book'), false);
 

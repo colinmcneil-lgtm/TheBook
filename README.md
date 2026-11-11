@@ -182,7 +182,8 @@ candidate in the app, and put on a job later when the right role comes up.
   anyone else. Nobody is suggested, since there is no job and so no account executive, and the request is in the
   Inbox of whoever is asked whichever client the menu shows. Put on a job, or back in The Book, their requests stay
   with them; when two entries are merged, or an entry is joined to a client's record, the requests go to the one
-  that is kept. See [Asking for a review](#asking-for-a-review).
+  that is kept (a second open request to the same person is cancelled, and shows as cancelled in the history). See
+  [Asking for a review](#asking-for-a-review).
 - **Jobs on our website.** A confidential post (see "Jobs on our website" below) and The Book are kept apart the
   same way a client's careers page and The Book are.
   - *Somebody in The Book who applies through a post, or on a client's careers page,* is answered exactly as anybody
@@ -412,8 +413,8 @@ the agency team can be chosen instead. A client's user, somebody deactivated, so
 waiting and you yourself cannot be. Say what they should look at if you like ("What should they look at?").
 
 - **One at a time for each person.** While somebody has a request about a candidate that they have not answered,
-  asking them again about the same candidate is refused ("Priya Nair has already been asked to review ..."). Asking a
-  second person is fine.
+  asking them again about the same candidate is refused ("Priya Nair has already been asked to review ..."), also
+  from the candidate's profile for another job. Asking a second person is fine.
 - **Where it arrives.** In the Inbox of whoever was asked, under **For your review**, which comes first while it has
   anything in it: the candidate, the job and client (or "Not on a job yet"), who asked, when, and the note, oldest
   first. It follows the client chosen in the menu as the other tabs do, but people in The Book on no job are always
@@ -435,9 +436,8 @@ waiting and you yourself cannot be. Say what they should look at if you like ("W
   nobody can answer their open requests. The profile says so ("Priya Nair can no longer answer; ask somebody else"),
   and whoever asked, or an admin, can cancel the request and ask somebody else. If whoever asked is removed, the
   request stays and can still be answered; the answer then goes to nobody's Inbox.
-- **What happens around it.** Rejecting a candidate, or their withdrawing, leaves their requests open. Deleting a
-  candidate, "Delete all data on this person", removing them from a job (unless they go back to The Book) and deleting
-  the job remove their requests.
+- **What happens around it.** Deleting a candidate, "Delete all data on this person", removing them from a job
+  (unless they go back to The Book) and deleting the job remove their requests.
 - **Clients.** A client's user is never sent anything of this: not the request, the note, the answer, the count, nor
   who was asked. Every route of it answers them "Only the agency team can do this." Everything about a review is
   kept in one table of its own (`team_reviews`), which nothing else reads: no line is added to the candidate's

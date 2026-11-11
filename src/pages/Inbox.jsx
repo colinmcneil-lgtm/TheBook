@@ -17,8 +17,9 @@ export default function Inbox() {
   // What people on the team asked this person to review, and the answers to what they asked. The agency's alone.
   const { data: team, error: teamError } = useApi(isAgency ? url('/reviews', { client_id: scope }) : null);
   const teamCount = team ? team.waiting.length + team.answers.length : 0;
-  // "For your review" comes first when it has anything in it, and is where the Inbox opens then.
-  const tab = params.get('tab') || (isAgency ? (teamCount ? 'reviews' : 'new') : 'review');
+  // "For your review" comes first when it has anything in it, and is where the Inbox opens then. Until the agency's
+  // list has loaded, which tab to open on is not known, so none is shown (rather than one that is then swapped).
+  const tab = params.get('tab') || (isAgency ? (!team && !teamError ? null : teamCount ? 'reviews' : 'new') : 'review');
   const setTab = (t) => { const next = new URLSearchParams(params); next.set('tab', t); setParams(next, { replace: true }); };
   const [busyId, setBusyId] = useState(null);
 
@@ -40,9 +41,9 @@ export default function Inbox() {
     : [{ id: 'review', label: 'Waiting for your review', count: review?.length }, { id: 'new', label: 'New applicants', count: fresh?.length }];
 
   return (
-    <Page title={isAgency ? 'Inbox' : 'To review'} subtitle={isAgency ? 'Every new application across your clients, oldest first.' : 'Candidates your recruiter has put forward, with their write-up.'}>
-      <Tabs tabs={tabs} value={tab} onChange={setTab} className="mb-4" />
-      {tab === 'reviews' && isAgency ? <TeamReviews team={team} error={teamError} /> : !rows ? <Pending error={tab === 'new' ? error : reviewError} /> : rows.length === 0 ? (
+    <Page title={isAgency ? 'Inbox' : 'To review'} subtitle={!isAgency ? 'Candidates your recruiter has put forward, with their write-up.' : tab === 'reviews' ? 'Candidates your team asked you to review, and the answers to what you asked.' : 'Every new application across your clients, oldest first.'}>
+      {tab && <Tabs tabs={tabs} value={tab} onChange={setTab} className="mb-4" />}
+      {!tab ? <Pending /> : tab === 'reviews' && isAgency ? <TeamReviews team={team} error={teamError} onDone={() => !params.get('tab') && setTab('reviews')} /> : !rows ? <Pending error={tab === 'new' ? error : reviewError} /> : rows.length === 0 ? (
         <Card>
           <Empty icon={tab === 'new' ? InboxIcon : Hourglass} title={tab === 'new' ? 'You are all caught up' : 'Nothing waiting for review'}>
             {tab === 'new' ? (isAgency ? 'New applications from your clients’ careers pages and from your own website land here.' : 'New applications land here.') : isAgency ? 'Candidates you submit to a hiring team appear here until they respond.' : 'When your recruiter shortlists someone, they will appear here for your decision.'}
@@ -100,10 +101,11 @@ function JobCell({ r }) {
  * "For your review": candidates somebody on the team asked you to look at, oldest first, and below them the answers
  * to what you asked. "Review" opens the profile, where you answer; opening an answer does not clear it, "Done" does.
  */
-function TeamReviews({ team, error }) {
+function TeamReviews({ team, error, onDone }) {
   const { bump } = useApp();
   const openCandidate = useOpenCandidate();
-  const [done] = useAction(async (r) => { await api.post(`/reviews/${r.id}/done`); bump(); });
+  // Opened on this tab without choosing it, the Inbox stays on it once the last answer is done.
+  const [done] = useAction(async (r) => { await api.post(`/reviews/${r.id}/done`); onDone(); bump(); });
   if (!team) return <Pending error={error} />;
   if (!team.waiting.length && !team.answers.length) {
     return (

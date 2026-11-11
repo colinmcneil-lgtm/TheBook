@@ -18,6 +18,8 @@
 // goes back to The Book keeps their entry, and their requests with it. When an entry is folded into another
 // application (two entries merged, or an entry joined to the application a client's record already has), api.js calls
 // entryFolded() and the requests move with it. Rejecting or withdrawing a candidate leaves their requests open.
+//
+// "One candidate" is one record: somebody on two jobs of a client is put to each person once, on either job's profile.
 import { q, tx, now, getSetting } from './db.js';
 import { notify, appUrl } from './mail.js';
 
@@ -25,18 +27,21 @@ const NOTE_MAX = 1000;
 const ANSWERS = { good_to_go: 'Good to go', not_a_fit: 'Not a fit' };
 /** Asked and not yet answered or taken back. */
 const OPEN = 'r.answered_at IS NULL AND r.cancelled_at IS NULL';
+/** Open, or answered and still in the Inbox of whoever asked: what the profile always shows, outside the short history. */
+const STILL_WAITING = `((${OPEN}) OR (r.answered_at IS NOT NULL AND r.done_at IS NULL))`;
 /** Somebody who can be asked, and who can answer: active on the agency team. */
 const ON_TEAM = `u.role != 'client' AND u.active = 1 AND u.pending = 0`;
 const onTeam = (userId) => Boolean(userId && q.get(`SELECT 1 AS x FROM users u WHERE u.id = ? AND ${ON_TEAM}`, userId));
 
 /**
  * Two applications became one and `goingId` is about to be deleted (inside the caller's transaction): every request
- * about it moves to `keptId`. An open request to somebody who also has one open about `keptId` is dropped, since one
- * person is asked about one candidate once at a time; the one that was already there stays.
+ * about it moves to `keptId`. An open request to somebody who also has one open about `keptId` is taken back, by
+ * `userId` (whoever folded them), since one person is asked about one candidate once at a time; the one that was
+ * already there stays. Taken back rather than deleted, so whoever asked it sees in the history that it was closed.
  */
-export function entryFolded(goingId, keptId) {
-  q.run(`DELETE FROM team_reviews AS r WHERE r.application_id = ? AND ${OPEN}
-         AND r.reviewer_id IN (SELECT k.reviewer_id FROM team_reviews k WHERE k.application_id = ? AND k.answered_at IS NULL AND k.cancelled_at IS NULL)`, goingId, keptId);
+export function entryFolded(goingId, keptId, userId) {
+  q.run(`UPDATE team_reviews AS r SET cancelled_at = ?, cancelled_by = ? WHERE r.application_id = ? AND ${OPEN}
+         AND r.reviewer_id IN (SELECT k.reviewer_id FROM team_reviews k WHERE k.application_id = ? AND k.answered_at IS NULL AND k.cancelled_at IS NULL)`, now(), userId ?? null, goingId, keptId);
   q.run('UPDATE team_reviews SET application_id = ? WHERE application_id = ?', keptId, goingId);
 }
 
@@ -96,6 +101,7 @@ function tellReviewer({ reviewer, asker, app, note }) {
   const link = appUrl() ? `${appUrl()}/inbox?tab=reviews&c=${app.id}` : null;
   const job = app.job_id ? `${app.job_title} at ${app.client_name}` : 'Not on a job yet';
   const agency = getSetting('agency_name', 'The Book');
+  // notify() never fails: it logs a failure itself ("Notification email failed") and resolves false.
   notify({
     to: reviewer.email,
     subject: `${asker.name} asked you to review a candidate`,
@@ -103,7 +109,7 @@ function tellReviewer({ reviewer, asker, app, note }) {
       `Candidate: ${app.candidate_name}\nJob: ${job}\n${note ? `What to look at: ${note}\n` : ''}\n` +
       `${link ? `Open their profile: ${link}` : 'You will find them in your Inbox, under For your review.'}\n\n` +
       `Answer "Good to go" or "Not a fit" at the top of their profile, and ${asker.name} is told.\n\n${agency}\n`,
-  }).catch((err) => console.error('The review request e-mail could not be sent:', err));
+  });
 }
 
 // ---------- routes ----------
@@ -116,15 +122,18 @@ export function registerReviews(api, { agencyOnly, bad, text, int, loadApp, scop
   };
   const people = (userId) => q.all(`SELECT u.id, u.name FROM users u WHERE ${ON_TEAM} AND u.id != ? ORDER BY u.name, u.id`, userId);
 
-  // A candidate's requests, newest first, for their profile: the open ones and a short history of the rest. With them,
-  // who can be asked, and who is suggested: the job's account executive, when there is one and it is not you.
+  // A candidate's requests, newest first, for their profile: every open one, every answer still in the Inbox of whoever
+  // asked, and a short history of the rest (the 20 newest). With them, who can be asked, and who is suggested: the
+  // job's account executive, when there is one and it is not you.
   api.get('/applications/:id/reviews', agencyOnly, (req, res) => {
     const a = loadApp(req.params.id, req.user);
     const app = about(a.id);
     const choices = people(req.user.id);
     const suggested = choices.some((p) => p.id === app.account_executive_id) ? app.account_executive_id : null;
     res.json({
-      reviews: q.all(`${SELECT} WHERE r.application_id = ? ORDER BY r.created_at DESC, r.id DESC LIMIT 20`, a.id).map((r) => shown(r, req.user)),
+      reviews: q.all(`${SELECT} WHERE r.application_id = ? AND (${STILL_WAITING} OR r.id IN (
+          SELECT r.id FROM team_reviews r WHERE r.application_id = ? AND NOT ${STILL_WAITING} ORDER BY r.created_at DESC, r.id DESC LIMIT 20))
+        ORDER BY r.created_at DESC, r.id DESC`, a.id, a.id).map((r) => shown(r, req.user)),
       people: choices,
       suggested,
     });
@@ -141,8 +150,15 @@ export function registerReviews(api, { agencyOnly, bad, text, int, loadApp, scop
     const reviewer = q.get('SELECT id, name, email FROM users WHERE id = ?', reviewerId);
     const app = about(a.id);
     const id = tx(() => {
-      if (q.get(`SELECT 1 AS x FROM team_reviews r WHERE r.application_id = ? AND r.reviewer_id = ? AND ${OPEN}`, a.id, reviewerId)) {
-        bad(`${reviewer.name} has already been asked to review ${app.candidate_name} and has not answered yet.`, 409);
+      // About this profile, or about the same person on another job of theirs.
+      const already = q.get(
+        `SELECT r.application_id, j.title AS job_title, cl.name AS client_name FROM team_reviews r JOIN applications o ON o.id = r.application_id
+         LEFT JOIN jobs j ON j.id = o.job_id LEFT JOIN clients cl ON cl.id = j.client_id
+         WHERE r.reviewer_id = ? AND ${OPEN} AND (r.application_id = ? OR o.candidate_id = (SELECT candidate_id FROM applications WHERE id = ?))
+         ORDER BY r.application_id = ? DESC LIMIT 1`, reviewerId, a.id, a.id, a.id);
+      if (already) {
+        const where = already.application_id === a.id ? '' : already.job_title ? `, on their profile for ${already.job_title} at ${already.client_name},` : ', on their entry in The Book,';
+        bad(`${reviewer.name} has already been asked to review ${app.candidate_name}${where} and has not answered yet.`, 409);
       }
       return q.insert('INSERT INTO team_reviews (application_id, asked_by, reviewer_id, note, created_at) VALUES (?, ?, ?, ?, ?)', a.id, req.user.id, reviewerId, note, now());
     });
@@ -177,7 +193,7 @@ export function registerReviews(api, { agencyOnly, bad, text, int, loadApp, scop
     if (r.reviewer_id !== req.user.id) bad('Only the person who was asked can answer this.', 403);
     if (r.cancelled_at) bad('This request was taken back, so there is nothing to answer.', 409);
     if (r.answered_at) bad('You have already answered this.', 409);
-    if (!Object.hasOwn(ANSWERS, b.answer)) bad('Choose Good to go or Not a fit.');
+    if (typeof b.answer !== 'string' || !Object.hasOwn(ANSWERS, b.answer)) bad('Choose Good to go or Not a fit.');
     const done = q.run(`UPDATE team_reviews AS r SET answer = ?, comment = ?, answered_at = ? WHERE r.id = ? AND ${OPEN}`, b.answer, text(b.comment, NOTE_MAX), now(), r.id).changes;
     if (!done) bad('This request is no longer open.', 409);
     res.json({ ok: true });
@@ -203,5 +219,3 @@ export function registerReviews(api, { agencyOnly, bad, text, int, loadApp, scop
     res.json({ ok: true });
   });
 }
-
-export { ANSWERS };

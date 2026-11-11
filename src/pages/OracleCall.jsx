@@ -80,7 +80,7 @@ function CandidateCard({ data, onPatch, onAttach }) {
     await onPatch({ application_id: null });
   });
   const changeWho = (
-    <Menu trigger={<Button aria-label="Change who this call is with" icon={Ellipsis} className="!px-2.5" />}
+    <Menu trigger={<Button aria-label="More for this call" icon={Ellipsis} className="!px-2.5" />}
       items={[
         // Not drawn at all when the call is on nobody's job: a null item would be drawn as a divider.
         Boolean(application) && { label: 'Ask for AE review', icon: UserCheck, onClick: () => setAsking(true) },

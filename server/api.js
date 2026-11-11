@@ -2021,7 +2021,7 @@ function foldEntry(going, kept, userId) {
   const spare = carryResume(going, kept, userId);
   q.run('UPDATE applications SET cover_note = COALESCE(cover_note, ?), owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', going.cover_note, going.owner_id, now(), kept.id);
   board.entryFolded(going.id, kept.id); // what the board had noted about a post they once applied through stays set aside, on the entry that is kept
-  reviews.entryFolded(going.id, kept.id); // anybody asked to review them is asked about the entry that is kept
+  reviews.entryFolded(going.id, kept.id, userId); // anybody asked to review them is asked about the entry that is kept
   q.run('DELETE FROM applications WHERE id = ?', going.id);
   foldedInto(going.id, kept.id); // a message still on its way to them is recorded there
   return spare;
@@ -2130,7 +2130,7 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
   if (entry.cover_note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', there.id, user.id, `Saved with their entry in The Book: ${entry.cover_note}`, now());
   q.run('UPDATE applications SET owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', entry.owner_id, now(), there.id);
   board.entryFolded(entry.id, there.id); // what the board had set aside for the entry is kept with the application it is folded into
-  reviews.entryFolded(entry.id, there.id); // and so are the requests for somebody on the team to review them, which only the agency reads
+  reviews.entryFolded(entry.id, there.id, user.id); // and so are the requests for somebody on the team to review them, which only the agency reads
   q.run('DELETE FROM applications WHERE id = ?', entry.id);
   foldedInto(entry.id, there.id); // a message still on its way to them is recorded there, for the agency
   const left = absorbRecord(person, into);

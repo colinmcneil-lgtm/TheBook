@@ -8,9 +8,16 @@ import { Badge, Button, Card, Field, Loading, Modal, Select, Textarea, useAction
 // (a banner for whoever is asked, a quieter line for everybody else), and the profile's short history of them.
 // The agency's alone: none of this is asked for, or drawn, for a client's user.
 
-export const ANSWER_LABELS = { good_to_go: 'Good to go', not_a_fit: 'Not a fit' };
+const ANSWER_LABELS = { good_to_go: 'Good to go', not_a_fit: 'Not a fit' };
 export const AnswerBadge = ({ answer }) => <Badge tone={answer === 'good_to_go' ? 'green' : 'red'} icon={answer === 'good_to_go' ? Check : X}>{ANSWER_LABELS[answer]}</Badge>;
 const possessive = (name) => `${name}’s`;
+/**
+ * Runs a request; when the server refuses it because things moved on (the request was taken back or answered, or
+ * somebody was asked a moment ago), what the screens show is reloaded as well, so no stale button is left up.
+ */
+const reloadingOnConflict = async (bump, run) => {
+  try { return await run(); } catch (err) { if (err.status === 409) bump(); throw err; }
+};
 
 /**
  * "Ask for AE review": who (the job's account executive to begin with, when there is one and it is not you), and what
@@ -25,8 +32,13 @@ export function AskReviewModal({ applicationId, candidateName, jobLine, onClose 
   // Whoever has a request about this candidate that they have not answered yet cannot be asked again until they do.
   const waitingOn = new Set((data?.reviews || []).filter((r) => r.open).map((r) => r.reviewer_id));
   const who = chosen ?? (data?.suggested && !waitingOn.has(data.suggested) ? String(data.suggested) : '');
+  /** "Priya Nair (account executive, already asked)" */
+  const optionLabel = (p) => {
+    const marks = [p.id === data.suggested && 'account executive', waitingOn.has(p.id) && 'already asked'].filter(Boolean);
+    return marks.length ? `${p.name} (${marks.join(', ')})` : p.name;
+  };
   const [ask, busy] = useAction(async () => {
-    await api.post(`/applications/${applicationId}/reviews`, { reviewer_id: Number(who), note });
+    await reloadingOnConflict(bump, () => api.post(`/applications/${applicationId}/reviews`, { reviewer_id: Number(who), note }));
     const person = data.people.find((p) => p.id === Number(who));
     toast(`Asked ${firstName(person?.name)} to review ${firstName(candidateName)}`);
     bump();
@@ -43,7 +55,7 @@ export function AskReviewModal({ applicationId, candidateName, jobLine, onClose 
               <option value="">Choose somebody…</option>
               {data.people.map((p) => (
                 <option key={p.id} value={p.id} disabled={waitingOn.has(p.id)}>
-                  {p.name}{p.id === data.suggested ? ' (account executive)' : ''}{waitingOn.has(p.id) ? ' (already asked)' : ''}
+                  {optionLabel(p)}
                 </option>
               ))}
             </Select>
@@ -64,7 +76,7 @@ function AnswerBanner({ review: r, candidateName }) {
   const toast = useToast();
   const [comment, setComment] = useState('');
   const [answer, busy] = useAction(async (choice) => {
-    await api.post(`/reviews/${r.id}/answer`, { answer: choice, comment });
+    await reloadingOnConflict(bump, () => api.post(`/reviews/${r.id}/answer`, { answer: choice, comment }));
     toast(`${ANSWER_LABELS[choice]}: ${firstName(r.asked_by_name) || 'they'} will see your answer`);
     bump();
   });
@@ -99,8 +111,8 @@ function AnswerBanner({ review: r, candidateName }) {
 /** A quieter line for everybody else in the agency: who is being waited on, or the answer that came back to you. */
 function ReviewLine({ review: r }) {
   const { bump, user } = useApp();
-  const [cancel, cancelling] = useAction(async () => { await api.post(`/reviews/${r.id}/cancel`); bump(); });
-  const [done, finishing] = useAction(async () => { await api.post(`/reviews/${r.id}/done`); bump(); });
+  const [cancel, cancelling] = useAction(async () => { await reloadingOnConflict(bump, () => api.post(`/reviews/${r.id}/cancel`)); bump(); });
+  const [done, finishing] = useAction(async () => { await reloadingOnConflict(bump, () => api.post(`/reviews/${r.id}/done`)); bump(); });
   const asker = r.asked_by === user.id ? 'you' : r.asked_by_name || 'somebody no longer on your team';
   const reviewer = r.reviewer_name || 'The person asked';
   const stuck = r.open && !r.reviewer_can_answer;
@@ -115,9 +127,9 @@ function ReviewLine({ review: r }) {
               ? <><span className="font-medium">{r.reviewer_name ? `${r.reviewer_name} can no longer answer` : 'The person asked is no longer on your team and cannot answer'}; ask somebody else.</span> Asked by {asker} {agoInWords(r.created_at)}.</>
               : <>Waiting on {r.reviewer_name ? possessive(r.reviewer_name) : 'their'} review, asked by {asker} {agoInWords(r.created_at)}.</>
           ) : (
-            <><span className="font-medium text-stone-900">{reviewer}:</span> {ANSWER_LABELS[r.answer]}{r.comment ? <>. <span className="text-stone-600">“{r.comment}”</span></> : '.'}</>
+            <><span className="font-medium text-stone-900">{reviewer}:</span> {ANSWER_LABELS[r.answer]}{r.comment ? <>. <span className="whitespace-pre-line text-stone-600 [overflow-wrap:anywhere]">“{r.comment}”</span></> : '.'}</>
           )}
-          {r.open && r.note && <span className="mt-0.5 block text-[13px] text-stone-500 [overflow-wrap:anywhere]">“{r.note}”</span>}
+          {r.open && r.note && <span className="mt-0.5 block text-[13px] whitespace-pre-line text-stone-500 [overflow-wrap:anywhere]">“{r.note}”</span>}
         </span>
       </span>
       {r.can_cancel && <Button size="sm" busy={cancelling} onClick={cancel}>Cancel request</Button>}
@@ -156,10 +168,10 @@ export function ReviewHistory({ reviews }) {
             <div className="text-xs text-stone-500">
               {fmtDate(r.created_at)}
               {r.answered_at && ` · answered ${fmtDate(r.answered_at)}`}
-              {r.cancelled_at && ` · cancelled${r.cancelled_by_name ? ` by ${r.cancelled_by_name}` : ''} ${fmtDate(r.cancelled_at)}`}
+              {r.cancelled_at && ` · cancelled${r.cancelled_by_name ? ` by ${r.cancelled_by_name} on` : ''} ${fmtDate(r.cancelled_at)}`}
             </div>
-            {r.note && <p className="text-stone-600 [overflow-wrap:anywhere]">“{r.note}”</p>}
-            {r.comment && <p className="text-stone-800 [overflow-wrap:anywhere]"><span className="text-stone-500">{firstName(r.reviewer_name) || 'Answer'}:</span> {r.comment}</p>}
+            {r.note && <p className="whitespace-pre-line text-stone-600 [overflow-wrap:anywhere]">“{r.note}”</p>}
+            {r.comment && <p className="whitespace-pre-line text-stone-800 [overflow-wrap:anywhere]"><span className="text-stone-500">{firstName(r.reviewer_name) || 'Answer'}:</span> {r.comment}</p>}
           </li>
         ))}
       </ul>
