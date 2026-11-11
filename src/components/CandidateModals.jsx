@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { FileUp, LoaderCircle, TriangleAlert } from 'lucide-react';
 import { api, url, firstName, sameName, watchForUpdate, renderTemplate, toLocalInput, fmtDateTime, jobLine, profilePath, INTERVIEW_KINDS, JOB_STATUS, RECOMMENDATIONS, REJECT_REASONS, SOURCES , photoUrl, squarePhoto } from '../lib.js';
 import { useApp, useApi, useOpenCandidate } from '../state.jsx';
-import { Button, Checkbox, Field, Input, Modal, Select, Textarea, Avatar, UpdateNotice, useAction, useToast, cx } from '../ui.jsx';
+import { Button, Checkbox, Field, Input, Modal, Select, Textarea, Avatar, UpdateNotice, useAction, useToast, useClearToasts, cx } from '../ui.jsx';
 
 const useForm = (initial) => {
   const [form, setForm] = useState(initial);
@@ -435,9 +435,12 @@ function sameDetail(key, a, b) {
  * the file and saves the ticked details together (PUT /applications/:id/resume). Agency only. `more` says that other
  * files were dropped with this one and left out.
  */
-export function AttachResumeModal({ data, file, more = false, onClose, onAttached }) {
+export function AttachResumeModal({ data, file, more = false, again = false, onClose, onAttached }) {
   const { bump } = useApp();
   const toast = useToast();
+  // A toast left from the résumé attached a moment ago would sit over this dialog's buttons on a phone.
+  const clearToasts = useClearToasts();
+  useEffect(() => { clearToasts(); }, []);
   const { application: app, candidate, client } = data;
   const first = firstName(candidate.name);
   const [read, setRead] = useState(null); // what readResume found: { fields, status, nameFromFile, roleCurrent }
@@ -503,13 +506,14 @@ export function AttachResumeModal({ data, file, more = false, onClose, onAttache
       : `Résumé attached${n ? ` and ${details}` : ''}`);
     bump();
     onClose();
-    onAttached?.();
+    onAttached?.(answer);
   });
   const label = `${otherName ? 'Attach anyway' : 'Attach'}${chosen.length ? ` and fill in ${chosen.length === 1 ? '1 detail' : `${chosen.length} details`}` : otherName ? '' : ' résumé'}`;
   const close = busy ? () => {} : onClose;
   return (
     <Modal title={replacing && compared && !sameFile ? 'Replace the résumé' : 'Attach a résumé'} onClose={close} onSubmit={save}
-      subtitle={<>{candidate.name} · {file.name}{more && <span className="mt-1 block text-[13px] text-stone-600" role="status">One résumé at a time: {file.name} was taken.</span>}</>}
+      subtitle={<>{candidate.name} · {file.name}{more && <span className="mt-1 block text-[13px] text-stone-600" role="status">One résumé at a time: {file.name} was taken.</span>}
+        {again && <span className="mt-1 block text-[13px] text-stone-600" role="status">One résumé at a time. Cancel this one first to attach another.</span>}</>}
       footer={<><Button onClick={close} disabled={busy}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={!read || !compared}>{busy ? 'Attaching…' : label}</Button></>}>
       {!read ? (
         <p className="flex items-center gap-2 text-sm text-stone-600" role="status"><LoaderCircle className="size-4 animate-spin" />Reading the résumé…</p>
@@ -783,7 +787,7 @@ const NO_JOB_YET = 'none'; // the Job choice that saves someone to The Book with
  * dialog is not opened from a job. Dropping a résumé in fills the form from it. `initialFile` is a résumé dropped on
  * the page before the dialog was open, taken as if it had been dropped in here.
  */
-export function AddCandidateModal({ jobId, onClose, onAdded, initialFile }) {
+export function AddCandidateModal({ jobId, onClose, onAdded, initialFile, initialMore = false }) {
   const { bump, scope } = useApp();
   const toast = useToast();
   const { data: jobs } = useApi(jobId ? null : url('/jobs', { client_id: scope }));
@@ -889,7 +893,10 @@ export function AddCandidateModal({ jobId, onClose, onAdded, initialFile }) {
     onAdded?.(added.id);
   });
   return (
-    <Modal title="Add candidate" subtitle="For people you have sourced, referrals, or applicants who came in another way." onClose={onClose} onSubmit={save}
+    <Modal title="Add candidate" onClose={onClose} onSubmit={save}
+      subtitle={<>For people you have sourced, referrals, or applicants who came in another way.{initialMore && file === initialFile && (
+        // Several files were dropped on the page that opened this dialog: said here, where a toast would cover the buttons.
+        <span className="mt-1 block text-[13px] text-stone-600" role="status">One résumé at a time: {file.name} was taken.</span>)}</>}
       footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>{toBook ? 'Add to The Book' : 'Add candidate'}</Button></>}>
       <label
         onDragOver={(e) => { e.preventDefault(); setOver(true); }}

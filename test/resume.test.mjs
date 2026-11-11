@@ -1462,6 +1462,13 @@ test('a current title and company are only marked as current when the dates of t
   // Oldest first: the job that runs to the present is the one taken, and it is current.
   assert.deepEqual(notes(`${head}Analyst, First Co\n2012 - 2016\nCustomer Success Manager, Example Co, 2016 - Present`), ['Customer Success Manager', 'Example Co', true]);
   assert.deepEqual(notes(`${head}Analyst, First Co\n2012 - 2016\nCustomer Success Manager, Example Co\n2016 - Present`)[2], false);
+  // Every dated line of the entry must run to the present, not only one of them.
+  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\n2021 - Present\n2016 - 2019`), ['Customer Success Manager', 'Example Co', false]);
+  // Dates on a line that brings a job title of its own are that job's: the title above, with no dates, is not current.
+  assert.deepEqual(notes(`${head}Warehouse Assistant, Beta Shipping Ltd\nSenior Logistics Planner, Harbour Freight Ltd, 2021 – Present`), ['Warehouse Assistant', 'Beta Shipping Ltd', false]);
+  assert.deepEqual(notes(`${head}Senior Logistics Planner\nHarbour Freight Ltd\nVolunteer Driver, Cardiff Food Bank, 2022 – Present`), ['Senior Logistics Planner', 'Harbour Freight Ltd', false]);
+  // The employer on the dated line, under the title, is still the same job.
+  assert.deepEqual(notes(`${head}Senior Logistics Planner\nHarbour Freight Ltd, 2021 – Present`), ['Senior Logistics Planner', 'Harbour Freight Ltd', true]);
   // A headline under the name has no dates, so it is not marked as current.
   assert.deepEqual(notes('Jordan Example\nSenior Product Designer at Juniper Row\njordan@example.com'), ['Senior Product Designer', 'Juniper Row', false]);
 });

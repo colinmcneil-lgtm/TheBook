@@ -28,7 +28,7 @@ export default function Candidates() {
   const [query, setQuery] = useState((params.get('q') || '').trim());
   const [adding, setAdding] = useState(isAgency && params.get('new') === '1');
   const [dropped, setDropped] = useState(null); // a résumé dropped on the page, which the Add candidate dialog opens with
-  const over = useDroppedResume(isAgency && !adding && !params.get('c'), (file) => { setDropped(file); setAdding(true); });
+  const over = useDroppedResume(isAgency && !adding && !params.get('c'), (file, more) => { setDropped({ file, more }); setAdding(true); });
   useEffect(() => { const t = setTimeout(() => setQuery(text.trim()), 250); return () => clearTimeout(t); }, [text]);
   // Changing client keeps the "Not on a job yet" tab open: those people belong to no client, so it still means the same.
   useEffect(() => setJobId(''), [scope]);
@@ -93,7 +93,7 @@ export default function Candidates() {
       {noJob && <p className="mb-4 text-sm text-stone-500">People you have saved to The Book without a job. Open one to add them to a job. Only your agency sees them.</p>}
       {query && <p className="mb-3 text-[13px] text-stone-500" role="status">Showing people matching “{query}”{status === 'all' ? ', whatever stage they reached' : ''}.</p>}
       {rows ? <ApplicationsTable rows={rows} empty={noJob && !query && !owner ? 'Nobody is in The Book without a job. Use “Add candidate” or the browser extension and choose “No job yet”. If your extension has no such choice, download it again from Settings, Browser extension.' : undefined} /> : <Pending error={error} />}
-      {adding && <AddCandidateModal initialFile={dropped} onClose={() => { setAdding(false); setDropped(null); }} onAdded={openCandidate} />}
+      {adding && <AddCandidateModal initialFile={dropped?.file} initialMore={dropped?.more} onClose={() => { setAdding(false); setDropped(null); }} onAdded={openCandidate} />}
       {over && (
         <div className="pointer-events-none fixed inset-3 z-40 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-brand-500 bg-brand-50 px-6 text-center" role="status">
           <span className="flex size-12 items-center justify-center rounded-xl bg-white text-brand-700 ring-1 ring-brand-200"><FileUp className="size-6" /></span>
@@ -133,8 +133,7 @@ function useDroppedResume(on, take) {
       if (!file) return;
       const refusal = resumeRefusal(file, 'add the candidate without a résumé');
       if (refusal) return toast(refusal, 'error');
-      if (more) toast(`One résumé at a time: ${file.name} was taken.`);
-      latest.current.take(file);
+      latest.current.take(file, more); // the dialog says when other files were left out
     };
     window.addEventListener('dragenter', enter);
     window.addEventListener('dragleave', leave);

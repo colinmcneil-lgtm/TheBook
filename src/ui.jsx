@@ -7,6 +7,9 @@ export { cx };
 // ---------- toast ----------
 const ToastContext = createContext(() => {});
 export const useToast = () => useContext(ToastContext);
+const ClearToastsContext = createContext(() => {});
+/** Takes every toast off the screen at once: for a dialog that opens where they would cover its buttons. */
+export const useClearToasts = () => useContext(ClearToastsContext);
 
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
@@ -15,9 +18,10 @@ export function ToastProvider({ children }) {
     setToasts((t) => [...t, { id, message, kind }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 6000 : 3200);
   };
+  const clear = () => setToasts([]);
   return (
     <ToastContext.Provider value={push}>
-      {children}
+      <ClearToastsContext.Provider value={clear}>{children}</ClearToastsContext.Provider>
       <div className="no-print fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-2" role="status" aria-live="polite">
         {toasts.map((t) => (
           <div key={t.id} className={cx('animate-pop-in max-w-sm rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-lg', t.kind === 'error' ? 'bg-red-700' : 'bg-stone-900')}>

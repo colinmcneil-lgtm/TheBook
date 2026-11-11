@@ -2236,15 +2236,25 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
  * on the client's record it is on. Such a file is, or may be, one they sent that client, so it is kept under Earlier
  * résumés instead (see returnToBook), where only the agency sees it and nothing is lost.
  *
+ * One file on another application does not count: the copy of this application's own résumé that went with them
+ * when the agency added them to another of the client's jobs after this one (an application the agency made, holding
+ * the very file this one has on file). Otherwise the agency's own résumé would come off somebody it found as soon as
+ * it put them on two of a client's jobs.
+ *
  * Answers a test for one file: true when it is such a copy. `row` is the earlier résumé being tested, which is not
  * compared with itself. A file that cannot be read matches nothing. Call it before anything is moved.
  */
 function clientsCopy(a) {
+  const onFile = uploadHash(a.resume_file);
+  const others = q.all(`SELECT resume_file, applied_at, consent_at, source FROM applications WHERE candidate_id = ?1 AND id != ?2 AND resume_file IS NOT NULL
+      UNION ALL SELECT r.resume_file, o.applied_at, o.consent_at, o.source FROM earlier_resumes r JOIN applications o ON o.id = r.application_id WHERE o.candidate_id = ?1 AND o.id != ?2`, a.candidate_id, a.id)
+    .map((o) => ({ id: null, hash: uploadHash(o.resume_file), own: ownApplication(o), after: o.applied_at >= a.applied_at }));
+  // (When an application they made has that file too, its own row still counts: own applications are never left out.)
+  const tookWithThem = (o) => !o.own && o.after && o.hash === onFile;
   const files = [
-    ...q.all('SELECT id, resume_file FROM earlier_resumes WHERE application_id = ?', a.id),
-    ...q.all(`SELECT NULL AS id, resume_file FROM applications WHERE candidate_id = ?1 AND id != ?2 AND resume_file IS NOT NULL
-      UNION ALL SELECT NULL, r.resume_file FROM earlier_resumes r JOIN applications o ON o.id = r.application_id WHERE o.candidate_id = ?1 AND o.id != ?2`, a.candidate_id, a.id),
-  ].map((r) => ({ id: r.id, hash: uploadHash(r.resume_file) })).filter((r) => r.hash);
+    ...q.all('SELECT id, resume_file FROM earlier_resumes WHERE application_id = ?', a.id).map((r) => ({ id: r.id, hash: uploadHash(r.resume_file) })),
+    ...others.filter((o) => !tookWithThem(o)),
+  ].filter((r) => r.hash);
   return (file, row = null) => {
     const hash = uploadHash(file);
     return Boolean(hash) && files.some((r) => r.hash === hash && (row === null || r.id !== row));
@@ -2342,6 +2352,8 @@ function returnToBook(a, user, said, made) {
     if (back) q.run('DELETE FROM earlier_resumes WHERE id = ?', back.id);
   }
   q.run('UPDATE earlier_resumes SET kept_by = ? WHERE application_id = ? AND kept_by IS NULL', user.id, a.id); // nothing stays set aside in The Book
+  // Folded into another entry of theirs (below), that entry's résumé is the one on the profile: it is held to the same test.
+  const twinsCopy = clientsCopy({ ...a, ...q.get('SELECT resume_file FROM applications WHERE id = ?', a.id) });
   q.run(
     `UPDATE applications SET job_id = NULL, stage_id = NULL, status = 'active', rating = NULL, reject_reason = NULL, review_status = NULL, submission_note = NULL,
        review_note = NULL, submitted_by = NULL, reviewed_by = NULL, reviewed_at = NULL, hired_at = NULL, general_until = NULL,
@@ -2363,7 +2375,12 @@ function returnToBook(a, user, said, made) {
   const copyPhoto = () => { const copy = copyUpload(person.photo_file); if (copy) made.push(copy); return copy; };
   if (twin) {
     const theirs = q.get('SELECT * FROM applications WHERE candidate_id = ? AND job_id IS NULL', twin.id);
-    if (theirs) spare.push(foldEntry(q.get('SELECT * FROM applications WHERE id = ?', a.id), theirs, user.id));
+    if (theirs?.resume_file && twinsCopy(theirs.resume_file)) {
+      // Kept with the others under Earlier résumés (once); the entry then takes the résumé this application has, if any.
+      q.run('UPDATE applications SET resume_file = NULL, resume_name = NULL WHERE id = ?', theirs.id);
+      spare.push(...setAside({ ...theirs, id: a.id }, t, user.id));
+    }
+    if (theirs) spare.push(foldEntry(q.get('SELECT * FROM applications WHERE id = ?', a.id), q.get('SELECT * FROM applications WHERE id = ?', theirs.id), user.id));
     else q.run('UPDATE applications SET candidate_id = ? WHERE id = ?', twin.id, a.id);
     if (elsewhere) {
       moveEntryCallsToRecord(theirs?.id ?? a.id, twin.id);

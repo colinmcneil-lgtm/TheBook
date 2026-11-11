@@ -160,9 +160,12 @@ candidate in the app, and put on a job later when the right role comes up.
   copy under Earlier résumés instead of on the profile: an application they made themselves without a résumé,
   which had been using the entry's. Last, the file that would be on the profile in The Book is compared, byte for
   byte, with the earlier résumés of the application it leaves and with every résumé, on file or earlier, of their
-  other applications on that client's record. If it is the same file as any of them it is kept under Earlier résumés
-  as well (once), and the entry goes back without a résumé. So a copy of what they sent the client, put on the
-  profile again on another of that client's jobs, does not reach the next one.
+  other applications on that client's record. Only one file there is left out: the copy of the résumé on their
+  profile that went with them when the agency added them to another of that client's jobs afterwards. If it is the
+  same file as any of the others it is kept under Earlier résumés as well (once), and the entry goes back without a
+  résumé. When they are folded into another entry of theirs in The Book, that entry's résumé is held to the same
+  test. So a copy of what they sent the client, put on the profile again on another of that client's jobs, does not
+  reach the next one, and somebody the agency found keeps the agency's résumé after being on two of a client's jobs.
 - **What a hiring team could still work out.** Nothing from before the job is shown, but two things are as they
   are because the entry is kept and not copied: its history line reads "Added to (job) at (stage)", where somebody
   added straight to a job has "Added to the pipeline (...)" (the same line as for anyone added to a second job at

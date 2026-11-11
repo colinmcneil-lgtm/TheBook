@@ -738,6 +738,8 @@ function firstRole(lines, heading) {
       // A job has one set of dates. A second line that carries dates, or a third line once the dates have gone by,
       // belongs to the job before: its title must not be taken for this one's.
       if (dated ? datedLine : dates && entry.length >= 2) break;
+      // Nor are dates on a line that brings a title of its own, once the entry has one: they are the next job's.
+      if (dated && found.some((p) => p.kind === 'title') && entry.flat().some((p) => p.kind === 'title')) break;
       entry.push(found.map((p) => ({ ...p, row: i })));
       datedLine ||= dated;
     }

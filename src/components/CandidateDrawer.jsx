@@ -104,12 +104,17 @@ function CandidateView({ data, onClose }) {
 
   // A résumé file dropped anywhere on the open profile, or chosen on it, is attached through a dialog that shows what
   // it would fill in (agency only); when several are dropped at once, the dialog says which one was taken. While another
-  // dialog is open a file dropped here is not taken (and a toast says so), and one dropped just outside the profile is
+  // dialog is open a file dropped here is not taken (and that dialog, or a toast, says so), and one dropped just outside the profile is
   // not opened by the browser either.
   useNoStrayDrops();
   const [over, setOver] = useState(false);
   const canDrop = isAgency && !modal;
   useEffect(() => { if (!canDrop) setOver(false); }, [canDrop]);
+  // Once a résumé is attached the Résumé tab is opened, but only when the profile shows the new file: before that, the
+  // viewer would show the new file under the old one's name.
+  const [attachedOver, setAttachedOver] = useState(); // the résumé that was on file when another was attached
+  const showAttached = (answer) => (answer?.resume === 'unchanged' ? setTab('resume') : setAttachedOver({ file: app.resume_file }));
+  useEffect(() => { if (attachedOver && app.resume_file && app.resume_file !== attachedOver.file) { setAttachedOver(undefined); setTab('resume'); } }, [app.resume_file, attachedOver]);
   const takeResume = (file, more = false) => {
     if (!file) return;
     const refusal = resumeRefusal(file);
@@ -124,7 +129,13 @@ function CandidateView({ data, onClose }) {
   } : isAgency ? {
     // A dialog is open on the profile: the file is not taken, and the person is told why nothing happened.
     onDragOver: (e) => { if (!e.defaultPrevented && carriesFiles(e)) e.preventDefault(); },
-    onDrop: (e) => { if (e.defaultPrevented || !carriesFiles(e)) return; e.preventDefault(); toast(modal?.attach ? 'One résumé at a time. Cancel this one first to attach another.' : 'Close this dialog first to attach a résumé.'); },
+    // The attach dialog says so itself, where a toast would cover its buttons on a phone.
+    onDrop: (e) => {
+      if (e.defaultPrevented || !carriesFiles(e)) return;
+      e.preventDefault();
+      if (modal?.attach) setModal((m) => (m?.attach ? { ...m, again: true } : m));
+      else toast('Close this dialog first to attach a résumé.');
+    },
   } : {};
 
   const scorecardsDue = data.interviews.filter((i) => i.status !== 'cancelled' && new Date(i.starts_at) < new Date() && i.panel.some((p) => p.id === user.id) && !i.scorecards.some((s) => s.user_id === user.id));
@@ -286,7 +297,7 @@ function CandidateView({ data, onClose }) {
       {modal === 'erase' && <EraseModal data={data} elsewhere={elsewhere} metaviewToo={metaviewToo} onClose={() => setModal(null)} onDone={onClose} />}
       {modal?.review && <ReviewModal data={data} decision={modal.review} onClose={() => setModal(null)} />}
       {modal?.scorecard && job && <ScorecardModal interview={modal.scorecard} criteria={job.criteria} candidateName={candidate.name} onClose={() => setModal(null)} />}
-      {modal?.attach && <AttachResumeModal data={data} file={modal.attach} more={modal.more} onClose={() => setModal(null)} onAttached={() => setTab('resume')} />}
+      {modal?.attach && <AttachResumeModal data={data} file={modal.attach} more={modal.more} again={modal.again} onClose={() => setModal(null)} onAttached={showAttached} />}
     </div>
   );
 }
