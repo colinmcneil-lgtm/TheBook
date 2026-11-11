@@ -155,6 +155,10 @@ function sameUpload(one, other) {
     return fs.statSync(a).size === fs.statSync(b).size && fs.readFileSync(a).equals(fs.readFileSync(b));
   } catch { return false; }
 }
+/** The SHA-256 of an uploaded file's bytes, or null when it cannot be read (which then matches nothing). */
+function uploadHash(name) {
+  try { return crypto.createHash('sha256').update(fs.readFileSync(path.join(UPLOAD_DIR, path.basename(name)))).digest('hex'); } catch { return null; }
+}
 
 // Candidate photos. Only real JPEG, PNG or WebP files are kept: the type is checked from the file's first bytes,
 // not its name, because the file is later shown inside the workspace.
@@ -1869,9 +1873,9 @@ const inWords = (items) => (items.length < 2 ? items.join('') : `${items.slice(0
 // the details are checked as Edit details checks them, and a profile link that is already on another record at the
 // same client (or another entry in The Book) is refused too, since a link is how a person is told apart. A résumé
 // that was there is never written over: it is kept under Earlier résumés for the agency (see putResume), and the
-// same file sent again is kept once. The file is the agency's, whoever made the application (see agency_resumes in
-// db.js). Nothing is sent to anybody. The name is never changed here: the screen asks before attaching a résumé
-// that has somebody else's name on it.
+// same file sent again is kept once. It is then the application's résumé like any other, and going back to The Book
+// treats it as it treats one attached any other way (see returnToBook). Nothing is sent to anybody. The name is never
+// changed here: the screen asks before attaching a résumé that has somebody else's name on it.
 api.put('/applications/:id/resume', agencyOnly, upload.single('resume'), (req, res) => {
   let stored = false;
   try {
@@ -1896,7 +1900,6 @@ api.put('/applications/:id/resume', agencyOnly, upload.single('resume'), (req, r
     const t = now();
     const done = tx(() => {
       const change = putResume(q.get('SELECT * FROM applications WHERE id = ?', a.id), req.file, req.user.id, t);
-      if (change.change !== 'unchanged') q.run('INSERT INTO agency_resumes (application_id, resume_file) VALUES (?, ?)', a.id, req.file.filename);
       if (filled.length) q.run(`UPDATE candidates SET ${filled.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`, ...filled.map(([k]) => value[k]), a.candidate_id);
       q.run('UPDATE applications SET updated_at = ? WHERE id = ?', t, a.id);
       // One line, written like the agency's other changes to a profile. It says which details were filled in and not
@@ -2085,8 +2088,6 @@ api.post('/candidates/:id/merge', agencyOnly, (req, res) => {
  */
 function carryResume(going, kept, userId) {
   q.run('UPDATE earlier_resumes SET application_id = ? WHERE application_id = ?', kept.id, going.id);
-  // A résumé the agency dropped on the entry's profile stays the agency's on the application it goes to.
-  q.run('UPDATE agency_resumes SET application_id = ? WHERE application_id = ?', kept.id, going.id);
   if (!going.resume_file) return null;
   if (!kept.resume_file) {
     q.run('UPDATE applications SET resume_file = ?, resume_name = ? WHERE id = ?', going.resume_file, going.resume_name, kept.id);
@@ -2230,6 +2231,42 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
 }
 
 /**
+ * A résumé is not left on the profile of somebody going back to The Book from application `a` when it is byte for
+ * byte one of this application's earlier résumés, or one of the résumés (on file or earlier) of any other application
+ * on the client's record it is on. Such a file is, or may be, one they sent that client, so it is kept under Earlier
+ * résumés instead (see returnToBook), where only the agency sees it and nothing is lost.
+ *
+ * Answers a test for one file: true when it is such a copy. `row` is the earlier résumé being tested, which is not
+ * compared with itself. A file that cannot be read matches nothing. Call it before anything is moved.
+ */
+function clientsCopy(a) {
+  const files = [
+    ...q.all('SELECT id, resume_file FROM earlier_resumes WHERE application_id = ?', a.id),
+    ...q.all(`SELECT NULL AS id, resume_file FROM applications WHERE candidate_id = ?1 AND id != ?2 AND resume_file IS NOT NULL
+      UNION ALL SELECT NULL, r.resume_file FROM earlier_resumes r JOIN applications o ON o.id = r.application_id WHERE o.candidate_id = ?1 AND o.id != ?2`, a.candidate_id, a.id),
+  ].map((r) => ({ id: r.id, hash: uploadHash(r.resume_file) })).filter((r) => r.hash);
+  return (file, row = null) => {
+    const hash = uploadHash(file);
+    return Boolean(hash) && files.some((r) => r.hash === hash && (row === null || r.id !== row));
+  };
+}
+
+/**
+ * The résumé on application `a` is kept as one of its earlier résumés (inside a transaction), unless the very same
+ * file is among them already: the same file is kept once. Returns the file to remove then, once the change is saved.
+ */
+function setAside(a, at, userId) {
+  const hash = uploadHash(a.resume_file);
+  const there = hash && q.all('SELECT resume_file FROM earlier_resumes WHERE application_id = ?', a.id).some((r) => uploadHash(r.resume_file) === hash);
+  if (!there) {
+    q.run('INSERT INTO earlier_resumes (application_id, resume_file, resume_name, kept_at, kept_by) VALUES (?, ?, ?, ?, ?)', a.id, a.resume_file, a.resume_name, at, userId);
+    return [];
+  }
+  const elsewhere = q.get('SELECT 1 AS x FROM applications WHERE resume_file = ?1 AND id != ?2 UNION ALL SELECT 1 FROM earlier_resumes WHERE resume_file = ?1', a.resume_file, a.id);
+  return elsewhere ? [] : [a.resume_file];
+}
+
+/**
  * Somebody who was in The Book before they were put on a job goes back to it, instead of being deleted, when that
  * job is deleted or they are removed from it (inside a transaction). What belonged to the job goes with the job:
  * its stage, interviews and scorecards, offer, rating and the write-up for the hiring team. Everything else stays
@@ -2243,6 +2280,7 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
  * `made` collects files copied here, to be removed if the change is not saved. Returns files to remove if it is.
  */
 function returnToBook(a, user, said, made) {
+  // Every way back to The Book comes through here (removed from the job, the job deleted), and so through clientsCopy.
   const spare = [];
   const person = q.get('SELECT * FROM candidates WHERE id = ?', a.candidate_id);
   const t = now();
@@ -2289,30 +2327,19 @@ function returnToBook(a, user, said, made) {
   // kept as an earlier résumé, which only the agency is given: it was that client's, and left as the entry's résumé
   // it would be shown to the next client's hiring team. When the entry brought none, a résumé the person sent this
   // client with their own application is still taken off (also the copy of it that went with them to another of the
-  // client's jobs), and the entry goes back without one.
-  //
-  // A résumé the agency dropped on the profile (in The Book or on the job) is the agency's, even on an application
-  // they made themselves: it stays on the entry, and one the entry brought stays under Earlier résumés. Unless it is
-  // a copy of a résumé they sent the client themselves (put back after a replace by mistake, say): then it is still
-  // theirs. A copy is looked for among the résumés of the applications they made themselves, the ones on them now
-  // (unless the agency put it there) and the ones kept under Earlier résumés there (which is where theirs went if the
-  // agency replaced it), and, for a résumé the agency dropped, among this application's own earlier résumés too
-  // (leaving out the one the entry brought, and the ones the agency dropped).
+  // client's jobs), and the entry goes back without one. A résumé the agency attached on the profile is treated the
+  // same way as any other. Last, whichever file would be on the profile in The Book is held to clientsCopy below.
   const brought = q.get('SELECT * FROM earlier_resumes WHERE application_id = ? AND kept_by IS NULL ORDER BY kept_at DESC, id DESC LIMIT 1', a.id);
-  const agencys = Boolean(a.resume_file && q.get('SELECT 1 AS x FROM agency_resumes WHERE application_id = ? AND resume_file = ?', a.id, a.resume_file));
-  const theirOwn = a.resume_file && ((ownApplication(a) && !agencys)
-    || [...q.all(
-      `SELECT resume_file FROM applications o WHERE candidate_id = ? AND id != ? AND resume_file IS NOT NULL AND ${OWN_APPLICATION}
-         AND NOT EXISTS (SELECT 1 FROM agency_resumes r WHERE r.application_id = o.id AND r.resume_file = o.resume_file)`, a.candidate_id, a.id),
-    ...q.all(`SELECT r.resume_file FROM earlier_resumes r JOIN applications o ON o.id = r.application_id WHERE o.candidate_id = ? AND o.id != ? AND ${OWN_APPLICATION}`, a.candidate_id, a.id),
-    ...(agencys && ownApplication(a) ? q.all(
-      `SELECT resume_file FROM earlier_resumes e WHERE application_id = ? AND kept_by IS NOT NULL
-         AND NOT EXISTS (SELECT 1 FROM agency_resumes r WHERE r.application_id = e.application_id AND r.resume_file = e.resume_file)`, a.id) : [])]
+  const theirOwn = a.resume_file && (ownApplication(a)
+    || q.all(`SELECT resume_file FROM applications WHERE candidate_id = ? AND id != ? AND resume_file IS NOT NULL AND ${OWN_APPLICATION}`, a.candidate_id, a.id)
       .some((other) => sameUpload(other.resume_file, a.resume_file)));
-  if ((brought && !agencys) || theirOwn) {
-    if (a.resume_file) q.run('INSERT INTO earlier_resumes (application_id, resume_file, resume_name, kept_at, kept_by) VALUES (?, ?, ?, ?, ?)', a.id, a.resume_file, a.resume_name, t, user.id);
-    q.run('UPDATE applications SET resume_file = ?, resume_name = ? WHERE id = ?', brought?.resume_file ?? null, brought?.resume_name ?? null, a.id);
-    if (brought) q.run('DELETE FROM earlier_resumes WHERE id = ?', brought.id);
+  const isClients = clientsCopy(a);
+  if (brought || theirOwn || (a.resume_file && isClients(a.resume_file))) {
+    if (a.resume_file) spare.push(...setAside(a, t, user.id));
+    // The résumé the entry brought goes back on the profile, unless it is the client's too: then it stays aside.
+    const back = brought && !isClients(brought.resume_file, brought.id) ? brought : null;
+    q.run('UPDATE applications SET resume_file = ?, resume_name = ? WHERE id = ?', back?.resume_file ?? null, back?.resume_name ?? null, a.id);
+    if (back) q.run('DELETE FROM earlier_resumes WHERE id = ?', back.id);
   }
   q.run('UPDATE earlier_resumes SET kept_by = ? WHERE application_id = ? AND kept_by IS NULL', user.id, a.id); // nothing stays set aside in The Book
   q.run(

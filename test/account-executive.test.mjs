@@ -473,10 +473,8 @@ test('starting on a database from before fills in each job’s account executive
   // (Asking somebody on the team to review a candidate came later still: its one table and three indexes are new, the
   // table is empty, and test/reviews.test.mjs is about it.)
   const THE_REVIEWS = ['team_reviews', 'idx_team_reviews_answers', 'idx_team_reviews_application', 'idx_team_reviews_waiting'];
-  // (And a résumé dropped on a profile after that: one table, empty, which test/resume-drop.test.mjs is about.)
-  const THE_RESUME_DROP = ['agency_resumes'];
-  assert.deepEqual(Object.keys(first.objects).filter(notTheBoards).sort(), [...Object.keys(before.objects), ...THE_BOOKS, ...THE_REVIEWS, ...THE_RESUME_DROP].sort(), 'nothing was added beside the column');
-  for (const table of [...THE_BOOKS, ...THE_REVIEWS, ...THE_RESUME_DROP].filter((name) => first.rows[name])) assert.deepEqual(first.rows[table], [], `${table} is empty`);
+  assert.deepEqual(Object.keys(first.objects).filter(notTheBoards).sort(), [...Object.keys(before.objects), ...THE_BOOKS, ...THE_REVIEWS].sort(), 'nothing was added beside the column');
+  for (const table of [...THE_BOOKS, ...THE_REVIEWS].filter((name) => first.rows[name])) assert.deepEqual(first.rows[table], [], `${table} is empty`);
   // (Starting also does what it did before this version: it notes when the server first ran and files candidates' names for looking up.)
   const STARTING_WRITES = ['jobs', 'settings', 'candidate_name_keys', 'candidate_name_dirty', 'candidate_phone_keys'];
   // (The agency's public jobs page adds one e-mail template of its own on start; the templates that were there are untouched.)

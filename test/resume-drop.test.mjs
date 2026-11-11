@@ -52,7 +52,9 @@ const leftAsItWas = async (before) => until(async () => uploads(), (now) => JSON
 
 before(async () => {
   dataDir = tempDir('resume-drop');
-  server = await startServer({ port: PORT, dataDir });
+  // Behind a proxy, so that each application made on a careers page here can come from an address of its own: the
+  // form takes ten an address every ten minutes, and this file makes more.
+  server = await startServer({ port: PORT, dataDir, env: { TRUST_PROXY: '1' } });
   base = server.base;
   alex = session(base);
   assert.equal((await alex.post('/setup', { agencyName: 'Harbour Talent', name: 'Alex Morgan', email: 'alex@agency.example', password: 'demo1234' })).status, 200);
@@ -277,28 +279,28 @@ test('put on a job, removed, and joined to a record the client has: the résumé
   assert.equal((await alex.post(`/applications/${app.ana}/add-to-job`, { job_id: job.payroll, into: refused.body.join.candidate_id })).status, 200);
   assert.equal(await resumeOf(maya, own.id), 'Ana Example, sent to Maple Freight herself');
 
-  // The agency drops a newer résumé on that application: it is the agency's, though the application is hers.
+  // The agency drops a newer résumé on that application, which the hiring team now sees.
   assert.equal((await attach(alex, own.id, file('Ana Example, the agency\'s newest', 'Ana newest.pdf'), { phone: '416 555 0145' })).body.resume, 'replaced');
   theirs = await detail(maya, own.id);
   assert.equal(theirs.application.resume_name, 'Ana newest.pdf');
   assert.equal(theirs.candidate.phone, '416 555 0145');
   assert.deepEqual(theirs.earlier_resumes, []);
 
-  // Removed from that job: the agency's newest goes back to The Book with her; what she sent Maple Freight is kept
-  // under Earlier résumés, and so is the one the entry had before.
+  // Removed from that job: it is the application she made herself, so whatever résumé is on it is set aside, as one
+  // attached any other way would be. The entry has the résumé it brought again; what she sent Maple Freight and the
+  // one dropped on her application are kept under Earlier résumés, with the one the entry had before.
   assert.equal((await alex.del(`/applications/${own.id}`)).body.returned, true);
   seen = await detail(alex, own.id);
   assert.equal(seen.application.general, true);
-  assert.equal(await resumeOf(alex, own.id), 'Ana Example, the agency\'s newest');
-  assert.ok(seen.earlier_resumes.some((r) => r.name === 'Ana for Maple.pdf'));
-  assert.ok(seen.earlier_resumes.some((r) => r.name === 'Ana on the job.docx'));
+  assert.equal(await resumeOf(alex, own.id), 'Ana Example, on the job');
+  assert.deepEqual(seen.earlier_resumes.map((r) => r.name).sort(), ['Ana Example.pdf', 'Ana for Maple.pdf', 'Ana newest.pdf']);
 
-  // Put on another client's job: that hiring team sees the agency's résumé and nothing of Maple Freight's.
+  // Put on another client's job: that hiring team sees the entry's résumé and nothing of Maple Freight's.
   assert.equal((await alex.post(`/applications/${own.id}/add-to-job`, { job_id: job.hygienist })).status, 200);
   const northline = await detail(noor, own.id);
-  assert.equal(northline.application.resume_name, 'Ana newest.pdf');
+  assert.equal(northline.application.resume_name, 'Ana on the job.docx');
   assert.deepEqual(northline.earlier_resumes, []);
-  assert.equal(await resumeOf(noor, own.id), 'Ana Example, the agency\'s newest');
+  assert.equal(await resumeOf(noor, own.id), 'Ana Example, on the job');
 });
 
 test('a résumé the client was sent by the person stays theirs when it goes back to The Book, as before', async () => {
@@ -325,9 +327,9 @@ test('deleting the person leaves nothing of what the agency attached', async () 
   await attach(alex, id, file('Eli Example two', 'eli2.txt'));
   const before = await steady();
   const { candidate } = await detail(alex, id);
-  assert.equal(db('SELECT COUNT(*) AS n FROM agency_resumes WHERE application_id = ?', id)[0].n, 2);
+  assert.equal(db('SELECT COUNT(*) AS n FROM earlier_resumes WHERE application_id = ?', id)[0].n, 1);
   assert.equal((await alex.del(`/candidates/${candidate.id}`)).status, 200);
-  assert.equal(db('SELECT COUNT(*) AS n FROM agency_resumes WHERE application_id = ?', id)[0].n, 0);
+  assert.equal(db('SELECT COUNT(*) AS n FROM earlier_resumes WHERE application_id = ?', id)[0].n, 0);
   await until(async () => uploads(), (now) => now.length === before.length - 2, 5000);
 });
 
@@ -337,9 +339,12 @@ async function appliesOnCareers(name, email, jobId, resume) {
   const form = new FormData();
   for (const [k, v] of Object.entries({ name, email, consent: 'yes' })) form.append(k, v);
   if (resume) form.append('resume', new Blob([resume.bytes]), resume.name);
-  assert.equal((await fetch(`${base}/api/public/careers/${slug}/jobs/${jobId}/apply`, { method: 'POST', body: form })).status, 200);
+  visitor += 1;
+  const sent = await fetch(`${base}/api/public/careers/${slug}/jobs/${jobId}/apply`, { method: 'POST', body: form, headers: { 'X-Forwarded-For': `192.0.2.${visitor}` } });
+  assert.equal(sent.status, 200);
   return (await alex.get(`/applications?job_id=${jobId}`)).body.find((r) => r.email === email).id;
 }
+let visitor = 0; // each application made on a careers page comes from an address of its own (see before)
 /** Their entry in The Book is joined to the record Maple Freight has of them, on this job. */
 async function joinOnJob(entry, jobId) {
   const refused = await alex.post(`/applications/${entry}/add-to-job`, { job_id: jobId });
@@ -383,23 +388,200 @@ test('a copy of their own résumé on another of the client\'s jobs comes off to
   assert.deepEqual((await detail(alex, second)).earlier_resumes.map((r) => r.name), ['pat.pdf']);
 });
 
-test('a copy of the agency\'s résumé on another of the client\'s jobs is the agency\'s, and goes back to The Book with them', async () => {
+test('a copy of the résumé on their own application, on another of the client\'s jobs, is set aside whoever dropped it there', async () => {
   const own = await appliesOnCareers('Lee Example', 'lee@example.com', job.payroll, file('Lee Example, sent to Maple Freight herself', 'lee.pdf'));
   assert.equal((await attach(alex, own, file('Lee Example, the agency\'s', 'lee-agency.pdf'))).body.resume, 'replaced');
-  const second = (await alex.post(`/applications/${own}/add-to-job`, { job_id: job.accountant })).body.id; // a copy of the agency's
+  const second = (await alex.post(`/applications/${own}/add-to-job`, { job_id: job.accountant })).body.id; // a copy of the one on her application
   const entry = (await alex.upload('/applications', { name: 'Lee Example', email: 'lee@example.com' })).body;
   await joinOnJob(entry.id, job.accountant);
   assert.equal((await alex.del(`/applications/${second}`)).body.returned, true);
-  assert.equal(await resumeText(alex, second), 'Lee Example, the agency\'s');
+  assert.equal(await resumeText(alex, second), 404);
+  assert.deepEqual((await detail(alex, second)).earlier_resumes.map((r) => r.name), ['lee-agency.pdf']);
 });
 
-test('a résumé dropped on their entry in The Book stays on it when they are joined to an application they made with none, and removed', async () => {
+test('a résumé dropped on their entry in The Book, which an application they made with none had been using, is set aside when they go back', async () => {
   const entry = (await alex.upload('/applications', { name: 'Quinn Example', email: 'quinn@example.com' })).body.id;
   assert.equal((await attach(alex, entry, file('Quinn Example, the agency\'s', 'quinn.txt'))).body.resume, 'added');
   const own = await appliesOnCareers('Quinn Example', 'quinn@example.com', job.payroll, null);
   await joinOnJob(entry, job.payroll);
   assert.equal(await resumeText(maya, own), 'Quinn Example, the agency\'s');
+  // As for a résumé saved with the entry: on the application they made themselves, the résumé is set aside.
   assert.equal((await alex.del(`/applications/${own}`)).body.returned, true);
-  assert.equal(await resumeText(alex, own), 'Quinn Example, the agency\'s');
-  assert.deepEqual((await detail(alex, own)).earlier_resumes, []);
+  assert.equal(await resumeText(alex, own), 404);
+  assert.deepEqual((await detail(alex, own)).earlier_resumes.map((r) => r.name), ['quinn.txt']);
+});
+
+// ---------- what goes on to the next client ----------
+// A résumé dropped on a profile is treated as any other résumé on the application: the same rules as a résumé
+// attached when somebody already in The Book is saved again. Going back to The Book, whichever file would be left on
+// the profile is held to one more check (clientsCopy in server/api.js): one that is the very same file as one of the
+// application's earlier résumés, or as a résumé of another application on the client's record, is set aside.
+
+/**
+ * Somebody back in The Book is put on Northline Dental's job, and this is what Northline's hiring manager can list
+ * or download of them: the résumé route, the earlier-résumé route for every earlier résumé there is, and the profile.
+ */
+async function northlineSees(id) {
+  const put = await alex.post(`/applications/${id}/add-to-job`, { job_id: job.hygienist });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  const target = put.body.id ?? id;
+  const payload = await noor.get(`/applications/${target}`);
+  assert.equal(payload.status, 200);
+  const earlier = [];
+  for (const { id: kept } of db('SELECT id FROM earlier_resumes')) {
+    const answer = await noor.get(`/applications/${target}/resumes/${kept}`);
+    assert.ok([403, 404].includes(answer.status), `earlier résumé ${kept} answers ${answer.status}`);
+    earlier.push(answer.status);
+  }
+  return { id: target, resume: await resumeText(noor, target), payload: JSON.stringify(payload.body), listed: payload.body.earlier_resumes };
+}
+/** Northline is given nothing of what they sent Maple Freight: no résumé, no earlier one, not a name of one. */
+async function northlineGetsNothing(id, ...names) {
+  const seen = await northlineSees(id);
+  assert.equal(seen.resume, 404);
+  assert.deepEqual(seen.listed, []);
+  for (const name of names) assert.ok(!seen.payload.includes(name), `${name} is not in what Northline is sent`);
+  assert.ok(!seen.payload.includes('Maple'), 'nor the client');
+  return seen;
+}
+/** The agency still has this file under Earlier résumés, once (or `times`), and can download it. */
+async function agencyKeeps(id, text, times = 1) {
+  const { earlier_resumes: earlier } = await detail(alex, id);
+  const found = [];
+  for (const r of earlier) {
+    const got = await alex.get(`/applications/${id}/resumes/${r.id}`);
+    assert.equal(got.status, 200);
+    if (got.body.toString() === text) found.push(r.name);
+  }
+  assert.equal(found.length, times, `kept under Earlier résumés: ${JSON.stringify(found)}`);
+}
+const newJob = async (title) => (await alex.post('/jobs', { client_id: client.maple, title, status: 'open' })).body.id;
+
+for (const [label, drops] of [['the same file', ['X']], ['another file, then the same one', ['Y', 'X']], ['the same, another, the same again', ['X', 'Y', 'X']]]) {
+  test(`what they sent the client, dropped on their entry on another of its jobs (${label}), does not go on to the next client`, async () => {
+    const who = `Rho${drops.join('')}`;
+    const email = `${who.toLowerCase()}@example.com`;
+    const sent = file(`${who} Example, sent to Maple Freight on its careers page`, `${who} for Maple.pdf`);
+    const [first, third] = [await newJob(`Fleet Planner ${who}`), await newJob(`Route Analyst ${who}`)];
+    // They apply to Maple's first job themselves with X, and their entry in The Book is joined into that application.
+    const entry = (await alex.upload('/applications', { name: `${who} Example`, email })).body.id;
+    const own = await appliesOnCareers(`${who} Example`, email, first, sent);
+    await joinOnJob(entry, first);
+    // Removed from it: back in The Book with X under Earlier résumés, and no longer an application of their own.
+    assert.equal((await alex.del(`/applications/${own}`)).body.returned, true);
+    let seen = await detail(alex, own);
+    assert.equal(seen.application.resume_file, null);
+    assert.deepEqual(seen.earlier_resumes.map((r) => r.name), [`${who} for Maple.pdf`]);
+    assert.deepEqual(db('SELECT source, consent_at FROM applications WHERE id = ?', own)[0], { source: 'agency_sourced', consent_at: null });
+    // Put on another of Maple's jobs, where the agency drops what it has: a byte-for-byte copy of X among them.
+    assert.equal((await alex.post(`/applications/${own}/add-to-job`, { job_id: third })).status, 200);
+    for (const d of drops) {
+      const f = d === 'X' ? { name: `${who} again.pdf`, bytes: sent.bytes } : file(`${who} Example, the agency's own`, `${who} agency.pdf`);
+      assert.equal((await attach(alex, own, f)).status, 200);
+    }
+    assert.equal(await resumeText(maya, own), sent.bytes.toString());
+    // Replacing the copy put it under Earlier résumés beside X (a résumé is compared with the one on file only).
+    const copies = drops.filter((d) => d === 'X').length;
+    const kept = (await detail(alex, own)).earlier_resumes.length;
+    // Removed from that one: the copy of X is not left on the profile. It is the same file as X, which is kept
+    // already, so it is not kept a second time.
+    assert.equal((await alex.del(`/applications/${own}`)).body.returned, true);
+    seen = await detail(alex, own);
+    assert.equal(seen.application.general, true);
+    assert.equal(seen.application.resume_file, null);
+    assert.equal(seen.earlier_resumes.length, kept);
+    await agencyKeeps(own, sent.bytes.toString(), copies);
+    await northlineGetsNothing(own, `${who} for Maple.pdf`, `${who} again.pdf`);
+    await agencyKeeps(own, sent.bytes.toString(), copies);
+  });
+}
+
+test('a copy of what they sent the client, dropped on their entry and set aside when it was joined, is not put back when they go back', async () => {
+  const sent = file('Sol Example, sent to Maple Freight with the first application', 'Sol first.pdf');
+  const [first, second] = [await newJob('Depot Manager'), await newJob('Yard Supervisor')];
+  // They apply to two of Maple's jobs themselves, with X and with Z.
+  await appliesOnCareers('Sol Example', 'sol@example.com', first, sent);
+  const theirs = await appliesOnCareers('Sol Example', 'sol@example.com', second, file('Sol Example, the second version', 'Sol second.pdf'));
+  // The agency drops a copy of X on their entry in The Book, then joins the entry into the second application:
+  // Z is kept, and the copy is set aside as the résumé the entry brought.
+  const entry = (await alex.upload('/applications', { name: 'Sol Example', email: 'sol@example.com' })).body.id;
+  assert.equal((await attach(alex, entry, { name: 'Sol from our files.pdf', bytes: sent.bytes })).body.resume, 'added');
+  await joinOnJob(entry, second);
+  assert.equal(await resumeText(maya, theirs), 'Sol Example, the second version');
+  // Removed from the second job: Z is set aside, and so is the copy, which is X.
+  assert.equal((await alex.del(`/applications/${theirs}`)).body.returned, true);
+  const seen = await detail(alex, theirs);
+  assert.equal(seen.application.general, true);
+  assert.equal(seen.application.resume_file, null);
+  await agencyKeeps(theirs, sent.bytes.toString());
+  await agencyKeeps(theirs, 'Sol Example, the second version');
+  await northlineGetsNothing(theirs, 'Sol first.pdf', 'Sol from our files.pdf', 'Sol second.pdf');
+});
+
+test('on an application they made themselves, a copy of their résumé that is one byte different is set aside too', async () => {
+  const sent = file('Ira Example, sent to Maple Freight herself', 'Ira.pdf');
+  const first = await newJob('Customs Clerk');
+  const entry = (await alex.upload('/applications', { name: 'Ira Example', email: 'ira@example.com' })).body.id;
+  const own = await appliesOnCareers('Ira Example', 'ira@example.com', first, sent);
+  await joinOnJob(entry, first);
+  const resaved = Buffer.concat([sent.bytes, Buffer.from('\n')]);
+  assert.equal((await attach(alex, own, { name: 'Ira resaved.pdf', bytes: resaved })).body.resume, 'replaced');
+  assert.equal((await alex.del(`/applications/${own}`)).body.returned, true);
+  assert.equal((await detail(alex, own)).application.resume_file, null);
+  await agencyKeeps(own, resaved.toString());
+  await agencyKeeps(own, sent.bytes.toString());
+  await northlineGetsNothing(own, 'Ira.pdf', 'Ira resaved.pdf');
+});
+
+test('a résumé dropped on somebody the agency found, on no job or on a job, goes back to The Book with them and on to the next job', async () => {
+  // In The Book, then on a Maple job, then back.
+  const kai = (await alex.upload('/applications', { name: 'Kai Example', email: 'kai@example.com' })).body.id;
+  assert.equal((await attach(alex, kai, file('Kai Example, from the agency', 'Kai.pdf'))).body.resume, 'added');
+  const first = await newJob('Warehouse Lead');
+  assert.equal((await alex.post(`/applications/${kai}/add-to-job`, { job_id: first })).status, 200);
+  assert.equal((await alex.del(`/applications/${kai}`)).body.returned, true);
+  assert.equal(await resumeText(alex, kai), 'Kai Example, from the agency');
+  let seen = await northlineSees(kai);
+  assert.equal(seen.resume, 'Kai Example, from the agency');
+  assert.deepEqual(seen.listed, []);
+
+  // Put on a Maple job from The Book with no résumé, and given one there.
+  const lou = (await alex.upload('/applications', { name: 'Lou Example', email: 'lou@example.com' })).body.id;
+  const second = await newJob('Shift Supervisor');
+  assert.equal((await alex.post(`/applications/${lou}/add-to-job`, { job_id: second })).status, 200);
+  assert.equal((await attach(alex, lou, file('Lou Example, from the agency', 'Lou.pdf'))).body.resume, 'added');
+  assert.equal((await alex.del(`/applications/${lou}`)).body.returned, true);
+  assert.equal(await resumeText(alex, lou), 'Lou Example, from the agency');
+  seen = await northlineSees(lou);
+  assert.equal(seen.resume, 'Lou Example, from the agency');
+  assert.deepEqual(seen.listed, []);
+});
+
+test('when the job is deleted instead, the same holds', async () => {
+  // As the first of these: what they sent Maple, then a copy of it on another Maple job, which is then deleted.
+  const sent = file('Ash Example, sent to Maple Freight on its careers page', 'Ash for Maple.pdf');
+  const [first, third] = [await newJob('Planner'), await newJob('Planner, nights')];
+  const entry = (await alex.upload('/applications', { name: 'Ash Example', email: 'ash@example.com' })).body.id;
+  const own = await appliesOnCareers('Ash Example', 'ash@example.com', first, sent);
+  await joinOnJob(entry, first);
+  assert.equal((await alex.del(`/applications/${own}`)).body.returned, true);
+  assert.equal((await alex.post(`/applications/${own}/add-to-job`, { job_id: third })).status, 200);
+  assert.equal((await attach(alex, own, { name: 'Ash again.pdf', bytes: sent.bytes })).status, 200);
+  assert.equal((await alex.del(`/jobs/${third}`)).status, 200);
+  assert.equal((await detail(alex, own)).application.resume_file, null);
+  await agencyKeeps(own, sent.bytes.toString());
+  await northlineGetsNothing(own, 'Ash for Maple.pdf', 'Ash again.pdf');
+
+  // And as the second: the copy set aside when the entry was joined is not put back when that job is deleted.
+  const copy = file('Cy Example, sent to Maple Freight with the first application', 'Cy first.pdf');
+  const [one, two] = [await newJob('Dispatcher'), await newJob('Dispatcher, weekends')];
+  await appliesOnCareers('Cy Example', 'cy@example.com', one, copy);
+  const theirs = await appliesOnCareers('Cy Example', 'cy@example.com', two, file('Cy Example, the second version', 'Cy second.pdf'));
+  const cy = (await alex.upload('/applications', { name: 'Cy Example', email: 'cy@example.com' })).body.id;
+  assert.equal((await attach(alex, cy, { name: 'Cy from our files.pdf', bytes: copy.bytes })).body.resume, 'added');
+  await joinOnJob(cy, two);
+  assert.equal((await alex.del(`/jobs/${two}`)).status, 200);
+  assert.equal((await detail(alex, theirs)).application.resume_file, null);
+  await agencyKeeps(theirs, copy.bytes.toString());
+  await northlineGetsNothing(theirs, 'Cy first.pdf', 'Cy from our files.pdf', 'Cy second.pdf');
 });

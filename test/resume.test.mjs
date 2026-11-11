@@ -1438,14 +1438,40 @@ test('files that cannot be read say why, and fall back to the file name for the 
   assert.equal(locked.error.name, 'PasswordException');
 });
 
-test('a current title and company taken from a job whose dates end are marked as maybe out of date', () => {
-  const notes = (text) => { const n = {}; const fields = parseResume(text, {}, n); return [fields.current_title, fields.current_company, Boolean(n.roleEnded)]; };
+test('a current title and company are only marked as current when the dates of the job they come from run to the present', () => {
+  const notes = (text) => { const n = {}; const fields = parseResume(text, {}, n); return [fields.current_title, fields.current_company, Boolean(n.roleCurrent)]; };
   const head = 'Jordan Example\njordan@example.com\n416 555 0188\n\nExperience\n';
-  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\n2019 - 2023`), ['Customer Success Manager', 'Example Co', true]);
-  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co, Jan 2019 – Mar 2023`), ['Customer Success Manager', 'Example Co', true]);
-  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\n2019 - Present`), ['Customer Success Manager', 'Example Co', false]);
-  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\nSince 2021`), ['Customer Success Manager', 'Example Co', false]);
+  // An end date, written in any of these ways: a job they have left, which may not be the one they are in now.
+  for (const dates of ['2019 - 2023', 'Jan 2019 – Mar 2023', '03/2019 – 11/2023', '03.2019 – 11.2023', '2019-03 – 2023-11', 'September 2019 to November 2023', "Jan '19 – Dec '23"]) {
+    assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\n${dates}`), ['Customer Success Manager', 'Example Co', false], dates);
+    assert.deepEqual(notes(`${head}Customer Success Manager, Example Co, ${dates}`), ['Customer Success Manager', 'Example Co', false], `${dates}, on the line of the job`);
+  }
+  // Dates that run to the present, in any letter case, or a start with a dash and nothing after it.
+  for (const dates of ['2019 - Present', '2021 - Present', '2021 – present', '2020 – CURRENT', '2018 – now', 'Jan 2022 to date', '2023 -', 'Since 2021', '2020 – ongoing', "Jan '19 – Present"]) {
+    assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\n${dates}`), ['Customer Success Manager', 'Example Co', true], dates);
+    assert.deepEqual(notes(`${head}Customer Success Manager, Example Co, ${dates}`), ['Customer Success Manager', 'Example Co', true], `${dates}, on the line of the job`);
+  }
+  // No dates at all, dates that cannot be read, and two sets of dates on the job's line, are no sign either way.
   assert.deepEqual(notes(`${head}Customer Success Manager, Example Co`), ['Customer Success Manager', 'Example Co', false]);
-  // Oldest first: the job that runs to the present is the one taken, and it has not ended.
+  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\nfor a while now`)[2], false);
+  assert.deepEqual(notes(`${head}Customer Success Manager, Example Co\n2015 – 2019 · 2019 – Present`)[2], false);
+  // The dates are the entry's own, not those of a line of description above it.
+  assert.deepEqual(notes(`${head}8 years in customer success\nCustomer Success Manager, Example Co\n2016 - 2023`), ['Customer Success Manager', 'Example Co', false]);
+  assert.deepEqual(notes(`${head}Since 2010 in customer success roles\nCustomer Success Manager, Example Co\n2016 - 2023`), ['Customer Success Manager', 'Example Co', false]);
+  assert.deepEqual(notes(`${head}8 years in customer success\nCustomer Success Manager, Example Co\n2016 - Present`), ['Customer Success Manager', 'Example Co', true]);
+  // Oldest first: the job that runs to the present is the one taken, and it is current.
+  assert.deepEqual(notes(`${head}Analyst, First Co\n2012 - 2016\nCustomer Success Manager, Example Co, 2016 - Present`), ['Customer Success Manager', 'Example Co', true]);
   assert.deepEqual(notes(`${head}Analyst, First Co\n2012 - 2016\nCustomer Success Manager, Example Co\n2016 - Present`)[2], false);
+  // A headline under the name has no dates, so it is not marked as current.
+  assert.deepEqual(notes('Jordan Example\nSenior Product Designer at Juniper Row\njordan@example.com'), ['Senior Product Designer', 'Juniper Row', false]);
+});
+
+test('a month with the year in two figures ("Jan \'19") is read as a date, not as the employer', () => {
+  const head = 'Jordan Example\njordan@example.com\n416 555 0188\n\nExperience\n';
+  for (const text of ["Customer Success Manager\nJan '19 – Dec '23\nExample Co", "Jan '19 – Dec '23\nCustomer Success Manager\nExample Co", "Customer Success Manager | Jan '19 – Dec '23\nExample Co", 'Customer Success Manager, Example Co, Sept ’21 – Present']) {
+    const fields = parseResume(`${head}${text}`);
+    assert.deepEqual([fields.current_title, fields.current_company], ['Customer Success Manager', 'Example Co'], text);
+  }
+  // Without a company, nothing is taken for one.
+  assert.equal(parseResume(`${head}Customer Success Manager\nJan '19 – Dec '23`).current_company, undefined);
 });

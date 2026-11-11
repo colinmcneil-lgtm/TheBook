@@ -432,19 +432,23 @@ function sameDetail(key, a, b) {
  * beside what the profile has: a detail the profile has no value for is ticked to be filled in, one it has a different
  * value for is only changed if ticked, and one that is the same is not mentioned. The name is never changed; a
  * résumé with somebody else's name on it says so before anything is attached, with nothing ticked. One click attaches
- * the file and saves the ticked details together (PUT /applications/:id/resume). Agency only.
+ * the file and saves the ticked details together (PUT /applications/:id/resume). Agency only. `more` says that other
+ * files were dropped with this one and left out.
  */
-export function AttachResumeModal({ data, file, onClose, onAttached }) {
+export function AttachResumeModal({ data, file, more = false, onClose, onAttached }) {
   const { bump } = useApp();
   const toast = useToast();
   const { application: app, candidate, client } = data;
   const first = firstName(candidate.name);
-  const [read, setRead] = useState(null); // what readResume found: { fields, status, nameFromFile, roleEnded }
+  const [read, setRead] = useState(null); // what readResume found: { fields, status, nameFromFile, roleCurrent }
   const [rows, setRows] = useState([]);   // [{ key, label, current, value, ticked }], one for each detail worth asking about
   const [problem, setProblem] = useState(null); // why the workspace would not save it
   const problemBox = useRef(null);
   useEffect(() => { problemBox.current?.scrollIntoView({ block: 'nearest' }); }, [problem]);
   const [sameFile, setSameFile] = useState(false); // the file is the résumé already on file, which is then kept once
+  // Whether the file has been compared with the résumé on file (or the comparison failed). Until then the dialog does
+  // not say what happens to the one on file, and nothing can be attached.
+  const [compared, setCompared] = useState(!app.resume_file);
   useEffect(() => {
     let live = true;
     readResumeFile(file).then((result) => {
@@ -452,21 +456,24 @@ export function AttachResumeModal({ data, file, onClose, onAttached }) {
       const found = result.fields || {};
       // Somebody else's résumé: nothing from it is ticked until the recruiter has looked.
       const theirs = !found.name || sameName(found.name, candidate.name);
-      // A title and company from a job whose dates end may not be the job they have now: offered, not ticked.
-      const dated = (key) => result.roleEnded && (key === 'current_title' || key === 'current_company');
+      // A title and company are only ticked when the résumé shows that job running to the present ("2021 – Present").
+      // With an end date, dates that cannot be read or none, they may not be the job they have now: offered, not ticked.
+      const unsure = (key) => !result.roleCurrent && (key === 'current_title' || key === 'current_company');
       setRead(result);
       setRows(RESUME_DETAILS.map(([key, label]) => ({ key, label, current: String(candidate[key] || '').trim(), value: String(found[key] || '').trim() }))
         .filter((r) => r.value && !sameDetail(r.key, r.current, r.value))
-        .map((r) => ({ ...r, ended: dated(r.key), ticked: theirs && !r.current && !dated(r.key) })));
+        .map((r) => ({ ...r, unsure: unsure(r.key), ticked: theirs && !r.current && !unsure(r.key) })));
     });
     if (app.resume_file) {
+      setCompared(false);
       Promise.all([fetch(`/api/applications/${app.id}/resume`).then((r) => (r.ok ? r.arrayBuffer() : null)), file.arrayBuffer()])
         .then(([onFile, chosen]) => {
           if (!live || !onFile || onFile.byteLength !== chosen.byteLength) return;
           const [x, y] = [new Uint8Array(onFile), new Uint8Array(chosen)];
           setSameFile(x.every((byte, i) => byte === y[i]));
         })
-        .catch(() => {}); // not known: the dialog says what happens to a different file
+        .catch(() => {}) // not known: the dialog says what happens to a different file
+        .finally(() => { if (live) setCompared(true); });
     }
     return () => { live = false; };
   }, [file]);
@@ -501,8 +508,9 @@ export function AttachResumeModal({ data, file, onClose, onAttached }) {
   const label = `${otherName ? 'Attach anyway' : 'Attach'}${chosen.length ? ` and fill in ${chosen.length === 1 ? '1 detail' : `${chosen.length} details`}` : otherName ? '' : ' résumé'}`;
   const close = busy ? () => {} : onClose;
   return (
-    <Modal title={replacing && !sameFile ? 'Replace the résumé' : 'Attach a résumé'} subtitle={`${candidate.name} · ${file.name}`} onClose={close} onSubmit={save}
-      footer={<><Button onClick={close} disabled={busy}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={!read}>{busy ? 'Attaching…' : label}</Button></>}>
+    <Modal title={replacing && compared && !sameFile ? 'Replace the résumé' : 'Attach a résumé'} onClose={close} onSubmit={save}
+      subtitle={<>{candidate.name} · {file.name}{more && <span className="mt-1 block text-[13px] text-stone-600" role="status">One résumé at a time: {file.name} was taken.</span>}</>}
+      footer={<><Button onClick={close} disabled={busy}>Cancel</Button><Button type="submit" variant="primary" busy={busy} disabled={!read || !compared}>{busy ? 'Attaching…' : label}</Button></>}>
       {!read ? (
         <p className="flex items-center gap-2 text-sm text-stone-600" role="status"><LoaderCircle className="size-4 animate-spin" />Reading the résumé…</p>
       ) : (
@@ -534,7 +542,7 @@ export function AttachResumeModal({ data, file, onClose, onAttached }) {
                         <span className="block text-[13px] break-words text-stone-600">
                           {r.current ? <>{r.current} on the profile, {r.value} in the résumé</> : 'Not on the profile yet'}
                         </span>
-                        {r.ended && <span className="block text-xs text-amber-800">In the résumé this job has an end date, so check that it is the one they have now.</span>}
+                        {r.unsure && <span className="block text-xs text-amber-800">Check this is their current job.</span>}
                       </span>
                     </label>
                     <Input className="mt-2" value={r.value} aria-label={`${r.label} from the résumé`} onChange={(e) => change(r.key, { value: e.target.value, ticked: true })} />
@@ -548,7 +556,8 @@ export function AttachResumeModal({ data, file, onClose, onAttached }) {
             </p>
           )}
           <p className="text-xs text-stone-500">
-            {sameFile ? 'This is the résumé already on file, so it is kept once. '
+            {!compared ? 'Checking this against the résumé on file… '
+              : sameFile ? 'This is the résumé already on file, so it is kept once. '
               : replacing ? `The résumé on file now (${app.resume_name || 'résumé'}) is kept under Earlier résumés, which only your agency sees. ` : ''}
             {client ? `The ${client.name} hiring team sees the résumé on the profile, as they would one added with the candidate.` : 'Only your agency sees people who are not on a job.'}
           </p>

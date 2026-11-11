@@ -642,7 +642,8 @@ const MONTH = `(?:${('january february march april may june july august septembe
   + 'enero febrero marzo abril mayo junio julio agosto septiembre octubre noviembre diciembre ene abr ago dic janeiro fevereiro março marco maio junho julho setembro outubro dezembro fev set out '
   + 'gennaio febbraio aprile maggio giugno luglio settembre ottobre dicembre gen mag giu lug ott januari februari maart mei augustus mrt spring summer autumn fall winter')
   .split(' ').sort((x, y) => y.length - x.length).join('|')})\\.?`;
-const DATE = `(?:\\d{1,2}[./-])?(?:\\d{1,2}[./-]|${MONTH},?\\s*)?(?:19|20)\\d{2}(?:[./-](?:0?[1-9]|1[0-2])(?!\\d))?`;
+// A date, with or without its month and day; or a month and a year in two figures ("Jan '19").
+const DATE = `(?:(?:\\d{1,2}[./-])?(?:\\d{1,2}[./-]|${MONTH},?\\s*)?(?:19|20)\\d{2}(?:[./-](?:0?[1-9]|1[0-2])(?!\\d))?|${MONTH}\\s*['’]\\d{2}(?!\\d))`;
 const UNTIL = "(?:present|current|currently|now|today|(?:to |till )?date|ongoing|heute|jetzt|aujourd['’]hui|présent|actuel|ce jour|actualidad|actualmente|presente|atual|atualmente|oggi|heden)";
 const LENGTH = '(?:\\d{1,2}\\+?\\s*(?:years?|yrs?|months?|mos?)\\.?)';
 // A date or a range of dates, with the brackets and the "(3 years 2 months)" some layouts add. Only the dates
@@ -726,11 +727,13 @@ function pieces(text, line) {
 /** Title and company of the first job listed under a heading such as "Experience". */
 function firstRole(lines, heading) {
   const entry = [];
-  let skipped = 0, dates = false, datedLine = false, when = '';
+  let skipped = 0, dates = false, datedLine = false;
+  const stamps = []; // the lines of this entry that carry its dates
   for (let i = heading + 1; i < lines.length && entry.length < 3; i++) {
     const { text, heading: isHeading } = lines[i];
     if (isHeading) break;
     const prose = !LABEL_FIRST.test(text) && isProse(text), found = prose ? [] : pieces(text, entry.length), dated = text.search(DATES) >= 0;
+    const described = !found.length && (prose || tidy(text.replace(DATES, '$1 ')).split(/\s+/).filter((w) => /^\p{Ll}/u.test(w)).length >= 3);
     if (found.length) {
       // A job has one set of dates. A second line that carries dates, or a third line once the dates have gone by,
       // belongs to the job before: its title must not be taken for this one's.
@@ -739,15 +742,16 @@ function firstRole(lines, heading) {
       datedLine ||= dated;
     }
     // Words that are neither a title nor an employer are description too ("Refonte du parcours d'achat mobile").
-    else if ((prose || tidy(text.replace(DATES, '$1 ')).split(/\s+/).filter((w) => /^\p{Ll}/u.test(w)).length >= 3)
-      && (entry.length || ++skipped > 2)) break; // the description of the job, or no list of jobs at all
-    if (dated && !dates) when = text;
+    else if (described && (entry.length || ++skipped > 2)) break; // the description of the job, or no list of jobs at all
+    // A line of description passed over before the entry starts is not where the entry's dates are.
+    if (dated && !described) stamps.push(text);
     dates ||= dated;
   }
-  // "2019 - 2023" with nothing running to the present: a job they have left, which may not be the one they are in now.
-  const ended = Boolean(when) && ENDED.test(when) && !RUNS_ON.test(when);
+  // Only dates that run to the present say that this is the job they are in now. An end date in any form, dates that
+  // cannot be read, or none at all leave it open: it may be a job they have left.
+  const current = stamps.length > 0 && stamps.every(runsToNow);
   const role = roleOf(entry);
-  return role.title ? { ...role, ended } : role;
+  return role.title ? { ...role, current } : role;
 }
 
 /** Title and company from the lines of one job entry, as `pieces` gives them. */
@@ -784,6 +788,16 @@ function roleOf(entry) {
 const RUNS_ON = new RegExp(`(?:-|–|—|to|until|till|bis|au|à|→)\\s*${UNTIL}(?![\\p{L}\\d])|(?:^|[^\\p{L}])(?:since|seit|depuis|desde|ab)\\s+${DATE}`, 'iu');
 const ENDED = /(?:19|20)\d{2}\D{1,12}(?:19|20)\d{2}/;
 /**
+ * Whether the dates on this line run to the present: "2021 – Present", "Jan 2022 to date", "Since 2021", or a start
+ * with a dash and nothing after it ("2023 –"). Every date on the line must: "2015 – 2019 · 2019 – Present" may be two
+ * jobs, and is not taken as one that runs on.
+ */
+function runsToNow(text) {
+  const all = [...text.matchAll(DATES)].filter((m) => /(?:19|20)\d{2}|['’]\d{2}/.test(m[0]));
+  return all.length > 0 && all.every((m, k) => RUNS_ON.test(m[0])
+    || (k === all.length - 1 && /^\s*[-–—]\s*\)?\s*$/.test(text.slice(m.index + m[0].length))));
+}
+/**
  * For a list of jobs under `heading` whose first dates have an end and a later line runs to the present: the line
  * above that later one when it holds a job title itself (so firstRole can start there), else -1. Undefined for
  * the usual newest-first list.
@@ -805,8 +819,8 @@ function currentWhenOldestFirst(lines, heading) {
  * @param {{lines?: {size?:number,page?:number,footer?:boolean}[], links?: string[], filename?: string}} [hints] what
  *   the file itself adds: each line's font size and page (PDF) or whether it is a page footer (Word), the addresses
  *   its links point to, and its name.
- * @param {{roleEnded?: boolean}} [notes] what is worth knowing about the fields found: `roleEnded` when the current
- *   title and company come from a job whose dates end ("2019 - 2023").
+ * @param {{roleCurrent?: boolean}} [notes] what is worth knowing about the fields found: `roleCurrent` when the
+ *   current title and company come from a job whose dates run to the present ("2019 - Present").
  * @returns {{name?:string,email?:string,phone?:string,linkedin?:string,location?:string,current_title?:string,current_company?:string}}
  */
 export function parseResume(text, hints = {}, notes = {}) {
@@ -842,7 +856,7 @@ export function parseResume(text, hints = {}, notes = {}) {
     const current = currentWhenOldestFirst(lines, i);
     if (current === -1) break;
     const role = firstRole(lines, current ?? i);
-    if (role.title) { out.current_title = role.title; if (role.company) out.current_company = role.company; notes.roleEnded = role.ended; }
+    if (role.title) { out.current_title = role.title; if (role.company) out.current_company = role.company; notes.roleCurrent = role.current; }
   }
   // Otherwise a headline under the name ("Senior Product Designer at Juniper Row") is a fair guess.
   if (!out.current_title && name) {
@@ -905,7 +919,8 @@ export async function readResume(file) {
     const guess = nameFromFilename(file.name);
     if (guess) { fields.name = guess; nameFromFile = true; }
   }
-  // `roleEnded`: the current title and company were taken from a job whose dates end, so they may be out of date.
-  const out = notes.roleEnded && fields.current_title ? { fields, status, nameFromFile, roleEnded: true } : { fields, status, nameFromFile };
+  // `roleCurrent`: the current title and company were taken from a job whose dates run to the present. Without it
+  // they may be out of date.
+  const out = notes.roleCurrent && fields.current_title ? { fields, status, nameFromFile, roleCurrent: true } : { fields, status, nameFromFile };
   return error === undefined ? out : { ...out, error };
 }

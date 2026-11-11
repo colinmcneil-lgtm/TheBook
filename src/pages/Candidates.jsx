@@ -95,7 +95,7 @@ export default function Candidates() {
       {rows ? <ApplicationsTable rows={rows} empty={noJob && !query && !owner ? 'Nobody is in The Book without a job. Use “Add candidate” or the browser extension and choose “No job yet”. If your extension has no such choice, download it again from Settings, Browser extension.' : undefined} /> : <Pending error={error} />}
       {adding && <AddCandidateModal initialFile={dropped} onClose={() => { setAdding(false); setDropped(null); }} onAdded={openCandidate} />}
       {over && (
-        <div className="pointer-events-none fixed inset-3 z-40 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-brand-500 bg-brand-50/90 px-6 text-center" role="status">
+        <div className="pointer-events-none fixed inset-3 z-40 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-brand-500 bg-brand-50 px-6 text-center" role="status">
           <span className="flex size-12 items-center justify-center rounded-xl bg-white text-brand-700 ring-1 ring-brand-200"><FileUp className="size-6" /></span>
           <p className="text-lg font-semibold text-brand-900">Drop a résumé to add a candidate</p>
           <p className="max-w-sm text-sm text-brand-800">Add candidate opens with the details filled in from it. PDF, Word, RTF or text, up to 8 MB.</p>

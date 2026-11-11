@@ -103,8 +103,9 @@ function CandidateView({ data, onClose }) {
   });
 
   // A résumé file dropped anywhere on the open profile, or chosen on it, is attached through a dialog that shows what
-  // it would fill in (agency only). While another dialog is open a file dropped here is not taken (and the toast says
-  // so), and one dropped just outside the profile is not opened by the browser either.
+  // it would fill in (agency only); when several are dropped at once, the dialog says which one was taken. While another
+  // dialog is open a file dropped here is not taken (and a toast says so), and one dropped just outside the profile is
+  // not opened by the browser either.
   useNoStrayDrops();
   const [over, setOver] = useState(false);
   const canDrop = isAgency && !modal;
@@ -113,8 +114,7 @@ function CandidateView({ data, onClose }) {
     if (!file) return;
     const refusal = resumeRefusal(file);
     if (refusal) return toast(refusal, 'error');
-    if (more) toast(`One résumé at a time: ${file.name} was taken.`);
-    setModal({ attach: file });
+    setModal({ attach: file, more }); // the dialog says when other files were left out
   };
   const dropZone = canDrop ? {
     onDragEnter: (e) => { if (carriesFiles(e)) { e.preventDefault(); setOver(true); } },
@@ -286,7 +286,7 @@ function CandidateView({ data, onClose }) {
       {modal === 'erase' && <EraseModal data={data} elsewhere={elsewhere} metaviewToo={metaviewToo} onClose={() => setModal(null)} onDone={onClose} />}
       {modal?.review && <ReviewModal data={data} decision={modal.review} onClose={() => setModal(null)} />}
       {modal?.scorecard && job && <ScorecardModal interview={modal.scorecard} criteria={job.criteria} candidateName={candidate.name} onClose={() => setModal(null)} />}
-      {modal?.attach && <AttachResumeModal data={data} file={modal.attach} onClose={() => setModal(null)} onAttached={() => setTab('resume')} />}
+      {modal?.attach && <AttachResumeModal data={data} file={modal.attach} more={modal.more} onClose={() => setModal(null)} onAttached={() => setTab('resume')} />}
     </div>
   );
 }
@@ -464,7 +464,7 @@ function Overview({ data, reviews, onOffer, onFee, onResume, onChooseResume }) {
             {/* A newer résumé can be chosen here or dropped on the profile; the one on file is kept under Earlier résumés. */}
             {onChooseResume && (
               <p className="px-1 text-xs text-stone-500">
-                <ChooseResume onFile={onChooseResume} className="rounded font-medium text-stone-600 underline decoration-stone-300 underline-offset-2 hover:text-brand-700" aria-label="Replace the résumé">Replace</ChooseResume>
+                <ChooseResume onFile={onChooseResume} className="mr-1 rounded font-medium text-stone-600 underline decoration-stone-300 underline-offset-2 hover:text-brand-700" aria-label="Replace the résumé">Replace</ChooseResume>
                 {' '}it, or drop a newer one on the profile.
               </p>
             )}
