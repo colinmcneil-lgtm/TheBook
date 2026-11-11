@@ -69,8 +69,11 @@ the open profile, or use "Choose a file" (or "Replace" beside the one on file). 
 opens Add candidate with the file taken. Before anything is saved, a dialog shows what the résumé says beside what
 the profile has: empty details are ticked to be filled in, a different value is only changed if you tick it, and
 the name is never changed. A current title is only ticked when the job it comes from runs to the present in the
-résumé ("2021 – Present"), and the company only when it also stands with that title: on its line, on the line above
-it that opens the entry, or on the line below a title with no dates, the dates coming after. Otherwise they are
+résumé ("2021 – Present"), and the company only when nothing else in that entry could be the employer and it stands
+with the title: "Title at Company", on the title's line, or on a line of its own just above the title when that opens
+the entry or just below a title with no dates, the dates coming after; on a line of its own it must also end like a
+company name (Ltd, Inc, plc, Group, University, Bank, Hospital, NHS and the like), since such a line may as well be
+a department, a note about the contract or a sub-heading. Otherwise they are
 offered unticked with "Check this is their current job". One click attaches the file and saves the ticked details, with the same
 checks as Edit details, or nothing is saved. The résumé that was there is kept under "Earlier résumés", for the
 agency only, and the history says "Résumé added" or "Résumé replaced". From then on it is the profile's résumé like
@@ -159,17 +162,24 @@ candidate in the app, and put on a job later when the right role comes up.
   of it on another of that client's jobs they were added to, for as long as the application they made themselves
   is still on the client's record), and the entry goes back without a résumé. One case leaves the agency's own
   copy under Earlier résumés instead of on the profile: an application they made themselves without a résumé,
-  which had been using the entry's. Last, the file that would be on the profile in The Book is compared, byte for
-  byte, with the earlier résumés of the application it leaves and with every résumé, on file or earlier, of the
-  other applications on that client's record that the person made themselves (on its careers page or through the
-  agency's post). Applications the agency made there, the copies made when it added them to more of the client's
-  jobs among them, are not looked at. If the file matches any it is compared with, it is kept under Earlier résumés as
-  well (once), and the entry goes back without a résumé. When they are folded into another entry of theirs in The
-  Book, that entry's résumé is held to the same test. So a copy of what they sent the client, put on the profile
-  again on another of that client's jobs, does not reach the next one, and somebody the agency found keeps the
-  agency's résumé however often they were on and off the client's jobs. The limit, as before this release: once
-  the application they made themselves has been deleted outright (not sent back to The Book), a copy of its résumé
-  on an application the agency made is no longer recognised.
+  which had been using the entry's. Last, the file that would be on the profile in The Book is checked against what
+  people sent clients themselves, which is recorded, not guessed from the files lying around. Each time somebody
+  attaches a résumé to their own application, on a client's careers page or through the agency's post, The Book
+  keeps the client and a fingerprint of the file (its SHA-256: a short code worked out from the file's bytes, which
+  cannot be turned back into the file). The fingerprints go when the person is erased ("Delete all data on this
+  person"), not when an application is removed or a job deleted. The file is kept under Earlier résumés as well
+  (once), and the entry goes back without a résumé, when it was recorded as sent to the client they are leaving,
+  or when it was recorded as sent to any client and is the very same file as one of the earlier résumés of the
+  application that leaves (what they sent a client before, set aside when they last went back, and attached again
+  on another client's job). When they are folded into another entry of theirs in The Book, that entry's résumé is
+  held to the same test. Nothing else counts, so a copy of what they sent the client does not reach the next one
+  wherever it was put on the profile again, even after their own application was deleted outright, and somebody
+  the agency found keeps the agency's résumé however often they were on and off the client's jobs. What they sent
+  one client is not held back from an entry of theirs that was never on that client's jobs. The limits: what was
+  sent before this version and deleted since is not known (at its first start, the résumés then on people's own
+  applications were recorded with their client, and every earlier résumé then set aside with no client, which may
+  hold back an agency's file that was once replaced and is attached again); and a résumé the agency attaches to
+  somebody's entry after they are back in The Book is the agency's choice, and is not checked.
 - **What a hiring team could still work out.** Nothing from before the job is shown, but two things are as they
   are because the entry is kept and not copied: its history line reads "Added to (job) at (stage)", where somebody
   added straight to a job has "Added to the pipeline (...)" (the same line as for anyone added to a second job at

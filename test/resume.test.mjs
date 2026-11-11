@@ -971,7 +971,7 @@ test('phone: found in the forms people write them', () => {
     ['Tel: 555 0142', '555 0142'], ['M: 07700 900123 | E: jane@mail.example', '07700 900123'], ['Phone no. 020 7946 0991', '020 7946 0991'], ['Mobile +61 412 345 678', '+61 412 345 678'],
     ['London · 07700 900123 · jane@mail.example', '07700 900123'], ['123 Main Street, Springfield, IL 62704 | (217) 555-0142', '(217) 555-0142'], ['Tel. 030/12345678', '030/12345678'],
     // An extension is kept, written one way: the number alone does not reach the person.
-    ['(555) 123-4567 x89', '(555) 123-4567 ext. 89'], ['415.555.0199 ext 12', '415.555.0199 ext. 12'], ['Work: (905) 555-0199 ext. 204', '(905) 555-0199 ext. 204'], ['(905) 555-0199, Extension 7', '(905) 555-0199 ext. 7'], ['07700 900123 mobile', '07700 900123'], ['+44 7700 900123 (m), +44 20 7946 0991 (h)', '+44 7700 900123'], ['Reach me on 07700 900123 and by email', '07700 900123'],
+    ['(416) 555-0123 x89', '(416) 555-0123 ext. 89'], ['415.555.0199 ext 12', '415.555.0199 ext. 12'], ['Work: (905) 555-0199 ext. 204', '(905) 555-0199 ext. 204'], ['(905) 555-0199, Extension 7', '(905) 555-0199 ext. 7'], ['07700 900123 mobile', '07700 900123'], ['+44 7700 900123 (m), +44 20 7946 0991 (h)', '+44 7700 900123'], ['Reach me on 07700 900123 and by email', '07700 900123'],
   ]) assert.equal(phone(line), want, line);
 });
 
@@ -1513,6 +1513,28 @@ test('a current title is sure when its own dates run to the present, and the com
   assert.deepEqual(sure('Senior Engineer, Acme Ltd   2018 – 2023\nVolunteer Mentor, Code Club   2020 – Present'), [undefined, undefined, false, false]);
   assert.deepEqual(sure('Product Manager, Delta Ltd\n2019 – 2023\nProduct Analyst, Echo Corp\n2016 – Present'), [undefined, undefined, false, false]);
   assert.deepEqual(sure('Customer Success Manager, Example Co\n2021 - Present\n2016 - 2019'), ['Customer Success Manager', 'Example Co', false, false]);
+});
+
+test('the company is ticked only when it is the one employer in the entry and stands where it belongs', () => {
+  const head = 'Jordan Example\njordan@example.com\n416 555 0188\n\nExperience\n';
+  const tail = '\nAssistant, Old Co Ltd\n2015 – 2019';
+  // [title, company, title sure (roleCurrent), company sure (companyCurrent)]
+  const sure = (text) => { const n = {}; const f = parseResume(`${head}${text}${tail}`, {}, n); return [f.current_title, f.current_company, Boolean(n.roleCurrent), Boolean(n.roleCurrent && n.companyCurrent)]; };
+  // A second thing that could be the employer (a department, a note about the contract, a sub-heading): the company
+  // is still offered as before, unticked. The title is ticked where its job runs to the present.
+  assert.deepEqual(sure('Senior Lecturer, School of Law, University of Leeds\n2019 – Present'), ['Senior Lecturer', 'School of Law', true, false]);
+  assert.deepEqual(sure('Office Manager, Hartley Foods\nMaternity cover\n2024 – Present'), ['Office Manager', 'Maternity cover', true, false]);
+  assert.deepEqual(sure('Data Analyst\nFixed-term contract\nJan 2024 – Present\nNorthgate Ltd'), ['Data Analyst', 'Fixed-term contract', true, false]);
+  assert.deepEqual(sure('Current Position\nHead of Sales, Orion Ltd\n2021 – Present'), ['Head of Sales', 'Current Position', true, false]);
+  // On a line of its own without a word companies end in: a sub-heading, as likely as an employer.
+  assert.deepEqual(sure('Hospitality\nRestaurant Manager\n2021 – Present'), ['Restaurant Manager', 'Hospitality', true, false]);
+  assert.deepEqual(sure('Google\nEngineer   2021 – Present'), ['Engineer', 'Google', true, false]);
+  // The one employer, where it belongs.
+  assert.deepEqual(sure('Acme Ltd\nEngineer   2021 – Present'), ['Engineer', 'Acme Ltd', true, true]);
+  assert.deepEqual(sure('Engineer\nNorthgate Ltd, Leeds\nJan 2021 – Present'), ['Engineer', 'Northgate Ltd', true, true]);
+  assert.deepEqual(sure('Engineer, Acme\n2021 – Present'), ['Engineer', 'Acme', true, true]);
+  assert.deepEqual(sure('Engineer at Acme\n2021 – Present'), ['Engineer', 'Acme', true, true]);
+  assert.deepEqual(sure('Engineer at Acme\n2019 – 2023'), ['Engineer', 'Acme', false, false]);
 });
 
 test('a table\'s header row is not an employer', () => {

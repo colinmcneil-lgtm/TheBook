@@ -22,10 +22,11 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   }
   console.log(`Wiping ${DATA_DIR} ...`);
   tx(() => {
-    for (const t of ['team_reviews', 'post_applications_set_aside', 'board_applications', 'board_log', 'board_overrules', 'board_posts', 'todos', 'report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'agency_emails', 'agency_activities', 'earlier_resumes', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
+    for (const t of ['team_reviews', 'post_applications_set_aside', 'board_applications', 'board_log', 'board_overrules', 'board_posts', 'todos', 'report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'agency_emails', 'agency_activities', 'earlier_resumes', 'sent_resumes', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
       db.exec(`DELETE FROM ${t}`);
     db.exec(`DELETE FROM settings WHERE key LIKE 'metaview_%'`); // the demo is not connected to Metaview
     db.exec(`DELETE FROM settings WHERE key LIKE 'board_%'`);    // the demo's job board starts as a new one does
+    db.exec(`DELETE FROM settings WHERE key = 'sent_resumes_backfilled'`); // the demo's résumés are recorded at the next start (see api.js)
     db.exec('DELETE FROM sqlite_sequence'); // a wiped database starts numbering from 1 again
   });
   for (const file of fs.readdirSync(UPLOAD_DIR)) fs.rmSync(path.join(UPLOAD_DIR, file), { recursive: true, force: true }); // résumés, photos and call audio of the rows just deleted

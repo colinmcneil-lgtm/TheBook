@@ -1328,9 +1328,10 @@ test('starting on a database made by the live code adds the board’s tables and
     const template = after.rows.email_templates.find((t) => t.key === 'board_application_received');
     assert.equal(template.subject, 'Thanks for applying through {{agency_name}}');
     const settled = { ...after.rows, email_templates: after.rows.email_templates.filter((t) => t !== template) };
-    // The reports and To do note the day they first ran on a workspace; those notes are theirs, not the board's. And
-    // the one column applications gained is empty in the row that was there.
-    const theirs = (s) => /^(reports_|todos_)/.test(s.key);
+    // The reports and To do note the day they first ran on a workspace, and the record of résumés people sent clients
+    // notes that it has looked at what was on file; those notes are theirs, not the board's. And the one column
+    // applications gained is empty in the row that was there.
+    const theirs = (s) => /^(reports_|todos_|sent_resumes_)/.test(s.key);
     const plain = (value) => JSON.parse(JSON.stringify(value));
     // Each job's account executive is filled in on start from who created it: that column is the later feature's, not the board's.
     const jobsAsTheyWere = settled.jobs.map(({ account_executive_id, ...job }) => job);

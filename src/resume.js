@@ -758,17 +758,26 @@ function firstRole(lines, heading) {
   const current = stamps.length > 0 && stamps.every((d) => runsToNow(d.text));
   const { picked, ...role } = roleOf(entry);
   if (!role.title) return role;
-  return { ...role, current, companyCurrent: current && Boolean(picked.company) && standsWith(picked.company, picked.title, lines, stamps) };
+  return { ...role, current, companyCurrent: current && Boolean(picked.company) && standsWith(picked.company, picked.title, lines, stamps, entry.flat()) };
 }
 
 /**
- * Whether the employer chosen stands where it plainly belongs with the title: "Title at Company", in the title's own
- * line, on the line straight above it when that opens the entry ("Acme Ltd" then "Engineer   2021 – Present"), or on
- * the line straight below a title line with no dates, the dates coming after it ("Engineer", "Acme Ltd", "2021 –
- * Present"). Anywhere else (under a dated title line, past the dates, further away) it may be another job's.
+ * Whether the employer chosen is plainly the employer in the job the title comes from. Only the tick depends on it:
+ * the company is offered either way. It must be the only thing in the entry that could be an employer (for "Title at
+ * Company", nothing else that could be one): with two ("Senior Lecturer, School of Law, University of Leeds",
+ * "Office Manager, Hartley Foods" then "Maternity cover") there is no telling which is meant. And it must stand where
+ * it belongs with the title: "Title at Company"; in the title's own line; on the line straight above the title when
+ * that opens the entry ("Acme Ltd" then "Engineer   2021 – Present"); or on the line straight below a title line with
+ * no dates, the dates coming after it ("Engineer", "Northgate Ltd, Leeds", "Jan 2021 – Present"). On a line of its
+ * own, above or below, it must also end in a word companies end in (Ltd, Inc, plc, Group, University, Bank, Hospital,
+ * NHS, ...): a line of its own may as well be a department, a note about the contract ("Fixed-term contract") or a
+ * sub-heading ("Current Position", "Hospitality"), so "Google" above "Engineer   2021 – Present" is offered unticked.
+ * Anywhere else (under a dated title line, past the dates, further away) it may be another job's.
  */
-function standsWith(company, title, lines, stamps) {
+function standsWith(company, title, lines, stamps, all) {
+  if (all.some((p) => p.kind === 'org' && p !== company && p !== title)) return false; // another employer it could be
   if (company === title || company.line === title.line) return true; // "at", or the same line
+  if (!COMPANY_WORDS.test(company.text)) return false;
   if (company.line === 0 && company.row === title.row - 1) return true;
   return company.row === title.row + 1 && lines[title.row].text.search(DATES) < 0 && stamps.every((d) => d.row > company.row);
 }

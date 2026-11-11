@@ -481,6 +481,20 @@ CREATE TABLE IF NOT EXISTS earlier_resumes (
 );
 CREATE INDEX IF NOT EXISTS idx_earlier_resumes_app ON earlier_resumes(application_id);
 
+-- What people sent a client themselves. One row for each résumé somebody attached to their own application, on the
+-- client's careers page or through the agency's post: the client, and the SHA-256 of the file's bytes (a fingerprint,
+-- which cannot be turned back into the file). Nothing else about the person or the file is kept here. It is how The
+-- Book knows, when somebody goes back to The Book from a client's job, which file must not go on to the next client
+-- (see clientsCopy in api.js). An empty client is a client no longer known: the rows written once at start-up for
+-- files kept by an earlier version, and the rows of a client that was deleted. Rows go when the person is erased.
+CREATE TABLE IF NOT EXISTS sent_resumes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+  hash TEXT NOT NULL,                                -- SHA-256 of the file's bytes, in hex
+  sent_at TEXT NOT NULL                              -- when it was sent (for a row written at start-up, when that was)
+);
+CREATE INDEX IF NOT EXISTS idx_sent_resumes_hash ON sent_resumes(hash);
+
 -- History lines and e-mails on an application that only the agency may read: everything written while the person
 -- was in The Book without a job (moved here the moment they are put on one), and the lines that say how they were
 -- matched or joined to a record. They are kept in tables of their own, never in activities and emails, because

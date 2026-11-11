@@ -159,6 +159,14 @@ function sameUpload(one, other) {
 function uploadHash(name) {
   try { return crypto.createHash('sha256').update(fs.readFileSync(path.join(UPLOAD_DIR, path.basename(name)))).digest('hex'); } catch { return null; }
 }
+/**
+ * Somebody sent this client this résumé themselves, with their own application (inside the transaction that saves
+ * it): its fingerprint is kept in sent_resumes (see db.js and clientsCopy). A file that cannot be read keeps nothing.
+ */
+function recordSent(clientId, file, at) {
+  const hash = uploadHash(file);
+  if (hash) q.run('INSERT INTO sent_resumes (client_id, hash, sent_at) VALUES (?, ?, ?)', clientId, hash, at);
+}
 
 // Candidate photos. Only real JPEG, PNG or WebP files are kept: the type is checked from the file's first bytes,
 // not its name, because the file is later shown inside the workspace.
@@ -466,6 +474,8 @@ function receiveApplication({ client, job, name, email, phone, linkedin, locatio
       file?.filename ?? null, clean(file?.originalname, 200), t, t, t, t);
     q.run('INSERT INTO stage_history (application_id, stage_id, entered_at) VALUES (?, ?, ?)', appId, stage.id, t);
     logActivity(appId, null, 'applied', detail);
+    // They sent this client this résumé themselves: its fingerprint is kept (see clientsCopy).
+    if (file) recordSent(client.id, file.filename, t);
     // Anyone can type any link here, so it never joins this applicant to an existing record. If it is the profile
     // link of someone already on file, both records are kept and the team is told, so a person can decide.
     const key = existing ? null : identityKey(linkedin);
@@ -1979,8 +1989,12 @@ api.delete('/candidates/:id', agencyOnly, (req, res) => {
   const files = people.flatMap((p) => [...q.all('SELECT resume_file FROM applications WHERE candidate_id = ?', p.id).map((r) => r.resume_file), ...earlierResumeFiles('a.candidate_id = ?', p.id)]);
   const calls = callFilesOf(ids);
   const inMetaview = people.flatMap((p) => conversationsWith(p.id));
+  // The fingerprints of what they sent clients go with the files (see clientsCopy): every row with the fingerprint of
+  // a file removed here.
+  const fingerprints = [...new Set(files.filter(Boolean).map(uploadHash).filter(Boolean))];
   tx(() => {
     forgetConversations(inMetaview);
+    for (const hash of fingerprints) q.run('DELETE FROM sent_resumes WHERE hash = ?', hash);
     for (const id of ids) {
       q.run('DELETE FROM applications WHERE candidate_id = ?', id);
       q.run('DELETE FROM candidates WHERE id = ?', id); // their calls are removed with them
@@ -2231,34 +2245,70 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
 }
 
 /**
- * A résumé is not left on the profile of somebody going back to The Book from application `a` when it is byte for
- * byte (a) one of this application's earlier résumés, or (b) the résumé on file, or one of the earlier résumés, of
- * another application on the client's record that the person made themselves (on the client's careers page or
- * through the agency's post). Such a file is, or may be, one they sent that client, so it is kept under Earlier
- * résumés instead (see returnToBook), where only the agency sees it and nothing is lost.
+ * Whether a résumé is one the person sent a client themselves, and so must not be left on their profile when they go
+ * back to The Book from application `a`, where the next client's hiring team would be shown it. It is not inferred
+ * from what else is on file: it is looked up in what was recorded when they sent it. Each time somebody attaches a
+ * résumé to their own application (on a client's careers page, or through the agency's post) the client and the
+ * file's SHA-256 are kept in sent_resumes: a fingerprint, which cannot be turned back into the file. The rows go when
+ * the person is erased (DELETE /candidates/:id), not when an application of theirs is removed or a job deleted.
  *
- * Applications the agency made on the client's record (the copy made when it added them to another of the client's
- * jobs among them) do not count in (b): a file on one of those is the agency's own unless it is also on one they made.
- * The limit, the same as on the live release: once their own application has been deleted outright, a copy of its
- * file on an application the agency made is no longer recognised.
+ * C is the client whose record the application is on (failing that, the client of its job). A file is held back,
+ * and kept under Earlier résumés instead (see returnToBook), where only the agency sees it and nothing is lost, when
+ * its fingerprint
+ *   (1) was recorded as sent to C, or
+ *   (2) was recorded as sent to any client (one no longer known among them) and is the very same file as one of
+ *       this application's earlier résumés: what they sent a client before, set aside when they last went back to
+ *       The Book, and now attached again on another client's job.
+ * Nothing else counts here. A résumé the agency found or made is the agency's, however often the person went back
+ * and forth, and goes on to the next client (unless returnToBook's own rule, from before, takes it off: the same file
+ * on an application on the client's record that they made themselves). Rule (1) is for one client only: a file they sent client A, held by the
+ * agency on an entry that was never on A's record, goes on to client B as before.
  *
- * Answers a test for one file: true when it is such a copy. `row` is the earlier résumé being tested, which is not
- * compared with itself. A file that cannot be read matches nothing. Call it before anything is moved.
+ * The limits. What was sent before this version and deleted since is not known: at the first start of this version
+ * the résumés then on file on people's own applications were recorded (with their client), and every earlier résumé
+ * then set aside (with no client, since it may be what was sent the client they were with: see recordSentBefore); a
+ * file deleted before that left no fingerprint. And a file the agency attaches to somebody's entry once they
+ * are back in The Book is the agency's choice, and is not checked: rule (2) looks only at the earlier résumés of the
+ * application leaving a client's job, and only when it leaves.
+ *
+ * Answers a test for one file: true when it is to be held back. `row` is the earlier résumé being tested, which is
+ * not compared with itself. A file that cannot be read matches nothing. Call it before anything is moved.
  */
 function clientsCopy(a) {
-  const own = `SELECT id FROM applications WHERE candidate_id = ?1 AND id != ?2 AND ${OWN_APPLICATION}`;
-  const theirs = q.all(`SELECT resume_file FROM applications WHERE id IN (${own}) AND resume_file IS NOT NULL
-      UNION ALL SELECT resume_file FROM earlier_resumes WHERE application_id IN (${own})`, a.candidate_id, a.id)
-    .map((o) => ({ id: null, hash: uploadHash(o.resume_file) }));
-  const files = [
-    ...q.all('SELECT id, resume_file FROM earlier_resumes WHERE application_id = ?', a.id).map((r) => ({ id: r.id, hash: uploadHash(r.resume_file) })),
-    ...theirs,
-  ].filter((r) => r.hash);
+  const client = q.get('SELECT client_id FROM candidates WHERE id = ?', a.candidate_id)?.client_id
+    ?? q.get('SELECT client_id FROM jobs WHERE id = ?', a.job_id)?.client_id ?? null;
+  const earlier = q.all('SELECT id, resume_file FROM earlier_resumes WHERE application_id = ?', a.id)
+    .map((r) => ({ id: r.id, hash: uploadHash(r.resume_file) })).filter((r) => r.hash);
+  const sentTo = (hash) => q.get('SELECT 1 AS x FROM sent_resumes WHERE hash = ? AND client_id = ? LIMIT 1', hash, client);
+  const sentToAny = (hash) => q.get('SELECT 1 AS x FROM sent_resumes WHERE hash = ? LIMIT 1', hash);
   return (file, row = null) => {
     const hash = uploadHash(file);
-    return Boolean(hash) && files.some((r) => r.hash === hash && (row === null || r.id !== row));
+    if (!hash) return false;
+    if (sentTo(hash)) return true;                                                                       // (1)
+    return Boolean(sentToAny(hash)) && earlier.some((r) => r.hash === hash && (row === null || r.id !== row)); // (2)
   };
 }
+
+/**
+ * Once, at the first start of this version: what people sent clients before anything was recorded (see clientsCopy).
+ * The résumé on each application they made themselves that is on a job, with that job's client; and each earlier
+ * résumé that somebody set aside (kept_by is set), with no client. Before this version a file was set aside that way
+ * when somebody went back to The Book (where it may be what they had sent the client they were with), and also when
+ * they were saved again with a newer résumé or two of their records were joined: which of these it was is not known,
+ * so all of them count. Files no longer on disk are skipped. A setting says it has been done, so it is done once.
+ */
+function recordSentBefore() {
+  if (getSetting('sent_resumes_backfilled')) return;
+  tx(() => {
+    const t = now();
+    const own = q.all(`SELECT resume_file, (SELECT client_id FROM jobs WHERE jobs.id = applications.job_id) AS client_id FROM applications
+      WHERE job_id IS NOT NULL AND resume_file IS NOT NULL AND ${OWN_APPLICATION}`);
+    for (const r of own) recordSent(r.client_id, r.resume_file, t);
+    for (const r of q.all('SELECT resume_file FROM earlier_resumes WHERE kept_by IS NOT NULL')) recordSent(null, r.resume_file, t);
+    setSetting('sent_resumes_backfilled', t);
+  });
+}
+recordSentBefore();
 
 /**
  * The résumé on application `a` is kept as one of its earlier résumés (inside a transaction), unless the very same
