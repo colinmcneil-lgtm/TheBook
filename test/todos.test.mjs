@@ -1111,6 +1111,8 @@ test('the week starts on Monday at midnight on the agency\'s clock: a tick at 23
   await clock(zonedTimeToUtc(y, m, d + 1, 0, 2, 0, zone).toISOString());
   const week = await page(olive, { period: 'week' });
   assert.equal(week.from, zonedTimeToUtc(y, m, d + 1, 0, 0, 0, zone).toISOString());
+  assert.equal(week.from_day, new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10));   // the Monday, as the page says it
+  assert.equal(week.time_zone, zone);
   assert.equal(rowOf(week, job).cycles_period, 1);
   assert.equal(rowOf(week, job).last_by.name, 'Sam Ode');
   assert.equal(rowOf(await page(olive, { period: '7d' }), job).cycles_period, 2);

@@ -210,11 +210,17 @@ function ListCard({ kind, list, dnd, wide, picker, actions }) {
         action={(
           <span className="flex items-center gap-3">
             {/* Ticking a job here is a cycle on it: the whole team's are on the Cycles page. */}
-            {kind === 'job' && <Link to="/cycles" className="text-[13px] font-medium whitespace-nowrap text-brand-700 hover:underline">See the team’s cycles</Link>}
+            {kind === 'job' && wide && <Link to="/cycles" className="text-[13px] font-medium whitespace-nowrap text-brand-700 hover:underline">See the team’s cycles</Link>}
             {!wide && <Button size="sm" variant={adding ? 'secondary' : 'primary'} icon={adding ? X : Plus} aria-expanded={adding} onClick={() => setAdding(!adding)}>{adding ? 'Close' : meta.add}</Button>}
           </span>
         )} />
-      {meta.hint && <p className="px-4 pt-2.5 text-xs text-stone-500">{meta.hint}</p>}
+      {meta.hint && (
+        <p className="px-4 pt-2.5 text-xs text-stone-500">
+          {meta.hint}
+          {/* On a narrow screen the heading has no room for the link beside it: it ends the hint instead. */}
+          {kind === 'job' && !wide && <> <Link to="/cycles" className="font-medium whitespace-nowrap text-brand-700 hover:underline">See the team’s cycles</Link></>}
+        </p>
+      )}
       {!wide && adding && <div className="mx-3 mt-3 rounded-lg border border-line bg-paper">{picker}</div>}
       {/* The list takes the focus itself (data-list) when the last row on it is ticked or taken off with the keyboard. */}
       <ul data-drop-zone={kind} data-list={kind} tabIndex={-1} aria-label={meta.title}

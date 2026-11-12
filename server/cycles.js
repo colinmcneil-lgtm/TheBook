@@ -186,7 +186,8 @@ function cyclesPage({ period, clientId, accountExecutive, untouched, sort, dir }
   people.sort((a, b) => b.cycles - a.cycles || b.on_team - a.on_team || byText(a.name ?? '￿', b.name ?? '￿') || (a.user_id ?? 0) - (b.user_id ?? 0));
 
   return {
-    period, from, to, time_zone: zone, history_from: getSetting(COPIED),
+    // The day the period starts on the agency's clock, for the page to say ("from Monday 9 November").
+    period, from, from_day: from ? wallClock(new Date(from), zone).ymd : null, to, time_zone: zone, history_from: getSetting(COPIED),
     summary, rows: sortRows(rows, sortKey, sortDir), sort: sortKey, dir: sortDir,
     account_executives: [...executives.values()].sort((a, b) => byText(a.name, b.name)), people,
   };

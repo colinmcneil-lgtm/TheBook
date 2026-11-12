@@ -12,6 +12,9 @@ import { Avatar, Button, Card, CardHeader, Checkbox, ClientDot, Empty, Loading, 
 const PERIODS = [['week', 'This week'], ['7d', 'Last 7 days'], ['30d', 'Last 30 days'], ['all', 'All time']];
 const IN_PERIOD = { week: 'this week', '7d': 'in the last 7 days', '30d': 'in the last 30 days', all: 'in all' };
 
+/** "Monday 9 November": a day written YYYY-MM-DD, as the calendar has it wherever the reader is. */
+const longDay = (ymd) => new Date(`${ymd}T00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+
 /** Whoever made a cycle, in words: their name, said plainly when they are no longer on the team. */
 function who(p) {
   if (!p?.name) return 'somebody no longer on the team';
@@ -30,6 +33,20 @@ function useLookAgain() {
     return () => document.removeEventListener('visibilitychange', look);
   }, []);
   return again;
+}
+
+// From this width the jobs are a table; narrower (a phone) each is a card. Only one of the two is drawn, so that a
+// row opened to show its cycles asks for them once.
+const TABLE_WIDTH = '(min-width: 768px)';
+function useTableWidth() {
+  const [wide, setWide] = useState(() => window.matchMedia(TABLE_WIDTH).matches);
+  useEffect(() => {
+    const media = window.matchMedia(TABLE_WIDTH);
+    const changed = () => setWide(media.matches);
+    media.addEventListener('change', changed);
+    return () => media.removeEventListener('change', changed);
+  }, []);
+  return wide;
 }
 
 /** The choices kept in the address, so that a link shows somebody else the same view. */
@@ -155,6 +172,9 @@ export default function Cycles() {
   // A column's first click sorts the way that column is most use: names A to Z, longest untouched first, most first.
   const sortBy = (id) => choices.set(data.sort === id ? { sort: id, dir: data.dir === 'asc' ? 'desc' : 'asc' } : { sort: id, dir: ['job', 'ae', 'last'].includes(id) ? 'asc' : 'desc' });
   const showClient = !scope;
+  const wide = useTableWidth();
+  // For All time the period's column would be the same as the all-time one, so it is left out.
+  const periodColumn = choices.period !== 'all';
 
   const summary = data && (() => {
     const s = data.summary;
@@ -163,12 +183,18 @@ export default function Cycles() {
         <p>
           <b className="tabular font-semibold text-stone-900">{plural(s.cycles, 'cycle')}</b> {choices.period === 'all' ? 'in all' : inPeriod}
           {s.on_other_jobs > 0 && <span className="text-stone-500"> ({s.on_open_jobs} on open jobs, {s.on_other_jobs} on jobs no longer open)</span>}
-          <span className="text-stone-400" aria-hidden="true"> · </span><span className="max-sm:block">
+          <span className="text-stone-400 max-sm:hidden" aria-hidden="true"> · </span><span className="max-sm:block">
             <b className="tabular font-semibold text-stone-900">{s.touched}</b> of {plural(s.open_jobs, 'open job')} touched,{' '}
             <b className={cx('tabular font-semibold', s.untouched ? 'text-amber-800' : 'text-stone-900')}>{s.untouched}</b> not touched
           </span>
         </p>
-        {data.from && <p className="mt-0.5 text-xs text-stone-500">{periodLabel}: since {fmtWhen(data.from)}</p>}
+        {data.from && (
+          <p className="mt-0.5 text-xs text-stone-500">
+            {choices.period === 'week'
+              ? `This week: from ${longDay(data.from_day)}, ${data.time_zone.split('/').pop().replace(/_/g, ' ')} time`
+              : `${periodLabel}: since ${fmtWhen(data.from)}`}
+          </p>
+        )}
       </Card>
     );
   })();
@@ -196,20 +222,20 @@ export default function Cycles() {
   );
 
   // On a phone, where seven columns cannot fit: a card for each job, with the same facts.
-  const cards = data && data.rows.length > 0 && (
-    <ul className="divide-y divide-line md:hidden">
+  const cards = data && data.rows.length > 0 && !wide && (
+    <ul className="divide-y divide-line">
       {data.rows.map((row) => (
         <li key={row.id} className="px-4 py-3">
           <div className="flex items-start gap-2">
             <Opener row={row} open={opened.has(row.id)} onToggle={() => toggle(row.id)} />
             <div className="min-w-0 flex-1">
               <JobName row={row} showClient />
-              <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                <div className="col-span-2"><dt className="text-xs text-stone-500">Last cycle</dt><dd><LastCycle row={row} compact /></dd></div>
-                <div><dt className="text-xs text-stone-500">{periodLabel}</dt><dd className="tabular font-medium text-stone-900">{row.cycles_period}</dd></div>
+              <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 text-sm">
+                <div className="col-span-3"><dt className="text-xs text-stone-500">Last cycle</dt><dd><LastCycle row={row} compact /></dd></div>
+                {periodColumn && <div><dt className="text-xs text-stone-500">{periodLabel}</dt><dd className="tabular font-medium text-stone-900">{row.cycles_period}</dd></div>}
                 <div><dt className="text-xs text-stone-500">All time</dt><dd className="tabular font-medium text-stone-900">{row.cycles_total}</dd></div>
-                <div><dt className="text-xs text-stone-500">On a list now</dt><dd><OnList people={row.on_list} /></dd></div>
                 <div><dt className="text-xs text-stone-500">Open</dt><dd className="tabular text-stone-900">{plural(row.days_open, 'day')}</dd></div>
+                <div><dt className="text-xs text-stone-500">On a list now</dt><dd><OnList people={row.on_list} /></dd></div>
                 <div className="col-span-2"><dt className="text-xs text-stone-500">Account executive</dt><dd className="text-stone-900">{aeName(row)}</dd></div>
               </dl>
               {opened.has(row.id) && <div className="mt-3 rounded-lg bg-paper px-3 py-2"><History job={row} /></div>}
@@ -220,15 +246,15 @@ export default function Cycles() {
     </ul>
   );
 
-  const table = data && data.rows.length > 0 && (
-    <div className="hidden md:block">
+  const table = data && data.rows.length > 0 && wide && (
+    <div>
       <table className="w-full text-sm">
         <thead>
           <tr className="text-xs text-stone-500">
             <th scope="col" className="w-10 py-2 pl-3"><span className="sr-only">Show cycles</span></th>
             <SortHeading id="job" label={showClient ? 'Job and client' : 'Job'} data={data} onSort={sortBy} left className="!pl-1" />
             <SortHeading id="ae" label="Account executive" data={data} onSort={sortBy} left />
-            <SortHeading id="period" label={periodLabel} data={data} onSort={sortBy} />
+            {periodColumn && <SortHeading id="period" label={periodLabel} data={data} onSort={sortBy} />}
             <SortHeading id="total" label="All time" data={data} onSort={sortBy} />
             <SortHeading id="last" label="Last cycle" data={data} onSort={sortBy} left />
             <SortHeading id="on_list" label="On a list now" data={data} onSort={sortBy} left />
@@ -242,7 +268,7 @@ export default function Cycles() {
                 <td className="py-2 pl-3 align-top"><Opener row={row} open={opened.has(row.id)} onToggle={() => toggle(row.id)} /></td>
                 <td className="py-2.5 pr-3 pl-1 align-top"><JobName row={row} showClient={showClient} /></td>
                 <td className="px-3 py-2.5 align-top text-stone-700">{aeName(row)}</td>
-                <td className="tabular px-3 py-2.5 text-right align-top font-medium text-stone-900">{row.cycles_period}</td>
+                {periodColumn && <td className="tabular px-3 py-2.5 text-right align-top font-medium text-stone-900">{row.cycles_period}</td>}
                 <td className="tabular px-3 py-2.5 text-right align-top text-stone-700">{row.cycles_total}</td>
                 <td className="px-3 py-2.5 align-top"><LastCycle row={row} /></td>
                 <td className="px-3 py-2.5 align-top"><OnList people={row.on_list} /></td>
@@ -251,7 +277,7 @@ export default function Cycles() {
               {opened.has(row.id) && (
                 <tr className="border-b border-line bg-paper">
                   <td />
-                  <td colSpan={7} className="pt-1 pr-4 pb-3 pl-1"><History job={row} /></td>
+                  <td colSpan={periodColumn ? 7 : 6} className="pt-1 pr-4 pb-3 pl-1"><History job={row} /></td>
                 </tr>
               )}
             </Fragment>
@@ -264,7 +290,7 @@ export default function Cycles() {
   return (
     <Page
       title="Cycles"
-      subtitle={`${scopeClient ? scopeClient.name : 'All clients'} · each job ticked on somebody’s Jobs to work on list is one cycle. Which open jobs the team has worked on, and which nobody has touched.`}
+      subtitle={`${scopeClient ? scopeClient.name : 'All clients'} · Each job ticked on somebody’s Jobs to work on list is one cycle.`}
       actions={
         <Select value={choices.period} onChange={(e) => choices.set({ period: e.target.value === 'week' ? '' : e.target.value })} aria-label="Period" className="!w-auto">
           {PERIODS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
