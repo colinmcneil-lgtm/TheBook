@@ -899,6 +899,63 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_reviews_waiting ON team_reviews(revie
 CREATE INDEX IF NOT EXISTS idx_team_reviews_answers ON team_reviews(asked_by) WHERE answered_at IS NOT NULL AND done_at IS NULL;`);
 // ---------- end of asking somebody on the team to review a candidate ----------
 
+// ---------- messages between people on the agency team ----------
+// Chat inside the agency, one to one or in a named group (see messages.js). Like review requests it is the agency's
+// business alone: it lives in these three tables, which nothing but messages.js reads, and nothing about a message is
+// written to a candidate's history, notes or e-mails. A message can point at a candidate's application or at a job so
+// that it shows on that profile too; deleting the candidate or the job only drops the pointer, and the words stay.
+// Everything here is new: no existing row is rewritten.
+db.exec(`
+-- One row for each conversation. A one-to-one conversation is between two people and has no name; pair_key holds
+-- their two user ids, smaller first ("4:7"), so that the database itself refuses a second one between the same two.
+-- updated_at is when the last line was added, for putting the newest conversations first.
+CREATE TABLE IF NOT EXISTS conversations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused, so an old link cannot open somebody else's newer conversation
+  kind TEXT NOT NULL CHECK (kind IN ('direct', 'group')),
+  name TEXT,                                         -- groups only
+  pair_key TEXT,                                     -- one-to-one only: "smaller id:larger id"
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_pair ON conversations(pair_key) WHERE pair_key IS NOT NULL;
+
+-- Who is in each conversation. Leaving a group sets left_at and keeps the row, so the history stays as it was; adding
+-- the person again clears it. last_read_at is how far they have read (what is newer and by somebody else is unread),
+-- and mailed_at is when they were last e-mailed about it: one e-mail until they have read it. A person removed from
+-- the database outright is in no conversation any more; what they wrote stays (messages.user_id below).
+CREATE TABLE IF NOT EXISTS conversation_members (
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  joined_at TEXT NOT NULL,
+  last_read_at TEXT,
+  left_at TEXT,
+  mailed_at TEXT,
+  PRIMARY KEY (conversation_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_members_user ON conversation_members(user_id);
+
+-- Every line in a conversation. kind 'text' is something somebody wrote; 'system' is a short line the app adds when a
+-- group is made, renamed, joined or left ("Priya Nair added Marcus Bell"). A deleted message keeps its row, so the
+-- thread can say "This message was deleted", but its words and its candidate or job are cleared.
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,              -- never reused; the open thread asks for what is newer than the last id it has
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,          -- who wrote it, or who did what a system line says
+  kind TEXT NOT NULL DEFAULT 'text' CHECK (kind IN ('text', 'system')),
+  body TEXT,                                         -- empty once deleted
+  application_id INTEGER REFERENCES applications(id) ON DELETE SET NULL,  -- the candidate it is about, if any
+  job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,                  -- or the job
+  created_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
+CREATE INDEX IF NOT EXISTS idx_messages_application ON messages(application_id) WHERE application_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_job ON messages(job_id) WHERE job_id IS NOT NULL;`);
+// Each person's own choice about being e-mailed when a message comes in: on unless they switch it off in Settings.
+addColumn('users', 'message_mail', 'INTEGER NOT NULL DEFAULT 1');
+// ---------- end of messages between people on the agency team ----------
+
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
   get: (sql, ...p) => db.prepare(sql).get(...p),

@@ -19,8 +19,35 @@ function useScrollToHash(ready) {
   }, [hash, ready]);
 }
 
+/**
+ * Each person's own choice about the e-mail heads-up for new messages from the team. On until they switch it off;
+ * saved the moment it is flipped. The agency's only, like Messages.
+ */
+function MessageMail() {
+  const { mailConfigured } = useApp();
+  const toast = useToast();
+  const { data } = useApi('/messages/settings');
+  const [on, setOn] = useState(null);
+  const value = on ?? data?.email;
+  const [flip, busy] = useAction(async (next) => {
+    await api.put('/messages/settings', { email: next });
+    setOn(next);
+    toast(next ? 'You will be emailed about new messages' : 'You will not be emailed about new messages');
+  });
+  if (value == null) return null;
+  return (
+    <div className="space-y-1.5 border-t border-line pt-4">
+      <Switch checked={value} onChange={(next) => !busy && flip(next)} label="Email me about new messages" />
+      <p className="text-[13px] text-stone-500">
+        One email when somebody on your team writes to you, and no more about that conversation until you have read it.
+        {!mailConfigured && ' Email delivery is not connected yet, so nothing is sent for now.'}
+      </p>
+    </div>
+  );
+}
+
 function Account() {
-  const { user } = useApp();
+  const { user, isAgency } = useApp();
   const toast = useToast();
   const [form, setForm] = useState({ current: '', next: '' });
   const [save, busy] = useAction(async () => { await api.post('/me/password', form); setForm({ current: '', next: '' }); toast('Password changed'); });
@@ -37,6 +64,7 @@ function Account() {
           <Field label="New password" hint="At least 8 characters."><Input type="password" autoComplete="new-password" required minLength={8} value={form.next} onChange={(e) => setForm({ ...form, next: e.target.value })} /></Field>
           <Button type="submit" variant="primary" busy={busy}>Change password</Button>
         </form>
+        {isAgency && <MessageMail />}
       </div>
     </Card>
   );
@@ -217,7 +245,7 @@ function Agency() {
         <div className="space-y-2 p-4 text-sm leading-relaxed text-stone-600">
           {mailConfigured ? (
             <>
-              <p><b className="font-medium text-stone-900">Your team:</b> admins are emailed when someone requests an account, people are emailed a link to set their password when their request is approved, and anybody asked to review a candidate is emailed. These are always sent.</p>
+              <p><b className="font-medium text-stone-900">Your team:</b> admins are emailed when someone requests an account, people are emailed a link to set their password when their request is approved, anybody asked to review a candidate is emailed, and people are emailed about new messages from the team unless they switch that off for themselves under Your account. These are always sent.</p>
               <div className="rounded-lg border border-line p-3">
                 {isAdmin
                   ? <Switch checked={Boolean(candidateMail)} onChange={(on) => !switching && setCandidateMail(on)} label="Send emails to candidates" />

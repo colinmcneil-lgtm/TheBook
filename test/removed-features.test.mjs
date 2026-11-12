@@ -96,12 +96,13 @@ test('the app starts on a database that still has the old tables, and nothing in
     // (stages and offers each gain one column for the reports, and jobs one for its account executive, added in place
     // like the calls columns; they are checked below. So are the two tables that were rebuilt so that somebody can be
     // saved without a job. History lines and e-mails are among the tables that are exactly as they were: what the
-    // agency keeps on people who were in The Book before a job goes in two new tables of its own.)
-    const GAINED = { calls: null, stages: 'with_client', offers: 'accepted_at', jobs: 'account_executive_id', candidates: null, applications: null };
+    // agency keeps on people who were in The Book before a job goes in two new tables of its own. users gains one
+    // column for each person's choice about e-mails for new messages, added the same way.)
+    const GAINED = { calls: null, stages: 'with_client', offers: 'accepted_at', jobs: 'account_executive_id', users: 'message_mail', candidates: null, applications: null };
     for (const name of ['activities', 'emails']) assert.ok(schemaBefore[name], `${name} was there before`);
     for (const name of ['agency_activities', 'agency_emails']) assert.ok(now[name] && !schemaBefore[name], `${name} is new`);
     for (const [name, sql] of Object.entries(schemaBefore)) if (!(name in GAINED)) assert.equal(now[name], sql, `${name} was changed or dropped`);
-    for (const table of ['stages', 'offers', 'jobs']) {
+    for (const table of ['stages', 'offers', 'jobs', 'users']) {
       const before = /\(([\s\S]*)\)/.exec(schemaBefore[table])[1], after = /\(([\s\S]*)\)/.exec(now[table])[1];
       assert.ok(after.startsWith(before) && after.slice(before.length).includes(GAINED[table]), `${table} was changed by more than its one new column`);
     }

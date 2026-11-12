@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { LayoutDashboard, ListTodo, Inbox, Briefcase, Users, CalendarDays, AudioLines, ChartColumn, Building2, Settings, ChevronsUpDown, Check, LogOut, Menu as MenuIcon, X, Search, Plus, UserPlus } from 'lucide-react';
+import { LayoutDashboard, ListTodo, Inbox, MessagesSquare, Briefcase, Users, CalendarDays, AudioLines, ChartColumn, Building2, Settings, ChevronsUpDown, Check, LogOut, Menu as MenuIcon, X, Search, Plus, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate } from '../state.jsx';
 import { url } from '../lib.js';
 import { Avatar, Button, ClientDot, Menu, cx } from '../ui.jsx';
@@ -112,7 +112,18 @@ export default function Layout({ children }) {
   const location = useLocation();
   const [params] = useSearchParams();
   const openCandidate = useOpenCandidate();
-  const { data: counts } = useApi(url('/nav', { client_id: scope }));
+  // The counts are looked at again every twenty seconds while the tab is in view, for messages from the team (and
+  // straight away when a conversation is read or written in, or when the tab comes back into view).
+  const [again, setAgain] = useState(0);
+  useEffect(() => {
+    if (!isAgency) return undefined;
+    const look = () => document.visibilityState === 'visible' && setAgain((n) => n + 1);
+    const timer = setInterval(look, 20000);
+    window.addEventListener('messages:changed', look);
+    document.addEventListener('visibilitychange', look);
+    return () => { clearInterval(timer); window.removeEventListener('messages:changed', look); document.removeEventListener('visibilitychange', look); };
+  }, [isAgency]);
+  const { data: counts } = useApi(url('/nav', { client_id: scope }), again);
   const recording = useRecorder().live;
   useEffect(() => setOpen(false), [location.pathname]);
 
@@ -124,6 +135,8 @@ export default function Layout({ children }) {
       { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
       isAgency && { to: '/todo', label: 'To do', icon: ListTodo, count: counts?.todo },
       { to: '/inbox', label: isAgency ? 'Inbox' : 'To review', icon: Inbox, count: inboxCount },
+      // The agency team's own chat, with how many messages are waiting to be read. A client's user is never shown it.
+      isAgency && { to: '/messages', label: 'Messages', icon: MessagesSquare, count: counts?.messages },
     ] },
     { label: 'Hiring', items: [
       { to: '/jobs', label: 'Jobs', icon: Briefcase },

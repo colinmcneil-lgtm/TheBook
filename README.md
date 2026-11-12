@@ -19,6 +19,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **Otterview** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [Otterview](#otterview) and [Metaview in Otterview](#metaview-in-otterview). |
 | **To do** | Each person on your team has their own list: the jobs they have picked to work on, the people to prep before an interview and the people to debrief after one. Jobs and people are dragged across from a picker, or added with a button; The Book adds people by itself from the interviews scheduled in it. Agency only. See [To do](#to-do). |
+| **Messages** | Chat for the agency team: one-to-one conversations and named groups, with a candidate or a job attached to a message when it is about them, an unread count in the menu and an e-mail heads-up each person can switch off. Agency only. See [Messages](#messages). |
 | **Inbox** | Every new application across all clients lands in one review queue, oldest first. Candidates somebody on your team has asked you to review are there too, under **For your review**. See [Asking for a review](#asking-for-a-review). |
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
 | **Shortlist hand-off** | Submit a candidate to the hiring team with your write-up. They approve (the candidate moves to the next interview stage) or decline with a reason, so you can calibrate. |
@@ -399,9 +400,9 @@ did, because the first start gives each job that was there its creator.
 `test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview (and, where this meets the
 agency's jobs page, a stand-in for the mail provider), on four ports: the fifteenth,
 sixteenth, eleventh and twelfth from `ORACLE_TEST_PORT`, or four in a row from `POOL_TEST_PORT` when that is set
-(`test/oracle-helpers.mjs` lists which test file uses which port, and a unit test checks that no two share one). `npm test` uses thirty-four ports in a row from `ORACLE_TEST_PORT` (3610 unless
+(`test/oracle-helpers.mjs` lists which test file uses which port, and a unit test checks that no two share one). `npm test` uses thirty-six ports in a row from `ORACLE_TEST_PORT` (3610 unless
 set): `ORACLE_TEST_PORT=5080 npm test`. Node refuses to fetch from a few ports whatever is listening on them
-(5060 and 5061 among them), so a base that puts one of the thirty-four on such a port, any base from 5027 to 5061 for
+(5060 and 5061 among them), so a base that puts one of the thirty-six on such a port, any base from 5025 to 5061 for
 one, is refused before a test runs, with a sentence that says which base to choose instead.
 
 ## Account executives and the job board
@@ -479,6 +480,56 @@ waiting and you yourself cannot be. Say what they should look at if you like ("W
   history, e-mails or notes, and no column to their record. So if the app were ever rolled back to a version from
   before this, the client's hiring team would still have nothing of it to see; that version simply leaves the table
   alone. `test/reviews.test.mjs` runs all of this against the real API, with a stand-in for the mail provider.
+
+## Messages
+
+Chat for your agency team, like Teams: write to one person, or start a named group. Choose **Messages** in the menu
+(under Inbox), then **New message**: tick one person for a one-to-one conversation, or several and give the group a
+name. The list on the left has your conversations, newest first, each with its last message and how many you have not
+read; the count beside **Messages** in the menu is the total. On a phone you get the list, then the conversation with
+a back arrow.
+
+- **Writing.** Up to 4000 characters, line breaks kept, and web links (http and https) can be clicked. **Enter** sends;
+  **Shift+Enter** starts a new line. The paperclip attaches one candidate or one job, found by name as the search at
+  the top of the page finds them; it shows as a chip that opens their profile or the job, and can be taken off before
+  sending. You can delete your own messages: the conversation then says "This message was deleted", and the words are
+  removed from the database, not just hidden. Messages cannot be edited.
+- **One conversation for each pair of people.** Starting one with somebody you already have one with opens that one.
+  You cannot write to yourself, to a client's user, or to somebody deactivated or still waiting for their account.
+- **Groups.** A group has a name (up to 80 characters) and at least two people besides you. Anybody in it can rename it,
+  add people from the team, see who is in it, or leave it, from the **...** menu at its top; each of those leaves a short
+  line in the conversation ("Priya Nair added Marcus Bell", "Alex Morgan left"). Somebody added sees the whole
+  conversation from the start. Somebody who leaves no longer has it in their list, cannot open it, and is not counted
+  or e-mailed about it; anybody still in it can add them again.
+- **From a profile or a job.** **Message the team** (in the **...** menu of a candidate's profile, and at the top of a
+  job) opens the composer with that candidate or job already attached: choose one of your conversations, or somebody on
+  the team. The profile (beside the review history) and the job (above its tabs, when there are any) list **Team
+  messages**: the messages that carry that candidate or job, from the conversations you are in. A one-to-one
+  conversation stays between its two people: nobody else sees its messages there or anywhere.
+- **Unread and keeping up to date.** A message is unread for you until you open its conversation. There are no
+  live connections: an open conversation asks for anything new every 5 seconds while the tab is in view, and the list
+  and the menu's count every 20 seconds, so a message can take a few seconds to arrive. If you have scrolled up to read
+  older messages, new ones do not pull you down: a **New messages** button appears instead.
+- **E-mail.** With e-mail connected, the others in a conversation are e-mailed when somebody writes ("Priya Nair sent
+  you a message", or "Priya Nair wrote in Kestrel search" for a group), with the first 200 characters and a link to the
+  conversation (when `APP_URL` is set). Each person gets one e-mail about a conversation until they have read it, never
+  about their own messages, and none about a group they left or once deactivated. Each person can switch it off for
+  themselves with **Email me about new messages** in Settings, under Your account. These are e-mails to the team: the
+  switch for e-mails to candidates does not affect them. If the e-mail cannot be sent, the message is still sent and
+  the log says so.
+- **People who leave the team.** A deactivated teammate's messages stay, with their name; a one-to-one conversation with
+  them can still be read but no longer written in. Somebody removed from the database outright is shown as "Somebody no
+  longer on the team"; the conversation stays for the others.
+- **Candidates and jobs that are deleted.** Deleting a candidate ("Delete all data on this person" included) or a job
+  leaves the messages about them as they were written, and only drops the chip. So whatever was written about a person
+  in a message stays in that message after their record is erased; delete the message too if it must go.
+- **Clients.** A client's user never sees Messages, a count, or that messaging exists: there is no menu item, the
+  address takes them to the dashboard, and every route of it answers them "Only the agency team can do this." Messages
+  are kept in three tables of their own (`conversations`, `conversation_members`, `messages`) and nothing is added to a
+  candidate's history, notes or e-mails.
+- **What it does not do.** No files or images, no reactions, no typing or read indicators, no editing, no search across
+  messages, no messaging with client users and no browser notifications. `test/messages.test.mjs` runs all of the
+  above against the real API, with a stand-in for the mail provider.
 
 ## To do
 
@@ -1372,6 +1423,7 @@ server/
   api.js     All API routes: auth, careers pages, jobs, pipeline, interviews, reports
   reporting.js  The Individual and Clients reports: the record of submissions, first interviews, placements and searches, and the day counting starts
   todos.js   To do: each person's own lists of jobs to work on and people to prep and debrief, and what interviews add to them
+  messages.js  Messages: the agency team's one-to-one and group conversations, unread counts and the e-mail heads-up
   board.js   Jobs on our website: the agency's confidential posts, the check that keeps the client out of them, the public board and its feed
   autofill.js  Drafting a job and its brief from a job description and intake notes
   oracle.js  Otterview: recording and uploading calls, transcription, notes and submission drafts
@@ -1444,4 +1496,9 @@ they made at that client, their résumé files, and their recorded calls with th
   applying, every e-mail's whole text, which websites may frame which pages, and starting on a database made by the
   version before it); the agency's screens, the public board and the board inside a stand-in for the agency's
   website were driven in Chrome at 1280 and 390 wide on the demo data.
+  Messages is tested against the real server with a stand-in for the mail provider (`test/messages.test.mjs`: who can
+  be written to, one conversation for each pair also when two requests arrive at once, groups joined and left, every
+  route refused to somebody not in the conversation and to a client's user, deleting, unread counts, every e-mail rule,
+  and candidates, jobs and teammates that go); its screens were driven in Chromium at 1280 and 390 wide on the demo data
+  as two recruiters writing to each other at once, in a group, and as a client's user.
   The other screens were verified by hand.

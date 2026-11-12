@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, CalendarDays, ChevronDown, Copy, ExternalLink, Pencil, Trash2, UserPlus } from 'lucide-react';
+import { ArrowLeft, CalendarDays, ChevronDown, Copy, ExternalLink, MessagesSquare, Pencil, Trash2, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
 import { api, url, daysSince, fmtDate, photoUrl, salaryRange, sourceName, plural, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
 import { Avatar, Badge, Button, Card, Empty, Menu, Page, Stars, Tabs, useAction, useToast, cx } from '../ui.jsx';
@@ -9,6 +9,7 @@ import ApplicationsTable from '../components/ApplicationsTable.jsx';
 import JobForm from '../components/JobForm.jsx';
 import JobBrief from '../components/JobBrief.jsx';
 import JobBoardPost from '../components/JobBoardPost.jsx';
+import { MessageTeamModal, TeamMessagesCard, jobAttachment } from '../components/TeamMessages.jsx';
 
 // The tab each person used last, remembered per person: on a shared computer the next one starts on their own.
 const tabKey = (user) => `thebook.jobtab.${user.id}`;
@@ -257,6 +258,7 @@ export default function JobDetail() {
                   isAdmin && { label: 'Delete job', icon: Trash2, danger: true, onClick: remove },
                 ]}
               />
+              <Button icon={MessagesSquare} onClick={() => setModal('message')}>Message the team</Button>
               <Button icon={Pencil} onClick={() => setModal('edit')}>Edit</Button>
               <Button variant="primary" icon={UserPlus} onClick={() => setModal('add')}>Add candidate</Button>
             </>
@@ -265,6 +267,8 @@ export default function JobDetail() {
       }
     >
       <Link to="/jobs" className="no-print -mt-3 mb-3 inline-flex items-center gap-1 text-[13px] text-stone-500 hover:text-stone-800"><ArrowLeft className="size-3.5" />All jobs</Link>
+      {/* The team's messages about this job, from the conversations the person looking is in; nothing when there are none. The agency's alone. */}
+      {isAgency && <TeamMessagesCard jobId={job.id} hideEmpty className="mb-4 max-w-3xl" />}
       <Tabs className="mb-4" value={tab} onChange={setTab}
         tabs={[isAgency && { id: 'brief', label: 'Brief' }, { id: 'pipeline', label: 'Pipeline', count: inPlay.length }, { id: 'all', label: 'All candidates', count: apps.length },
           { id: 'details', label: isAgency ? 'Advert and setup' : 'Job details' },
@@ -275,6 +279,7 @@ export default function JobDetail() {
       {tab === 'all' && <ApplicationsTable rows={apps} showJob={false} empty="Nobody has applied yet. Share the apply link or add candidates you have sourced." />}
       {tab === 'details' && <Details job={job} stages={stages} />}
       {tab === 'post' && isAgency && <JobBoardPost job={job} />}
+      {modal === 'message' && isAgency && <MessageTeamModal attachment={jobAttachment({ id: job.id, title: job.title, client_name: job.client_name })} onClose={() => setModal(null)} />}
       {modal === 'edit' && <JobForm job={job} stages={stages} onClose={() => setModal(null)} />}
       {modal === 'add' && <AddCandidateModal jobId={job.id} onClose={() => setModal(null)} onAdded={openCandidate} />}
     </Page>

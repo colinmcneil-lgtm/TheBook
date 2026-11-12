@@ -9,6 +9,7 @@ import Login, { Join } from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Todo from './pages/Todo.jsx';
 import Inbox from './pages/Inbox.jsx';
+import Messages from './pages/Messages.jsx';
 import Jobs from './pages/Jobs.jsx';
 import JobDetail from './pages/JobDetail.jsx';
 import Candidates from './pages/Candidates.jsx';
@@ -101,6 +102,9 @@ function Workspace() {
           <Route path="/" element={<Dashboard />} />
           {ctx.isAgency && <Route path="/todo" element={<Todo />} />}
           <Route path="/inbox" element={<Inbox />} />
+          {/* The agency team's own chat. A client's user has no route to it, so the address takes them to the dashboard as any page they cannot open does. */}
+          {ctx.isAgency && <Route path="/messages" element={<Messages />} />}
+          {ctx.isAgency && <Route path="/messages/:id" element={<Messages />} />}
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/jobs/:id" element={<JobDetail />} />
           <Route path="/candidates" element={<Candidates />} />

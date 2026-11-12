@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines, LoaderCircle, Plus, EyeOff, UserCheck, FileUp,
+  X, Mail, Phone, MapPin, Link2, FileText, ArrowRight, BriefcaseBusiness, CalendarPlus, Ellipsis, Send, Lock, Undo2, Trash2, Pencil, Banknote, Check, CircleAlert, CircleCheck, Hourglass, Download, LogOut, ClipboardCheck, Merge, Mic, AudioLines, LoaderCircle, Plus, EyeOff, UserCheck, FileUp, MessagesSquare,
 } from 'lucide-react';
 import { api, url, ago, since, extUrl, photoUrl, telHref, fmtDate, fmtDateTime, fmtWhen, money, firstName, NO_JOB, sourceName, INTERVIEW_KINDS, RECOMMENDATIONS } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
@@ -14,6 +14,7 @@ import { RejectModal, ScheduleModal, ScorecardModal, EmailModal, SubmitModal, Re
   AttachResumeModal, RESUME_ACCEPT, carriesFiles, pickResume, resumeRefusal, useNoStrayDrops } from './CandidateModals.jsx';
 import { NoJobBadge, ReviewBadge } from './bits.jsx';
 import { AskReviewModal, ReviewHistory, ReviewRequests } from './TeamReviews.jsx';
+import { MessageTeamModal, TeamMessagesCard, candidateAttachment } from './TeamMessages.jsx';
 
 const OFFER_STATUS = { draft: { label: 'Draft', tone: 'gray' }, sent: { label: 'Sent', tone: 'amber' }, accepted: { label: 'Accepted', tone: 'green' }, declined: { label: 'Declined', tone: 'red' } };
 const DELIVERY = { sent: { label: 'Sent', tone: 'green' }, failed: { label: 'Delivery failed', tone: 'red' }, not_configured: { label: 'Saved, not sent', tone: 'amber' } };
@@ -212,6 +213,7 @@ function CandidateView({ data, onClose }) {
               isAgency && active && { label: app.review_status ? 'Resubmit to hiring team' : 'Submit to hiring team', icon: Send, onClick: () => setModal('submit') },
               isAgency && !general && { label: data.offer ? 'Update offer' : 'Record an offer', icon: Banknote, onClick: () => setModal('offer') },
               isAgency && { label: 'Ask for AE review', icon: UserCheck, onClick: () => setModal('askReview') },
+              isAgency && { label: 'Message the team', icon: MessagesSquare, onClick: () => setModal('message') },
               isAgency && { label: 'Edit details', icon: Pencil, onClick: () => setModal('edit') },
               isAgency && !general && { label: 'Add to another job', icon: BriefcaseBusiness, onClick: () => setModal('addToJob') },
               active && null,
@@ -275,7 +277,7 @@ function CandidateView({ data, onClose }) {
         ))}
         <ReviewBanner data={data} onDecide={(decision) => setModal({ review: decision })} />
 
-        {tab === 'overview' && <Overview data={data} reviews={isAgency ? teamReviews?.reviews : null} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} onChooseResume={isAgency ? takeResume : null} />}
+        {tab === 'overview' && <Overview data={data} reviews={isAgency ? teamReviews?.reviews : null} onOffer={() => setModal('offer')} onFee={() => setModal('fee')} onResume={() => setTab('resume')} onChooseResume={isAgency ? takeResume : null} onMessage={isAgency ? () => setModal('message') : null} />}
         {/* Drawn afresh when the file changes: a newer résumé can take the place of this one under the same address and name.
             Straight after an attach, until the profile shows the new file, it would be drawn under the old one's name. */}
         {tab === 'resume' && app.resume_file && (attachedOver ? <Loading /> : <ResumeViewer key={app.resume_file} app={app} />)}
@@ -295,6 +297,7 @@ function CandidateView({ data, onClose }) {
       {modal === 'edit' && <EditCandidateModal data={data} onClose={() => setModal(null)} />}
       {modal === 'addToJob' && <AddToJobModal data={data} onClose={() => setModal(null)} />}
       {modal === 'askReview' && <AskReviewModal applicationId={app.id} candidateName={candidate.name} jobLine={job ? `${job.title} at ${client.name}` : null} onClose={() => setModal(null)} />}
+      {modal === 'message' && <MessageTeamModal attachment={candidateAttachment({ id: app.id, name: candidate.name, job_id: job?.id, job_title: job?.title, client_name: client?.name })} onClose={() => setModal(null)} />}
       {modal === 'erase' && <EraseModal data={data} elsewhere={elsewhere} metaviewToo={metaviewToo} onClose={() => setModal(null)} onDone={onClose} />}
       {modal?.review && <ReviewModal data={data} decision={modal.review} onClose={() => setModal(null)} />}
       {modal?.scorecard && job && <ScorecardModal interview={modal.scorecard} criteria={job.criteria} candidateName={candidate.name} onClose={() => setModal(null)} />}
@@ -351,7 +354,7 @@ function ReviewBanner({ data, onDecide }) {
 }
 
 /** `onChooseResume` takes a résumé file chosen on the profile; it is only given to the agency. */
-function Overview({ data, reviews, onOffer, onFee, onResume, onChooseResume }) {
+function Overview({ data, reviews, onOffer, onFee, onResume, onChooseResume, onMessage }) {
   const { isAgency, bump, user } = useApp();
   const { application: app, client } = data;
   const general = Boolean(app.general) || !data.job;
@@ -548,6 +551,8 @@ function Overview({ data, reviews, onOffer, onFee, onResume, onChooseResume }) {
           </Card>
         )}
         <ReviewHistory reviews={reviews} />
+        {/* The team's messages about this candidate, from the conversations the person looking is in. The agency's alone. */}
+        {isAgency && <TeamMessagesCard applicationId={data.application.id} onWrite={onMessage} />}
         {data.others.length > 0 && (
           <Card className="p-4">
             <h3 className="text-sm font-semibold text-stone-900">Also considered for</h3>

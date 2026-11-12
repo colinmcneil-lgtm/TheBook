@@ -1307,7 +1307,14 @@ test('starting on a database made by the live code adds the board’s tables and
       candidates: rebuilt('candidates').replace('client_id INTEGER NOT NULL REFERENCES', 'client_id INTEGER REFERENCES'),
       applications: rebuilt('applications').replace('job_id INTEGER NOT NULL REFERENCES', 'job_id INTEGER REFERENCES').replace('stage_id INTEGER NOT NULL REFERENCES', 'stage_id INTEGER REFERENCES')
         .replace('owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,', 'owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL, general_until TEXT,') };
+    // (The users table gains one column at its end as well, for each person's choice about e-mails for new messages:
+    // a later feature, tested in test/messages.test.mjs. It is on in the rows that were there.)
     for (const [name, sql] of Object.entries(expected)) {
+      if (name === 'users') {
+        const was = /\(([\s\S]*)\)/.exec(sql)[1], now = /\(([\s\S]*)\)/.exec(after.objects.users)[1];
+        assert.ok(now.startsWith(was) && /^,\s*message_mail INTEGER NOT NULL DEFAULT 1$/.test(now.slice(was.length)), 'users was changed by more than its one new column');
+        continue;
+      }
       if (name !== 'jobs') { assert.equal(after.objects[name], sql, `${name} was changed or dropped`); continue; }
       const was = /\(([\s\S]*)\)/.exec(sql)[1], now = /\(([\s\S]*)\)/.exec(after.objects.jobs)[1];
       assert.ok(now.startsWith(was) && /^,\s*account_executive_id INTEGER REFERENCES users\(id\) ON DELETE SET NULL$/.test(now.slice(was.length)), 'jobs was changed by more than its one new column');
@@ -1335,7 +1342,10 @@ test('starting on a database made by the live code adds the board’s tables and
     const plain = (value) => JSON.parse(JSON.stringify(value));
     // Each job's account executive is filled in on start from who created it: that column is the later feature's, not the board's.
     const jobsAsTheyWere = settled.jobs.map(({ account_executive_id, ...job }) => job);
-    assert.deepEqual(plain({ ...settled, jobs: jobsAsTheyWere, settings: settled.settings.filter((s) => !theirs(s)) }),
+    // Each person's switch for e-mails about new messages is on: that column is the messages feature's.
+    assert.deepEqual(settled.users.map((u) => u.message_mail), settled.users.map(() => 1));
+    const usersAsTheyWere = settled.users.map(({ message_mail, ...user }) => user);
+    assert.deepEqual(plain({ ...settled, jobs: jobsAsTheyWere, users: usersAsTheyWere, settings: settled.settings.filter((s) => !theirs(s)) }),
       plain({ ...before.rows, settings: before.rows.settings.filter((s) => !theirs(s)), applications: before.rows.applications.map((row) => ({ ...row, general_until: null })) }));
     assert.ok(!after.rows.settings.some((s) => s.key.startsWith('board_')));   // the board's settings are only written when an admin saves them
     db.close();

@@ -13,6 +13,7 @@ import * as reporting from './reporting.js';
 import * as todos from './todos.js';
 import * as board from './board.js';
 import * as reviews from './reviews.js';
+import * as messages from './messages.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -585,6 +586,9 @@ board.registerBoard(api, { agencyOnly, adminOnly, bad, clean, text, int, takeHit
 // Asking somebody on the team to review a candidate is a module of its own too. The routes below tell it when an
 // application is folded into another, so that the requests about it move with it.
 reviews.registerReviews(api, { agencyOnly, bad, text, int, loadApp: (id, user) => loadApp(id, user), scopeOf: (req) => scopeOf(req) });
+// Messages between people on the agency team are a module of their own as well. The routes below tell it when an
+// application is folded into another, so that messages about it stay on the person's profile.
+messages.registerMessages(api, { agencyOnly, bad });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);
@@ -633,6 +637,9 @@ api.get('/nav', (req, res) => {
     // Candidates somebody on the team asked this person to review, and answers that have come back to them, in view of
     // the client chosen as the Inbox shows them (`reviews`), and of those the ones for them to answer (`to_review`). The agency's only.
     ...(isAgency(req.user) ? reviews.waitingOn(req.user.id, cid) : {}),
+    // Messages from the rest of the team this person has not read yet, in every conversation they are in, whichever
+    // client the workspace is showing. The agency's only: a client's user is not told that messages exist.
+    ...(isAgency(req.user) ? { messages: messages.unreadFor(req.user.id) } : {}),
   });
 });
 
@@ -2124,6 +2131,7 @@ function foldEntry(going, kept, userId) {
   q.run('UPDATE applications SET cover_note = COALESCE(cover_note, ?), owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', going.cover_note, going.owner_id, now(), kept.id);
   board.entryFolded(going.id, kept.id); // what the board had noted about a post they once applied through stays set aside, on the entry that is kept
   reviews.entryFolded(going.id, kept.id, userId); // anybody asked to review them is asked about the entry that is kept
+  messages.entryFolded(going.id, kept.id); // and the team's messages about them stay on their profile
   q.run('DELETE FROM applications WHERE id = ?', going.id);
   foldedInto(going.id, kept.id); // a message still on its way to them is recorded there
   return spare;
@@ -2233,6 +2241,7 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
   q.run('UPDATE applications SET owner_id = COALESCE(owner_id, ?), updated_at = ? WHERE id = ?', entry.owner_id, now(), there.id);
   board.entryFolded(entry.id, there.id); // what the board had set aside for the entry is kept with the application it is folded into
   reviews.entryFolded(entry.id, there.id, user.id); // and so are the requests for somebody on the team to review them, which only the agency reads
+  messages.entryFolded(entry.id, there.id); // and the team's messages about them, which only the agency reads as well
   q.run('DELETE FROM applications WHERE id = ?', entry.id);
   foldedInto(entry.id, there.id); // a message still on its way to them is recorded there, for the agency
   const left = absorbRecord(person, into);
