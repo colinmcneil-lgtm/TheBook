@@ -11,9 +11,9 @@ import { DragGhost, DropSlot, Grip, useDragDrop } from '../components/DragDrop.j
 const LISTS = {
   job: { title: 'Jobs to work on', picker: 'pick-jobs', add: 'Add jobs', icon: Briefcase, ticked: 'done' },
   prep: { title: 'People to prep', picker: 'pick-people', add: 'Add people', icon: GraduationCap, ticked: 'prepped',
-    hint: 'The Book adds people here by itself, seven days before an interview booked in it.' },
+    hint: 'The Book adds people here by itself, seven days before an interview on a job you are the account executive of.' },
   debrief: { title: 'People to debrief', picker: 'pick-people', add: 'Add people', icon: MessagesSquare, ticked: 'debriefed',
-    hint: 'The Book adds people here by itself, when an interview booked in it has ended.' },
+    hint: 'The Book adds people here by itself, when an interview has ended on a job you are the account executive of.' },
 };
 /** What an item is called: the job's title or the person's name. */
 const nameOf = (item) => item.title ?? item.name;

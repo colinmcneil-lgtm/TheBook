@@ -9,18 +9,23 @@
 //     anybody else is answered exactly as a number that does not exist. Agency only: client users are refused on
 //     every route.
 //  2. The Book fills the two people lists by itself from the interviews scheduled in it. A candidate goes on the To
-//     prep list of the recruiter who owns them in that job (failing that, of whoever scheduled the interview) from
-//     seven days before the interview starts. When the interview's end has passed, their prep is ticked and they go
-//     on that person's To debrief list. A cancelled interview takes its items with it, and a moved one keeps them
-//     (they show the new time). An item The Book takes off is set aside, not deleted: if the same interview brings
-//     it back (moved back within the week, un-cancelled, the candidate handed back), it comes back with its note.
+//     prep list of the account executive of their job from seven days before the interview starts: preparing
+//     people for the client is the account executive's work. A job with no account executive who can have a list
+//     (none, deactivated, or now one of a client's users) falls back to the recruiter who owns the candidate in that
+//     job, then to whoever scheduled the interview. When the interview's end has passed, their prep is ticked and
+//     they go on that same person's To debrief list. A cancelled interview takes its items with it, and a moved one
+//     keeps them (they show the new time). An item The Book takes off is set aside, not deleted: if the same
+//     interview brings it back (moved back within the week, un-cancelled, the job or candidate handed back), it
+//     comes back with its note. A job handed to another account executive takes its open prep and debrief items
+//     with it at once (accountExecutiveChanged), however old an open debrief is.
 //  3. What a person took off their list, or ticked, is theirs to decide: The Book never puts the same person back
 //     for the same interview. That is why a removed item is kept as a row and only marked removed.
 //
 // Nothing here runs on a timer. The lists are brought up to date for the time it is now whenever somebody asks for
-// their list or for the menu's count (catchUp), and at once when an interview is scheduled, changed or cancelled:
-// the routes in api.js call interviewChanged() at those points. Interviews are only ever deleted along with their
-// candidate or job, and the database removes those items by itself (see the table in db.js).
+// their list or for the menu's count (catchUp), and at once when an interview is scheduled, changed or cancelled,
+// or a job changes account executive: the routes in api.js call interviewChanged() and accountExecutiveChanged() at
+// those points. Interviews are only ever deleted along with their candidate or job, and the database removes those
+// items by itself (see the table in db.js).
 import { q, tx, now, getSetting, setSetting } from './db.js';
 
 const HOUR = 3600000;
@@ -114,11 +119,15 @@ function placeByTime(item, start) {
  * To prep follows the next interview that has not been held, from seven days before it starts; To debrief follows
  * the latest one that has, for seven days after it ended (longer when nobody opened The Book in that time, see
  * `seen`). One at a time for each, so two interviews in a week do not put the same person on a list twice. The item
- * goes to the recruiter who owns the candidate in that job, or to whoever scheduled the interview when nobody on
- * the team owns them.
+ * goes to the job's account executive; when the job has none who can have a list, to the recruiter who owns the
+ * candidate in that job; when nobody on the team owns them either, to whoever scheduled the interview.
+ *
+ * An open debrief The Book added follows that person however long ago its interview was: it was never done, and
+ * when the job is handed on it is the new account executive's to do. Only adding a debrief nobody had is limited to
+ * the week (or month) after the interview.
  */
 function settle(applicationId) {
-  const app = q.get('SELECT id, owner_id, status FROM applications WHERE id = ?', applicationId);
+  const app = q.get('SELECT a.id, a.owner_id, a.status, j.account_executive_id FROM applications a LEFT JOIN jobs j ON j.id = a.job_id WHERE a.id = ?', applicationId);
   if (!app) return;
   const at = clock().getTime(), t = stamp();
   const interviews = interviewsOf(app.id, at);
@@ -136,7 +145,8 @@ function settle(applicationId) {
   // Taken off by The Book, not by the person. The row is kept, marked as set aside, so that the note on it is
   // still there if this interview brings the item back.
   const setAside = (r) => set(r, { removed_at: t, set_aside: 1 });
-  const owner = onTeam(app.owner_id);
+  // The account executive first, then the owner: looked up once, as neither changes from one interview to the next.
+  const lead = onTeam(app.account_executive_id) ?? onTeam(app.owner_id);
   const schedulers = new Map();
   const scheduler = (userId) => { if (!schedulers.has(userId)) schedulers.set(userId, onTeam(userId)); return schedulers.get(userId); };
 
@@ -144,7 +154,11 @@ function settle(applicationId) {
     // To debrief for a week after it ended, or, when nobody has opened The Book since it ended, for a month.
     const fresh = at < i.end + WEEK || (i.end > seen && at < i.end + MONTH);
     const wanted = { prep: i === next && at >= i.start - WEEK, debrief: i === last && fresh && i.end >= since };
-    const who = owner ?? scheduler(i.created_by);
+    const who = lead ?? scheduler(i.created_by);
+    // A debrief The Book added that was taken off somebody else's list because it is now `who`'s: it goes on
+    // theirs, even when it would not be added today (one about an interview held weeks ago that was never done).
+    // A prep needs no such care: one still open is always for an interview within the week, so it is wanted anyway.
+    const moved = { prep: false, debrief: false };
 
     // What is already on somebody's list for this interview.
     for (const r of rows.filter((x) => x.interview_id === i.id && !x.removed_at)) {
@@ -165,13 +179,14 @@ function settle(applicationId) {
         // the right list, when it is due.
         else if (r.auto && (!wanted.prep || (who && r.user_id !== who))) setAside(r);
       } else if (!i.over) letGo();                           // cancelled, or moved to a time that has not come yet
-      else if (r.auto && wanted.debrief && who && r.user_id !== who) setAside(r);
+      // The job (or the candidate) is now somebody else's: still to do, so it goes with it, however old.
+      else if (r.auto && who && r.user_id !== who) { setAside(r); moved.debrief = true; }
     }
 
     for (const kind of PEOPLE) {
-      if (!wanted[kind]) continue;
+      if (!wanted[kind] && !moved[kind]) continue;
       // Anybody who put this candidate on their own list with no interview to go by now has one.
-      for (const r of rows.filter((x) => x.kind === kind && open(x) && !x.interview_id)) set(r, { interview_id: i.id });
+      if (wanted[kind]) for (const r of rows.filter((x) => x.kind === kind && open(x) && !x.interview_id)) set(r, { interview_id: i.id });
       // Already there, or dealt with: ticked or taken off by the person for this interview, it is not put back.
       const forThis = (x) => x.user_id === who && x.kind === kind && x.interview_id === i.id;
       if (!who || rows.some((x) => forThis(x) && !x.set_aside)) continue;
@@ -207,6 +222,38 @@ export function leftJob(applicationId) {
 }
 
 /**
+ * The job was handed to another account executive, or its account executive can no longer have a list (deactivated,
+ * or now one of a client's users): the open prep and debrief items The Book added for its candidates follow at once,
+ * set aside for the person who had them and added for the one who has them now. Every candidate of the job with an
+ * interview is looked at, not only those near today: a debrief about an interview held weeks ago that was never done
+ * moves too, and catchUp() would not look at it. Never fails the work it follows, like interviewChanged().
+ */
+export function accountExecutiveChanged(jobId) {
+  try {
+    for (const { id } of q.all('SELECT DISTINCT a.id FROM applications a JOIN interviews i ON i.application_id = a.id WHERE a.job_id = ? ORDER BY a.id', jobId)) settleQuietly(id);
+  } catch (err) { console.error('A to-do list could not be brought up to date:', err); }
+}
+
+// Once, at the first start of the version in which prep and debrief go to the job's account executive: the open
+// items The Book had already added to somebody else's list (the recruiter's) for a job whose account executive can
+// have a list move to them, the recruiter's set aside with its note. catchUp() would move most of them by itself,
+// but not a debrief about an interview held more than a week ago, so every candidate with such an item is brought
+// up to date here. Only those: a database with nothing to move is left exactly as it was. Items people added by
+// hand, and what they ticked or took off, stay as they are. A setting says it has been done.
+const MOVED = 'todos_account_executive_moved';
+if (!getSetting(MOVED)) {
+  try {
+    const open = q.all(
+      `SELECT DISTINCT t.application_id AS id FROM todos t JOIN applications a ON a.id = t.application_id JOIN jobs j ON j.id = a.job_id
+       JOIN users u ON u.id = j.account_executive_id AND u.role != 'client' AND u.active = 1 AND u.pending = 0
+       WHERE t.kind IN ('prep', 'debrief') AND t.auto = 1 AND t.done_at IS NULL AND t.removed_at IS NULL AND t.user_id != j.account_executive_id
+       ORDER BY t.application_id`);
+    for (const { id } of open) settleQuietly(id);
+    setSetting(MOVED, new Date().toISOString());
+  } catch (err) { console.error('The to-do lists could not be moved to account executives:', err); }
+}
+
+/**
  * Bring everybody's people lists up to date for the time it is now: interviews that have come within a week, and
  * interviews whose end has passed. Looks only at candidates with an interview near today or with an item that
  * could still change, so it stays quick however much history there is and however many old items are never ticked.
@@ -223,7 +270,8 @@ export function catchUp() {
      GROUP BY application_id ORDER BY coming IS NULL, coming, MIN(starts_at), application_id`, iso(at), from, iso(at + WEEK));
   // Items tied to an interview outside those days that may still have to change: a prep whose interview has passed
   // or gone, and anything about a cancelled interview. A debrief about an interview held longer ago is left out:
-  // nothing changes it but its owner, and there can be any number of those.
+  // nothing changes it but its owner or its job changing hands (accountExecutiveChanged moves it then), and there
+  // can be any number of those.
   const tied = q.all(
     `SELECT DISTINCT t.application_id AS id FROM todos t JOIN interviews i ON i.id = t.interview_id
      WHERE t.done_at IS NULL AND t.removed_at IS NULL AND (t.kind = 'prep' OR i.status = 'cancelled' OR i.starts_at > ?)`, iso(at + WEEK));

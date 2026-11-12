@@ -18,7 +18,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Job board** | Every job has an account executive: the person on your team who created it. The dashboard has a board with a column for each account executive and their jobs under their name, each with how long it has been open, how many openings are filled and how many people are in its pipeline, at interview and at offer. Agency only. See [Account executives and the job board](#account-executives-and-the-job-board). |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **Otterview** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [Otterview](#otterview) and [Metaview in Otterview](#metaview-in-otterview). |
-| **To do** | Each person on your team has their own list: the jobs they have picked to work on, the people to prep before an interview and the people to debrief after one. Jobs and people are dragged across from a picker, or added with a button; The Book adds people by itself from the interviews scheduled in it. Agency only. See [To do](#to-do). |
+| **To do** | Each person on your team has their own list: the jobs they have picked to work on, the people to prep before an interview and the people to debrief after one. Jobs and people are dragged across from a picker, or added with a button; The Book adds people by itself from the interviews scheduled in it, to the lists of the job's account executive. Agency only. See [To do](#to-do). |
 | **Messages** | Chat for the agency team: one-to-one conversations and named groups, with a candidate or a job attached to a message when it is about them, an unread count in the menu and an e-mail heads-up each person can switch off. Agency only. See [Messages](#messages). |
 | **Inbox** | Every new application across all clients lands in one review queue, oldest first. Candidates somebody on your team has asked you to review are there too, under **For your review**. See [Asking for a review](#asking-for-a-review). |
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
@@ -207,7 +207,8 @@ candidate in the app, and put on a job later when the right role comes up.
 - **To do.** Somebody on no job has no interview to be prepared for or debriefed after, so they are never offered
   beside the two people lists (not by the search either), and putting them on one is refused ("Add them to a job
   first"). Put on a job, they are on those lists like anyone in that job: an interview scheduled for them puts them
-  on the To prep list of the recruiter who owns their entry, or failing one of whoever put them on the job. When
+  on the To prep list of the job's account executive; with none, of the recruiter who owns their entry, or failing
+  one of whoever scheduled the interview. When
   they go back to The Book (removed from the job, or the job deleted), they come off everybody's To prep and To
   debrief lists for that job, ticked items included, and the count in the menu follows; what was typed at a debrief
   stays on their profile as the agency-only note it was saved as. An invitation sent to them, or sent again when
@@ -417,6 +418,8 @@ beside each job and can be narrowed to one person's jobs, and the job form has a
   changed.
 - **What goes with it.** The recruiter brief belongs to the account executive: they and admins edit it, and the rest
   of the team reads it. Once a job is handed on, the brief is the new account executive's to edit, not its creator's.
+  So are the job's candidates to prep before an interview and to debrief after one: The Book puts them on the
+  account executive's To do lists, and they move with the job (see [What The Book adds by itself](#what-the-book-adds-by-itself)).
 - **The job board.** On the dashboard, for the agency: one column for each account executive, headed with their name,
   their initials and how many jobs they have, and under it a card for each job with its title, the client, how long
   it has been open, its openings and how many are filled, and how many people are in its pipeline, at interview and
@@ -561,9 +564,12 @@ name opens their profile and **Brief** opens the job's recruiter brief.
 
 Interviews scheduled in The Book fill the two people lists without anybody doing anything.
 
-- From **seven days before** an interview starts, the candidate is on the To prep list of the recruiter who owns
-  them in that job. If nobody on the team owns them, it is the person who scheduled the interview; if that was the
-  client's hiring team, nobody's, until somebody takes the candidate on.
+- From **seven days before** an interview starts, the candidate is on the To prep list of the **job's account
+  executive**: preparing people for the client is their work. Only when the job has no account executive who can
+  have a list (none at all, one who has been deactivated, or one who is now a client's user) does it go to the
+  recruiter who owns the candidate in that job; if nobody on the team owns them, to the person who scheduled the
+  interview; if that was the client's hiring team, nobody's, until somebody takes the candidate on. An account
+  executive who also owns the candidate has them once.
 - Somebody The Book adds to To prep goes **above the first person on the list whose interview is later** than
   theirs, so tomorrow's interview is never at the bottom of a long list. The order you have put everybody else in
   is left alone. On To debrief a new person goes last: whoever has waited longest stays first.
@@ -575,21 +581,40 @@ Interviews scheduled in The Book fill the two people lists without anybody doing
   it, and so does rejecting or withdrawing the candidate. A person you added by hand stays on your list; only the
   time goes.
 - An item The Book takes off is **set aside, not thrown away**. If the same interview brings it back (moved back
-  within the week, set back to scheduled, the candidate handed back to you), it is the same item, with the note
-  you wrote on it.
+  within the week, set back to scheduled, the job or the candidate handed back to you), it is the same item, with
+  the note you wrote on it.
 - One at a time: with two interviews in a week, the candidate is to prep for the next one, and to debrief once,
   about the latest.
 - **What you took off, or ticked, is not put back** for the same interview. A later interview for the same
   candidate is a new one.
-- If the candidate changes hands, the item The Book added moves to the new owner's list (a note the first owner
-  wrote on it is theirs and does not go with it).
+- If the **job is handed to another account executive**, the open prep and debrief items The Book added for its
+  candidates move to the new account executive's lists at once, however long ago a debrief's interview was: it was
+  never done, and it is theirs to do now. The same happens when the account executive is deactivated or becomes a
+  client's user (the items go to whoever is next in line, above), and when they come back. The first person's item
+  is set aside with their note on it, and is theirs again, note and all, if the job comes back to them. Items you
+  added by hand stay on your list, and what you ticked or took off is not given back to you for that interview when
+  the job returns; the new account executive still gets their own item for it while it is wanted. A note written on
+  an item is its owner's and does not go with it.
+- On a job with no account executive, the same goes for the candidate changing hands: the item The Book added moves
+  to the new owner's list.
 - Nobody is put on a debrief list for an interview that ended more than seven days ago, or before the day To do
   first ran on your workspace: the lists start with what is coming up, not with last month. The one exception is
   a break: if nobody opened The Book for a while (the office was shut), then the first time anybody does, everyone
-  whose interview ended since it was last open goes on To debrief, up to a month back.
+  whose interview ended since it was last open goes on To debrief, up to a month back. (A debrief that moves with a job, above, is
+  not a new one: it moves however old it is.)
 
 The lists are brought up to date whenever somebody opens the page or the menu is drawn, and at once when an
-interview is scheduled, changed or cancelled.
+interview is scheduled, changed or cancelled, or a job changes account executive. A debrief about an interview held
+more than a week before is only moved at once, by the handover itself: the update when somebody looks does not go
+back that far.
+
+**When prep and debrief moved to the account executive.** Before this, The Book put people to prep and debrief on
+the list of the recruiter who owned them. At the first start of the version that changed it, every open prep and
+debrief The Book had added for a job with an account executive moved to that account executive, old debriefs
+included; the recruiter's item was set aside with its note, not deleted. Nobody had anything to do by hand. Items
+people had added themselves stayed where they were, and a prep or debrief the recruiter had already ticked stayed
+ticked on their list (the account executive was given their own for that interview if it was still wanted, the
+next time anybody looked). This is done once: a setting records it, and starting again changes nothing.
 
 ### Ticking things off
 
@@ -1490,9 +1515,10 @@ they made at that client, their résumé files, and their recorded calls with th
   on the job form were driven in Chrome at 1280 and 390 wide on the demo data, and printed to PDF.
   To do is tested through a story acted out against the real server with the to-do clock set by the test (adding,
   ordering, ticking, the pickers, an interview scheduled, moved, cancelled and passed, the debrief note, one person
-  against another's list, a client user, deletion and merging, and starting on a database from before it); where
-  it meets people saved without a job (never on a list while on no job, on their owner's list once on a job with an
-  interview, off every list when they go back to The Book, entries joined or folded, deleting) is in
+  against another's list, a client user, deletion and merging, the account executive getting the items and a job
+  handed on, deactivated or left with none, and starting on a database from before it and from before the items
+  went to the account executive); where it meets people saved without a job (never on a list while on no job, on the
+  account executive's list once on a job with an interview, off every list when they go back to The Book, entries joined or folded, deleting) is in
   `test/pool.test.mjs` against the real server, with an edited interview's invitation and history line; the page
   was driven in Chrome on the demo data at 1280 wide with a mouse and at 390 wide with touch input, and with the
   keyboard alone at both widths. It has not been tried on a real phone, or in Safari or Firefox.

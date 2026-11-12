@@ -1910,8 +1910,14 @@ test('an e-mail still on its way when the person is put on a job, joined to an a
 // prep list a week before an interview and on To debrief when it has been held. These tests hold it to the same for
 // people who are saved without a job and put on one later, and to nothing at all while they are on no job.
 const NO_ROW = [{ n: 0 }];
-const newOpenJob = async (clientId, title) => {
-  const id = (await alex.post('/jobs', { client_id: clientId, title, status: 'open' })).body.id;
+/** A new open job, made by Alex. Its account executive is Alex unless another is named (the user id, or null for none). */
+const newOpenJob = async (clientId, title, accountExecutive) => {
+  const id = (await alex.post('/jobs', { client_id: clientId, title, status: 'open', ...(accountExecutive ? { account_executive_id: accountExecutive } : {}) })).body.id;
+  // A job with no account executive cannot be made through the app; written straight in, as an older workspace has them.
+  if (accountExecutive === null) {
+    const database = new DatabaseSync(path.join(dataDir, 'app.db'));
+    try { database.prepare('UPDATE jobs SET account_executive_id = NULL WHERE id = ?').run(id); } finally { database.close(); }
+  }
   return { id, stages: (await alex.get(`/jobs/${id}`)).body.stages };
 };
 const inDays = (days) => new Date(Date.now() + days * 86400000).toISOString();
@@ -1946,7 +1952,9 @@ async function offered(who, appId, name) {
 }
 
 test('on no job, nobody can be put on To prep or To debrief; on a job they are on them like anyone else, and they come off both when they go back to The Book', async () => {
-  const fleet = await newOpenJob(client.maple, 'Fleet Planner');
+  // Dana is the account executive of the jobs in this story: the people The Book puts on To prep go to her.
+  const danaId = db(`SELECT id FROM users WHERE email = 'dana@agency.example'`)[0].id;
+  const fleet = await newOpenJob(client.maple, 'Fleet Planner', danaId);
   const tova = await saved(dana, { name: 'Tova Lindqvist', email: 'tova@example.com', note: 'Met at the logistics fair.' });
   const menu = async (who) => (await who.get('/nav')).body.todo;
   const [danaBefore, samBefore] = [await menu(dana), await menu(sam)];
@@ -1961,8 +1969,8 @@ test('on no job, nobody can be put on To prep or To debrief; on a job they are o
   assert.deepEqual(db('SELECT COUNT(*) AS n FROM todos WHERE application_id = ?', tova), NO_ROW);
   assert.deepEqual([await menu(dana), await onToDo(dana, tova)], [danaBefore, []]);
 
-  // Sam puts her on a job, at an interview stage, and Alex books the interview. She is Dana's: Dana saved her. So
-  // she goes on Dana's To prep list, not on that of whoever put her on the job or booked the interview.
+  // Sam puts her on a job, at an interview stage, and Alex books the interview. Fleet Planner is Dana's job (and
+  // Dana saved her). So she goes on Dana's To prep list, not on that of whoever put her on the job or booked the interview.
   assert.equal((await addToJob(sam, tova, { job_id: fleet.id, stage_id: fleet.stages[1].id })).status, 200);
   assert.deepEqual(await onToDo(dana, tova), [], 'being on a job puts nobody on a list by itself');
   const first = await book_(alex, tova, 'Hiring manager interview', inDays(2));
@@ -2005,8 +2013,8 @@ test('on no job, nobody can be put on To prep or To debrief; on a job they are o
   assert.deepEqual([(await dana.post('/todos', { kind: 'debrief', application_id: tova })).body, (await dana.patch(`/todos/${debrief.id}`, { done: false })).status], [NEEDS_JOB, 404]);
 
   // On another client's job, nothing of the first one follows her onto a list. An interview there puts her on Dana's
-  // list for that job, and Northline's hiring team is shown none of what was said about Maple's.
-  const office = await newOpenJob(client.northline, 'Office Manager');
+  // list for that job (Dana's too), and Northline's hiring team is shown none of what was said about Maple's.
+  const office = await newOpenJob(client.northline, 'Office Manager', danaId);
   assert.equal((await addToJob(dana, tova, { job_id: office.id })).status, 200);
   assert.deepEqual([await onToDo(dana, tova), await onToDo(sam, tova)], [[], []]);
   await book_(sam, tova, 'Meet the practice', inDays(1));
@@ -2015,7 +2023,7 @@ test('on no job, nobody can be put on To prep or To debrief; on a job they are o
 });
 
 test('deleting a job takes it off every To do page, with the people in it: those who go back to The Book and those who go with the job', async () => {
-  const dock = await newOpenJob(client.maple, 'Dock Supervisor');
+  const dock = await newOpenJob(client.maple, 'Dock Supervisor', db(`SELECT id FROM users WHERE email = 'dana@agency.example'`)[0].id);   // Dana's job
   const ivo = await saved(dana, { name: 'Ivo Brandt', email: 'ivo@example.com' });
   assert.equal((await addToJob(dana, ivo, { job_id: dock.id, stage_id: dock.stages[1].id })).status, 200);
   const una = (await dana.upload('/applications', { job_id: dock.id, name: 'Una Straight', email: 'una@example.com' })).body.id;
@@ -2038,8 +2046,10 @@ test('deleting a job takes it off every To do page, with the people in it: those
 });
 
 test('an entry joined to a client\'s record, or folded into another application, leaves every to-do item on the application that is kept and none on one that is gone', async () => {
-  const route = await newOpenJob(client.maple, 'Route Analyst');
-  const depot = await newOpenJob(client.maple, 'Depot Lead');
+  // Two jobs with no account executive, so that each item goes to the recruiter who owns the candidate: Sam's to
+  // Sam and Dana's to Dana, which is what shows where an item ends up when two entries become one.
+  const route = await newOpenJob(client.maple, 'Route Analyst', null);
+  const depot = await newOpenJob(client.maple, 'Depot Lead', null);
   const rowsFor = (...ids) => db(`SELECT application_id AS app, user_id, kind, note FROM todos WHERE application_id IN (${ids.map(() => '?').join(', ')}) AND done_at IS NULL AND removed_at IS NULL ORDER BY id`, ...ids);
   const idOf = async (who) => (await who.get('/me')).body.user.id;
   const [danaId, samId] = [await idOf(dana), await idOf(sam)];
@@ -2536,8 +2546,9 @@ test('somebody who came through a confidential post and goes back to The Book ta
   const refused = await m.rec.post(`/applications/${jo}/emails`, { subject: 'About Kestrel', body: 'Kestrel Logistics would like to meet you.' });
   assert.deepEqual([refused.status, refused.body.code, m.sent.length, mailRows()], [409, 'names_client', 1, rows]);
   assert.deepEqual(m.ok(await m.rec.post(`/applications/${jo}/emails/check`, { subject: 'About Kestrel', body: 'Kestrel Logistics would like to meet you.' })), { names_client: true });
-  // Jo is on the To prep list of the recruiter who owned the entry, for that interview, like anyone in a job.
-  assert.deepEqual(await onToDo(m.rec, jo), [['prep', 'Head of Sales', 'Kestrel Logistics', true, 'First call']]);
+  // Jo is on the To prep list of the job's account executive (Alex, who made it), for that interview, like anyone in a job.
+  assert.deepEqual(await onToDo(m.boss, jo), [['prep', 'Head of Sales', 'Kestrel Logistics', true, 'First call']]);
+  assert.deepEqual(await onToDo(m.rec, jo), []);
   // In the reports the source is the agency's website: "Our website" to the agency, the agency's to the client.
   const sources = async (who, query = '') => m.ok(await who.get(`/reports${query}`)).sources.map((x) => [x.source, x.label, x.applicants]);
   assert.ok((await sources(m.rec, `?client_id=${m.kestrel}`)).some(([source, label]) => source === 'our_website' && label === 'Our website'));
@@ -2569,7 +2580,7 @@ test('somebody who came through a confidential post and goes back to The Book ta
   const noTick = await m.rec.putJson(`/applications/${jo}/client-known`, { known: true });
   assert.deepEqual([noTick.status, noTick.body.error], [400, 'This candidate did not apply through a confidential post.']);
   assert.deepEqual(m.ok(await m.rec.post(`/applications/${jo}/emails/check`, { subject: 'About Kestrel', body: 'Kestrel Logistics would like to meet you.' })), { names_client: false });
-  assert.deepEqual(await onToDo(m.rec, jo), []);
+  assert.deepEqual([await onToDo(m.rec, jo), await onToDo(m.boss, jo)], [[], []]);
   assert.deepEqual(m.ok(await m.rec.get('/applications?general=1')).filter((a) => a.source === 'our_website'), []);
   assert.deepEqual(m.read(`SELECT id FROM applications WHERE job_id IS NULL AND source = 'our_website'`), []);
   assert.equal((await sources(m.rec, `?client_id=${m.kestrel}`)).find(([source]) => source === 'our_website')?.[2] ?? 0, before);

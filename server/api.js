@@ -390,6 +390,7 @@ api.post('/invites/:token/accept', rateLimit('invite', 40, 10 * 60000), (req, re
   if (!name || !validEmail(email)) bad('Your name and a valid email are required.');
   if (pw(b.password).length < 8) bad('Choose a password of at least 8 characters.');
   const clientId = inv.role === 'client' ? inv.client_id : null;
+  let theirJobs = [];   // the jobs a deactivated person coming back was account executive of
   const id = tx(() => {
     const existing = q.get('SELECT * FROM users WHERE email = ?', email);
     // A deactivated account comes back only when the agency invited that exact address: an open link must not be
@@ -407,6 +408,8 @@ api.post('/invites/:token/accept', rateLimit('invite', 40, 10 * 60000), (req, re
         hashPassword(b.password), name, inv.role, clientId, clean(b.title, 120) ?? existing.title, existing.id);
       q.run('DELETE FROM sessions WHERE user_id = ?', existing.id);
       // An account executive is somebody on the agency's team. Whoever comes back as a client's user is no longer one.
+      // Either way their jobs' people to prep and debrief change hands (see after the change is saved).
+      theirJobs = q.all('SELECT id FROM jobs WHERE account_executive_id = ?', existing.id).map((j) => j.id);
       if (inv.role === 'client') q.run('UPDATE jobs SET account_executive_id = NULL WHERE account_executive_id = ?', existing.id);
       return existing.id;
     }
@@ -414,6 +417,9 @@ api.post('/invites/:token/accept', rateLimit('invite', 40, 10 * 60000), (req, re
     return q.insert('INSERT INTO users (email, password_hash, name, role, client_id, title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       email, hashPassword(b.password), name, inv.role, clientId, clean(b.title, 120), now());
   });
+  // Back on the team, their jobs' people to prep and debrief come back to them; back as a client's user, those
+  // jobs have no account executive now and the items go to the recruiter who owns each candidate.
+  for (const jobId of theirJobs) todos.accountExecutiveChanged(jobId);
   startSession(req, res, id);
   if (clientId) board.clientChanged(clientId); // somebody new at a client: their name must not be in a confidential post either
   res.json({ ok: true });
@@ -782,6 +788,11 @@ api.patch('/users/:id', agencyOnly, (req, res) => {
   if (b.password !== undefined || b.active === false) q.run('DELETE FROM sessions WHERE user_id = ?', target.id);
   // Links this person handed out stop working with them, so nobody can be let in on their say-so after they have left.
   if (b.active === false) q.run('DELETE FROM invites WHERE created_by = ? AND used_at IS NULL', target.id);
+  // A deactivated account executive cannot have a to-do list: the people to prep and debrief on their jobs go to
+  // whoever has them instead, and come back to them if they are made active again.
+  if (b.active !== undefined && Boolean(b.active) !== Boolean(target.active) && target.role !== 'client') {
+    for (const j of q.all('SELECT id FROM jobs WHERE account_executive_id = ?', target.id)) todos.accountExecutiveChanged(j.id);
+  }
   // A changed name is checked for in that client's confidential posts, and whoever changed it is told if one came down.
   res.json({ ok: true, ...(target.client_id ? board.clientChanged(target.client_id) : {}) });
 });
@@ -1098,6 +1109,8 @@ api.put('/jobs/:id', agencyOnly, (req, res) => {
       q.run(`UPDATE stages SET position = ? WHERE job_id = ? AND kind = 'hired'`, wanted.length + 2, job.id);
     }
   });
+  // Handed to another account executive: the people they are to prep and debrief go with the job at once.
+  if (accountExecutive !== job.account_executive_id) todos.accountExecutiveChanged(job.id);
   // The job's confidential post, if it has one, is checked again: a new hiring manager's name may be in it, and a job that is no longer open is not advertised.
   res.json({ ok: true, ...board.jobChanged(job.id) });
 });

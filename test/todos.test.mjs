@@ -67,6 +67,20 @@ function rows(sql, ...params) {
   const db = new DatabaseSync(path.join(dataDir, 'app.db'), { readOnly: true });
   try { return db.prepare(sql).all(...params); } finally { db.close(); }
 }
+/** Change the database behind the server's back, for a state no route can produce (a job with no account executive). */
+function write(sql, ...params) {
+  const db = new DatabaseSync(path.join(dataDir, 'app.db'));
+  try { db.exec('PRAGMA foreign_keys = ON'); return db.prepare(sql).run(...params); } finally { db.close(); }
+}
+/** Somebody invited by Olive accepts and is signed in. A deactivated person invited again comes back this way too. */
+async function join(role, name, email, extra = {}) {
+  const { token } = ok(await olive.post('/invites', { role, email, ...extra }));
+  const person = session(server.base);
+  ok(await person.post(`/invites/${token}/accept`, { name, password: 'demo1234' }));
+  return person;
+}
+/** A person's user id. */
+const idOf = async (who) => ok(await who.get('/me')).user.id;
 
 before(async () => {
   dataDir = tempDir('todos');
@@ -77,12 +91,6 @@ before(async () => {
   ok(await olive.post('/setup', { agencyName: 'Harbour Talent', name: 'Olive Admin', email: 'olive@agency.example', password: 'demo1234' }));
   lumen = ok(await olive.post('/clients', { name: 'Lumen' })).id;
   kestrel = ok(await olive.post('/clients', { name: 'Kestrel' })).id;
-  const join = async (role, name, email, extra = {}) => {
-    const { token } = ok(await olive.post('/invites', { role, email, ...extra }));
-    const person = session(server.base);
-    ok(await person.post(`/invites/${token}/accept`, { name, password: 'demo1234' }));
-    return person;
-  };
   priya = await join('recruiter', 'Priya Nair', 'priya@agency.example');
   sam = await join('recruiter', 'Sam Ode', 'sam@agency.example');
   maya = await join('client', 'Maya Okonkwo', 'maya@lumen.example', { client_id: lumen });
@@ -95,6 +103,11 @@ before(async () => {
   await job('sales', kestrel, 'Head of Sales');
   await job('analyst', kestrel, 'Data Analyst', 'paused');
   await job('planned', kestrel, 'Planned search', 'draft');
+  // Prep and debrief go to the job's account executive, and only when a job has none to the recruiter who owns the
+  // candidate, then to whoever scheduled the interview. Most of the story below is about that fallback (who owns a
+  // candidate, who scheduled what), so its jobs are left with no account executive: an older workspace's jobs, say,
+  // or those of somebody who left. The account executive's own part is told in its section further down.
+  write(`UPDATE jobs SET account_executive_id = NULL WHERE id IN (${Object.values(jobs).join(', ')})`);
 });
 
 after(async () => {
@@ -358,7 +371,7 @@ test('a person is put on To prep and To debrief by hand, can be on both, and eac
 /** A person's two people lists in short: who is to prep, who is to debrief. */
 const people = async (who) => { const mine = await lists(who); return { prep: titles(mine.prep), debrief: titles(mine.debrief) }; };
 
-test('a scheduled interview puts the candidate on their owner\'s To prep list from seven days before it starts', async () => {
+test('on a job with no account executive, a scheduled interview puts the candidate on their owner\'s To prep list from seven days before it starts', async () => {
   await clock(at(1));
   // Ana belongs to Priya. Sam schedules her interview for ten days from the start of the story.
   const start = at(10);
@@ -381,7 +394,7 @@ test('a scheduled interview puts the candidate on their owner\'s To prep list fr
   assert.equal(ok(await priya.get('/todos/people'))[0].on_prep, true);
 });
 
-test('with no owner the person who scheduled it gets the item; scheduled by the client with no owner, nobody does', async () => {
+test('with no account executive and no owner the person who scheduled it gets the item; scheduled by the client with no owner, nobody does', async () => {
   // Hal is added by Priya, who then hands him back to nobody. Sam schedules his interview for tomorrow.
   apps.hal = await candidate(priya, 'designer', 'Hal Unowned', 'Hiring manager interview');
   ok(await priya.patch(`/applications/${apps.hal}`, { owner_id: null }));
@@ -694,7 +707,6 @@ test('somebody The Book adds to To prep goes above the people whose interviews a
 });
 
 test('an item The Book takes off keeps its note for when the same interview brings it back', async () => {
-  const idOf = async (who) => ok(await who.get('/me')).user.id;
   const rae = await itemOf(priya, 'prep', 'Rae Sooner');
   ok(await priya.patch(`/todos/${rae.id}`, { note: 'Send her the case study' }));
   // Rae is handed to Sam: she leaves Priya's list for his. Priya's note is hers and does not go with the candidate.
@@ -773,6 +785,162 @@ test('an interview that ended while nobody opened The Book is still to debrief w
   assert.deepEqual(rows('SELECT kind, auto_done, done_at IS NOT NULL AS done FROM todos WHERE application_id = ?', apps.wes).map((r) => ({ ...r })), [{ kind: 'prep', auto_done: 1, done: 1 }]);
 });
 
+// ---------- the job's account executive ----------
+
+const ids = {};                           // user ids, by first name
+/** Who has an application open on a list, read straight from the database: [who, list, added by The Book]. */
+const openRows = (appId) => rows(
+  `SELECT u.email, t.kind, t.auto FROM todos t JOIN users u ON u.id = t.user_id WHERE t.application_id = ? AND t.done_at IS NULL AND t.removed_at IS NULL ORDER BY u.email, t.kind`, appId)
+  .map((r) => [r.email.split('@')[0], r.kind, r.auto]);
+/** A new open job at Lumen with this account executive. */
+async function aeJob(key, title, accountExecutive) {
+  jobs[key] = ok(await olive.post('/jobs', { client_id: lumen, title, status: 'open', account_executive_id: accountExecutive })).id;
+  stages[key] = Object.fromEntries(ok(await olive.get(`/jobs/${jobs[key]}`)).stages.map((s) => [s.name, s.id]));
+}
+/** Hand a job to another account executive, as the job form does. */
+const handOver = async (key, title, accountExecutive) => ok(await olive.putJson(`/jobs/${jobs[key]}`, { title, status: 'open', account_executive_id: accountExecutive }));
+
+test('the account executive of the job gets the prep, and the debrief when the interview has ended, not the recruiter who owns the candidate', async () => {
+  await clock(at(80));
+  for (const [name, who] of Object.entries({ olive, priya, sam })) ids[name] = await idOf(who);
+  // Ari is Priya's candidate, on a job Sam is the account executive of. Priya books the interview.
+  await aeJob('ops', 'Operations Lead', ids.sam);
+  apps.ari = await candidate(priya, 'ops', 'Ari Prepped', 'Hiring manager interview');
+  await schedule(priya, apps.ari, at(82));
+  assert.deepEqual(openRows(apps.ari), [['sam', 'prep', 1]]);             // at once, before anybody opens a list
+  assert.ok((await people(sam)).prep.includes('Ari Prepped'));
+  assert.ok(!(await people(priya)).prep.includes('Ari Prepped'));
+  // When it has ended, Sam's prep is ticked by The Book and Ari is on Sam's To debrief, still not on Priya's.
+  await clock(at(82, 2 * HOUR));
+  const sams = await lists(sam);
+  assert.ok(titles(sams.debrief).includes('Ari Prepped'));
+  assert.equal(sams.prep.done.find((x) => x.name === 'Ari Prepped').auto_done, true);
+  const priyas = await people(priya);
+  assert.ok(!priyas.prep.includes('Ari Prepped') && !priyas.debrief.includes('Ari Prepped'));
+  assert.deepEqual(openRows(apps.ari), [['sam', 'debrief', 1]]);
+  // What Sam types at the debrief is saved on Ari's profile as an agency-only note under his name, as before.
+  const answer = await tick(sam, sams.debrief.open.find((x) => x.name === 'Ari Prepped').id, { debrief: 'Keen; could start in March.' });
+  assert.deepEqual(ok(await priya.get(`/applications/${apps.ari}`)).notes.map((n) => [n.id, n.body, n.private, n.user_name]),
+    [[answer.note_id, 'Debrief after Hiring manager interview:\nKeen; could start in March.', 1, 'Sam Ode']]);
+  assert.deepEqual(ok(await maya.get(`/applications/${apps.ari}`)).notes, []);
+});
+
+test('an account executive who also owns the candidate has one item, not two; the candidate handed to another recruiter, it stays with the account executive', async () => {
+  await aeJob('ux', 'UX Researcher', ids.priya);
+  apps.bo = await candidate(priya, 'ux', 'Bo Samehands', 'Hiring manager interview');
+  await schedule(sam, apps.bo, at(83));
+  assert.deepEqual(openRows(apps.bo), [['priya', 'prep', 1]]);
+  // Sam takes Bo on as his candidate. The job is still Priya's, and so is Bo's prep.
+  ok(await olive.patch(`/applications/${apps.bo}`, { owner_id: ids.sam }));
+  await lists(sam);
+  assert.deepEqual(openRows(apps.bo), [['priya', 'prep', 1]]);
+  await clock(at(83, 2 * HOUR));
+  assert.deepEqual((await people(priya)).debrief.filter((n) => n === 'Bo Samehands'), ['Bo Samehands']);
+  assert.deepEqual(openRows(apps.bo), [['priya', 'debrief', 1]]);
+  assert.equal(rows('SELECT COUNT(*) AS n FROM todos WHERE application_id = ?', apps.bo)[0].n, 2);   // her prep, ticked, and her debrief
+});
+
+test('a job with no account executive falls back to the recruiter who owns the candidate, then to whoever scheduled the interview', async () => {
+  // Olive's job to begin with: she has both to prep.
+  await aeJob('qa', 'QA Engineer', ids.olive);
+  apps.cal = await candidate(priya, 'qa', 'Cal Owned', 'Hiring manager interview');
+  apps.dot = await candidate(priya, 'qa', 'Dot Unowned', 'Hiring manager interview');
+  ok(await priya.patch(`/applications/${apps.dot}`, { owner_id: null }));
+  await schedule(sam, apps.cal, at(85));
+  await schedule(sam, apps.dot, at(85));
+  assert.deepEqual([openRows(apps.cal), openRows(apps.dot)], [[['olive', 'prep', 1]], [['olive', 'prep', 1]]]);
+  // With no account executive (the state an older workspace can be in), Cal goes to Priya, who owns him, and Dot,
+  // whom nobody owns, to Sam, who booked her in.
+  write('UPDATE jobs SET account_executive_id = NULL WHERE id = ?', jobs.qa);
+  await menuCount(olive);
+  assert.deepEqual([openRows(apps.cal), openRows(apps.dot)], [[['priya', 'prep', 1]], [['sam', 'prep', 1]]]);
+});
+
+test('an account executive who is deactivated, or comes back as one of a client\'s users, no longer has the prep: it goes to the recruiter at once', async () => {
+  let rob = await join('recruiter', 'Rob Leaving', 'rob@agency.example');
+  ids.rob = await idOf(rob);
+  await aeJob('data', 'Data Engineer', ids.rob);
+  apps.eve = await candidate(priya, 'data', 'Eve Handed', 'Hiring manager interview');
+  await schedule(priya, apps.eve, at(86));
+  const robs = await itemOf(rob, 'prep', 'Eve Handed');
+  ok(await rob.patch(`/todos/${robs.id}`, { note: 'Ask about her notice' }));
+  // Deactivated: Priya, who owns Eve, has her to prep, straight away.
+  ok(await olive.patch(`/users/${ids.rob}`, { active: false }));
+  assert.deepEqual(openRows(apps.eve), [['priya', 'prep', 1]]);
+  // Invited back to the team, Rob has her again: the same item, with his note.
+  rob = await join('recruiter', 'Rob Leaving', 'rob@agency.example');
+  assert.deepEqual(openRows(apps.eve), [['rob', 'prep', 1]]);
+  assert.deepEqual([(await itemOf(rob, 'prep', 'Eve Handed')).id, (await itemOf(rob, 'prep', 'Eve Handed')).note], [robs.id, 'Ask about her notice']);
+  // Deactivated again and invited back as one of Lumen's hiring team, he is nobody's account executive: the job has
+  // none now, and Eve stays with Priya.
+  ok(await olive.patch(`/users/${ids.rob}`, { active: false }));
+  await join('client', 'Rob Leaving', 'rob@agency.example', { client_id: lumen });
+  assert.equal(rows('SELECT account_executive_id FROM jobs WHERE id = ?', jobs.data)[0].account_executive_id, null);
+  assert.deepEqual(openRows(apps.eve), [['priya', 'prep', 1]]);
+  await lists(priya);
+  assert.deepEqual(openRows(apps.eve), [['priya', 'prep', 1]]);
+});
+
+test('handing a job on moves its open prep and debrief items at once, however old the debrief; hand-added and ticked items stay, and handing it back brings the first person\'s back', async () => {
+  await clock(at(90));
+  await aeJob('mobile', 'Mobile Engineer', ids.sam);
+  const cast2 = { fay: 'Fay Debriefed', gil: 'Gil Coming', hana: 'Hana Ticked', ian: 'Ian Removed', jay: 'Jay Byhand' };
+  for (const [key, name] of Object.entries(cast2)) apps[key] = await candidate(priya, 'mobile', name, 'Hiring manager interview');
+  // Fay's interview was on day 90, and Sam never got round to her debrief.
+  await schedule(priya, apps.fay, at(90, HOUR));
+  await clock(at(90, 3 * HOUR));
+  const fay = await itemOf(sam, 'debrief', 'Fay Debriefed');
+  ok(await sam.patch(`/todos/${fay.id}`, { note: 'Call Fay back' }));
+  // Eleven days later, three more are booked in. Sam prepares Hana and takes Ian off his list; Jay he added himself.
+  await clock(at(101));
+  await schedule(priya, apps.gil, at(103));
+  await schedule(priya, apps.hana, at(103));
+  await schedule(priya, apps.ian, at(104));
+  await addPerson(sam, 'prep', apps.jay, { note: 'My own' });
+  const gil = await itemOf(sam, 'prep', 'Gil Coming');
+  ok(await sam.patch(`/todos/${gil.id}`, { note: 'Send Gil the brief' }));
+  await tick(sam, (await itemOf(sam, 'prep', 'Hana Ticked')).id);
+  await remove(sam, (await itemOf(sam, 'prep', 'Ian Removed')).id);
+  assert.ok(await itemOf(sam, 'debrief', 'Fay Debriefed'));                 // still waiting, eleven days on
+
+  // The job goes to Priya. Before anybody opens a list, the database already says so.
+  await handOver('mobile', 'Mobile Engineer', ids.priya);
+  assert.deepEqual(openRows(apps.fay), [['priya', 'debrief', 1]]);
+  assert.deepEqual(openRows(apps.gil), [['priya', 'prep', 1]]);
+  assert.deepEqual(openRows(apps.hana), [['priya', 'prep', 1]]);          // hers to prepare now; Sam's tick stays his
+  assert.deepEqual(openRows(apps.ian), [['priya', 'prep', 1]]);
+  assert.deepEqual(openRows(apps.jay), [['sam', 'prep', 0]]);             // added by hand: stays where it is
+  const samsRows = (appId) => rows('SELECT id, kind, note, done_at IS NOT NULL AS done, auto_done, removed_at IS NOT NULL AS removed, set_aside FROM todos WHERE application_id = ? AND user_id = ?', appId, ids.sam).map((r) => ({ ...r }));
+  assert.deepEqual(samsRows(apps.fay).filter((r) => r.kind === 'debrief'), [{ id: fay.id, kind: 'debrief', note: 'Call Fay back', done: 0, auto_done: 0, removed: 1, set_aside: 1 }]);
+  assert.deepEqual(samsRows(apps.hana).map((r) => [r.done, r.auto_done, r.removed]), [[1, 0, 0]]);
+  // The count in the menu agrees, and the lists show it.
+  const priyas = await lists(priya);
+  assert.equal(await menuCount(priya), priyas.counts.total);
+  for (const name of ['Gil Coming', 'Hana Ticked', 'Ian Removed']) assert.ok(titles(priyas.prep).includes(name), name);
+  assert.ok(titles(priyas.debrief).includes('Fay Debriefed'));
+  assert.ok(!titles((await lists(sam)).debrief).includes('Fay Debriefed'));
+
+  // Handed back to Sam: his Fay and Gil come back as they were, notes and all. Hana he prepared and Ian he took off:
+  // neither is put back on his list for that interview. Priya's are set aside.
+  await handOver('mobile', 'Mobile Engineer', ids.sam);
+  for (let n = 0; n < 2; n++) {                                           // and the same once anybody has looked
+    assert.deepEqual([openRows(apps.fay), openRows(apps.gil), openRows(apps.hana), openRows(apps.ian), openRows(apps.jay)],
+      [[['sam', 'debrief', 1]], [['sam', 'prep', 1]], [], [], [['sam', 'prep', 0]]]);
+    await lists(sam); await lists(priya);
+  }
+  assert.deepEqual([(await itemOf(sam, 'debrief', 'Fay Debriefed')).id, (await itemOf(sam, 'debrief', 'Fay Debriefed')).note], [fay.id, 'Call Fay back']);
+  assert.deepEqual([(await itemOf(sam, 'prep', 'Gil Coming')).id, (await itemOf(sam, 'prep', 'Gil Coming')).note], [gil.id, 'Send Gil the brief']);
+});
+
+test('a job whose account executive changed without the job form (straight in the database) is put right the next time anybody looks', async () => {
+  write('UPDATE jobs SET account_executive_id = ? WHERE id = ?', ids.priya, jobs.mobile);
+  assert.deepEqual(openRows(apps.gil), [['sam', 'prep', 1]]);             // nobody has looked yet
+  await menuCount(olive);
+  assert.deepEqual(openRows(apps.gil), [['priya', 'prep', 1]]);
+  await handOver('mobile', 'Mobile Engineer', ids.sam);
+  assert.deepEqual(openRows(apps.gil), [['sam', 'prep', 1]]);
+});
+
 // ---------- starting on a live database ----------
 
 test('starting on a database from before To do adds the table and leaves every existing row as it was; starting again changes nothing', async () => {
@@ -791,7 +959,7 @@ test('starting on a database from before To do adds the table and leaves every e
     // Make it the database an earlier version left: no to-do table, and no note of when To do first ran.
     const file = path.join(dir, 'app.db');
     let db = new DatabaseSync(file);
-    db.exec(`DROP TABLE todos; DELETE FROM settings WHERE key = 'todos_since';`);
+    db.exec(`DROP TABLE todos; DELETE FROM settings WHERE key LIKE 'todos_%';`);
     const dump = () => Object.fromEntries(['settings', 'clients', 'users', 'jobs', 'stages', 'candidates', 'applications', 'stage_history', 'activities', 'notes', 'interviews', 'interview_panel', 'report_events']
       .map((t) => [t, db.prepare(`SELECT * FROM ${t} ORDER BY 1`).all()]));
     const old = dump();
@@ -827,6 +995,101 @@ test('starting on a database from before To do adds the table and leaves every e
     assert.equal(db.prepare(`SELECT value FROM settings WHERE key = 'todos_since'`).get().value, since);        // noted once, not again
     const final = dump();
     assert.deepEqual({ ...final, settings: final.settings.filter((s) => !s.key.startsWith('todos_')) }, old);
+    db.close();
+  } finally {
+    await api.stop().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('going live: prep and debrief items The Book had put on a recruiter\'s list move to the job\'s account executive at the first start, the recruiter\'s set aside with their notes; starting again changes nothing', async () => {
+  const dir = tempDir('todos-account-executive');
+  let api = await startApi({ port: UPGRADE_PORT, dataDir: dir });
+  try {
+    // Olive's job (she made it, so she is its account executive), and five of Priya's candidates on it.
+    const admin = session(api.base);
+    ok(await admin.post('/setup', { agencyName: 'Harbour Talent', name: 'Olive Admin', email: 'olive@agency.example', password: 'demo1234' }));
+    const client = ok(await admin.post('/clients', { name: 'Lumen' })).id;
+    const { token } = ok(await admin.post('/invites', { role: 'recruiter', email: 'priya@agency.example' }));
+    const recruiter = session(api.base);
+    ok(await recruiter.post(`/invites/${token}/accept`, { name: 'Priya Nair', password: 'demo1234' }));
+    const job = ok(await admin.post('/jobs', { client_id: client, title: 'Backend Engineer', status: 'open' })).id;
+    const now = Date.now();
+    const app = {}, interview = {};
+    for (const [key, name, startsIn] of [['ana', 'Ana Coming', DAY], ['ben', 'Ben Longago', -10 * DAY], ['cy', 'Cy Lastweek', -2 * DAY], ['dee', 'Dee Ticked', DAY], ['eli', 'Eli Byhand', 2 * DAY]]) {
+      app[key] = ok(await recruiter.upload('/applications', { job_id: job, name, email: `${key}@mail.example` })).id;
+      interview[key] = ok(await recruiter.post('/interviews', { application_id: app[key], title: 'First meeting', starts_at: new Date(now + startsIn).toISOString(), duration_min: 60 })).id;
+    }
+    await api.stop();
+
+    // Make it what the version before this one left: To do in use for a month, looked at a moment ago, and every
+    // item on Priya's list, as the recruiter who owns them. Ana to prep, with a note; Ben to debrief after an
+    // interview ten days ago, never done, with a note; Cy's prep ticked by The Book and Cy to debrief; Dee's prep
+    // ticked by Priya herself; Eli put on by hand.
+    const file = path.join(dir, 'app.db');
+    let db = new DatabaseSync(file);
+    const iso = (ms) => new Date(ms).toISOString();
+    const priya = db.prepare(`SELECT id FROM users WHERE email = 'priya@agency.example'`).get().id;
+    db.exec(`DELETE FROM todos; DELETE FROM settings WHERE key = 'todos_account_executive_moved'`);
+    db.prepare(`UPDATE settings SET value = ? WHERE key = 'todos_since'`).run(iso(now - 30 * DAY));
+    db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('todos_seen', ?)`).run(iso(now - MINUTE));
+    const put = db.prepare('INSERT INTO todos (user_id, kind, application_id, interview_id, note, position, auto, auto_done, done_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const made = iso(now - 12 * DAY);
+    put.run(priya, 'prep', app.ana, interview.ana, 'Send Ana the brief', 0, 1, 0, null, made);
+    put.run(priya, 'debrief', app.ben, interview.ben, 'Call Ben back', 0, 1, 0, null, made);
+    put.run(priya, 'prep', app.cy, interview.cy, null, 0, 1, 1, iso(now - 2 * DAY + HOUR), made);
+    put.run(priya, 'debrief', app.cy, interview.cy, null, 1, 1, 0, null, made);
+    put.run(priya, 'prep', app.dee, interview.dee, null, 0, 1, 0, iso(now - HOUR), made);
+    put.run(priya, 'prep', app.eli, interview.eli, 'My own', 1, 0, 0, null, made);
+    db.close();
+
+    const everything = () => {
+      const read = new DatabaseSync(file, { readOnly: true });
+      try {
+        return read.prepare(`SELECT u.email, t.kind, t.application_id, t.note, t.auto, t.auto_done, t.done_at IS NOT NULL AS done, t.removed_at IS NOT NULL AS removed, t.set_aside
+          FROM todos t JOIN users u ON u.id = t.user_id ORDER BY t.application_id, t.kind, u.email`).all()
+          .map((r) => [r.email.split('@')[0], r.kind, Object.keys(app).find((k) => app[k] === r.application_id), r.note, `auto ${r.auto}`,
+            r.done ? (r.auto_done ? 'ticked by The Book' : 'ticked') : r.removed ? (r.set_aside ? 'set aside' : 'taken off') : 'open']);
+      } finally { read.close(); }
+    };
+    const expected = [
+      ['olive', 'prep', 'ana', null, 'auto 1', 'open'],
+      ['priya', 'prep', 'ana', 'Send Ana the brief', 'auto 1', 'set aside'],
+      ['olive', 'debrief', 'ben', null, 'auto 1', 'open'],                    // ten days old, and still moved: it was never done
+      ['priya', 'debrief', 'ben', 'Call Ben back', 'auto 1', 'set aside'],
+      ['olive', 'debrief', 'cy', null, 'auto 1', 'open'],
+      ['priya', 'debrief', 'cy', null, 'auto 1', 'set aside'],
+      ['priya', 'prep', 'cy', null, 'auto 1', 'ticked by The Book'],
+      ['olive', 'prep', 'dee', null, 'auto 1', 'open'],                       // hers to do now; Priya's tick stays hers
+      ['priya', 'prep', 'dee', null, 'auto 1', 'ticked'],
+      ['olive', 'prep', 'eli', null, 'auto 1', 'open'],                       // her interview is within the week: Olive's to prep
+      ['priya', 'prep', 'eli', 'My own', 'auto 0', 'open'],                   // added by hand: where it was
+    ];
+
+    // The new version starts. Before anybody opens a list, the open items The Book added are where they belong.
+    // Dee and Eli had none open (one ticked, one added by hand), so nothing moved for them: Olive's own prep for
+    // each comes with the first look, as any prep that is due does.
+    api = await startApi({ port: UPGRADE_PORT, dataDir: dir });
+    assert.deepEqual(everything(), expected.filter(([who, , key]) => !(who === 'olive' && ['dee', 'eli'].includes(key))));
+    const olive2 = session(api.base);
+    ok(await olive2.post('/login', { email: 'olive@agency.example', password: 'demo1234' }));
+    const first = ok(await olive2.get('/todos'));
+    assert.deepEqual([titles(first.prep).sort(), titles(first.debrief).sort()], [['Ana Coming', 'Dee Ticked', 'Eli Byhand'], ['Ben Longago', 'Cy Lastweek']]);
+    assert.deepEqual(everything(), expected);                                 // and looking at the lists leaves Ben's debrief with Olive
+    await api.stop();
+    db = new DatabaseSync(file, { readOnly: true });
+    const done = db.prepare(`SELECT value FROM settings WHERE key = 'todos_account_executive_moved'`).get().value;
+    db.close();
+
+    // Started again, nothing changes: not the items, not the note that it was done.
+    api = await startApi({ port: UPGRADE_PORT, dataDir: dir });
+    assert.deepEqual(everything(), expected);
+    const again = session(api.base);
+    ok(await again.post('/login', { email: 'olive@agency.example', password: 'demo1234' }));
+    assert.deepEqual(ok(await again.get('/todos')), first);
+    await api.stop();
+    db = new DatabaseSync(file, { readOnly: true });
+    assert.equal(db.prepare(`SELECT value FROM settings WHERE key = 'todos_account_executive_moved'`).get().value, done);
     db.close();
   } finally {
     await api.stop().catch(() => {});
