@@ -5,7 +5,8 @@ import React, { Fragment, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, RefreshCw, Repeat2, Users } from 'lucide-react';
 import { useApp, useApi, Pending } from '../state.jsx';
-import { api, url, ago, fmtDate, fmtWhen, plural } from '../lib.js';
+import { api, url, ago, agoInWords, fmtDate, fmtWhen, plural } from '../lib.js';
+import { NOT_LISTED, WHICH_JOBS, historyNote, lastCycleWords } from '../cycles-words.js';
 import { Avatar, Button, Card, CardHeader, Checkbox, ClientDot, Empty, Loading, Page, Select, cx } from '../ui.jsx';
 
 // The periods the server knows, in the order offered. "This week" runs from Monday, on the agency's own clock.
@@ -61,6 +62,23 @@ function useChoices() {
   return { period, ae: params.get('ae') || '', untouched: params.get('untouched') === '1', sort: params.get('sort') || '', dir: params.get('dir') || '', set };
 }
 
+/**
+ * On a phone, where the table is cards with no headings to click, the same orders are offered in a list: each
+ * column both ways, the way a heading's first click sorts it first. The period's own column is left out for All time.
+ */
+function sortChoices(periodLabel, withPeriod) {
+  const inPeriod = periodLabel.toLowerCase();
+  return [
+    ['last', 'asc', 'Longest since its last cycle'], ['last', 'desc', 'Most recent cycle'],
+    ...(withPeriod ? [['period', 'desc', `Most cycles, ${inPeriod}`], ['period', 'asc', `Fewest cycles, ${inPeriod}`]] : []),
+    ['total', 'desc', 'Most cycles, all time'], ['total', 'asc', 'Fewest cycles, all time'],
+    ['on_list', 'desc', 'Most people with it on a list'], ['on_list', 'asc', 'Fewest people with it on a list'],
+    ['open', 'desc', 'Open the longest'], ['open', 'asc', 'Opened most recently'],
+    ['job', 'asc', 'Job, A to Z'], ['job', 'desc', 'Job, Z to A'],
+    ['ae', 'asc', 'Account executive, A to Z'], ['ae', 'desc', 'Account executive, Z to A'],
+  ];
+}
+
 /** A column heading that sorts the table by its column; a second click turns the order round. */
 function SortHeading({ id, label, data, onSort, left, className }) {
   const active = data.sort === id;
@@ -81,10 +99,14 @@ function SortHeading({ id, label, data, onSort, left, className }) {
 /** "16h ago, Priya Nair", or "Never" in the colour that asks for attention: this page exists to show those. */
 function LastCycle({ row, compact }) {
   if (!row.last_at) return <span className="font-medium text-amber-800">Never</span>;
+  // The eye reads "16h ago"; a screen reader is given the words, since it would spell the short form out.
   return (
     <span title={fmtWhen(row.last_at)}>
-      <span className="text-stone-900">{ago(row.last_at)}</span>
-      <span className={cx('text-stone-500', compact ? '' : 'block text-xs')}>{compact ? ', ' : ''}{who(row.last_by)}</span>
+      <span className="sr-only">{lastCycleWords(row.last_at, who(row.last_by))}</span>
+      <span aria-hidden="true">
+        <span className="text-stone-900">{ago(row.last_at)}</span>
+        <span className={cx('text-stone-500', compact ? '' : 'block text-xs')}>{compact ? ', ' : ''}{who(row.last_by)}</span>
+      </span>
     </span>
   );
 }
@@ -130,7 +152,7 @@ function History({ job }) {
         {cycles.map((c) => (
           <li key={c.id} className="flex flex-wrap items-baseline justify-between gap-x-4 py-1.5 text-sm">
             <span className="text-stone-800">{who(c)}</span>
-            <span className="tabular text-stone-500">{fmtWhen(c.at)} <span className="text-stone-400">· {ago(c.at)}</span></span>
+            <span className="tabular text-stone-500">{fmtWhen(c.at)} <span className="text-stone-400" aria-hidden="true">· {ago(c.at)}</span><span className="sr-only">, {agoInWords(c.at)}</span></span>
           </li>
         ))}
       </ol>
@@ -139,12 +161,12 @@ function History({ job }) {
   );
 }
 
-/** The button that opens a row to show its job's cycles. */
-function Opener({ row, open, onToggle }) {
+/** The button that opens a row to show its job's cycles: 40 pixels square on a phone's card, for a finger. */
+function Opener({ row, open, onToggle, large }) {
   const Icon = open ? ChevronDown : ChevronRight;
   return (
     <button type="button" onClick={onToggle} aria-expanded={open} aria-label={`${open ? 'Hide' : 'Show'} the cycles on ${row.title}`}
-      className="flex size-7 shrink-0 items-center justify-center rounded-md text-stone-500 hover:bg-stone-900/5 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-brand-500">
+      className={cx('flex shrink-0 items-center justify-center rounded-md text-stone-500 hover:bg-stone-900/5 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-brand-500', large ? '-my-2 -ml-2.5 size-10' : 'size-7')}>
       <Icon className="size-4" />
     </button>
   );
@@ -183,7 +205,7 @@ export default function Cycles() {
         <p>
           <b className="tabular font-semibold text-stone-900">{plural(s.cycles, 'cycle')}</b> {choices.period === 'all' ? 'in all' : inPeriod}
           {s.on_other_jobs > 0 && <span className="text-stone-500"> ({s.on_open_jobs} on open jobs, {s.on_other_jobs} on jobs no longer open)</span>}
-          <span className="text-stone-400 max-sm:hidden" aria-hidden="true"> · </span><span className="max-sm:block">
+          <span className="text-stone-400 max-sm:hidden" aria-hidden="true"> · </span><span className="sr-only">. </span><span className="max-sm:block">
             <b className="tabular font-semibold text-stone-900">{s.touched}</b> of {plural(s.open_jobs, 'open job')} touched,{' '}
             <b className={cx('tabular font-semibold', s.untouched ? 'text-amber-800' : 'text-stone-900')}>{s.untouched}</b> not touched
           </span>
@@ -210,12 +232,25 @@ export default function Cycles() {
         </Select>
       </label>
       <Checkbox label="Only jobs not touched in this period" checked={choices.untouched} onChange={(e) => choices.set({ untouched: e.target.checked ? '1' : '' })} />
+      {!wide && (() => {
+        const options = sortChoices(periodLabel, periodColumn);
+        // An order from a link that the list does not offer (the period's column, for All time) is shown as it is.
+        if (!options.some(([s, d]) => s === data.sort && d === data.dir)) options.push([data.sort, data.dir, 'As in the link']);
+        return (
+          <label className="flex items-center gap-2 text-sm text-stone-700">
+            <span className="font-medium">Sort by</span>
+            <Select value={`${data.sort}:${data.dir}`} onChange={(e) => { const [sort, dir] = e.target.value.split(':'); choices.set(sort === 'last' && dir === 'asc' ? { sort: '', dir: '' } : { sort, dir }); }} className="!w-auto max-w-64">
+              {options.map(([s, d, label]) => <option key={`${s}:${d}`} value={`${s}:${d}`}>{label}</option>)}
+            </Select>
+          </label>
+        );
+      })()}
     </div>
   );
 
   const emptyTable = data && !data.rows.length && (
     data.summary.open_jobs === 0
-      ? <Empty icon={Repeat2} title="No open jobs">{scopeClient ? `${scopeClient.name} has no open jobs right now.` : 'There are no open jobs right now.'} Jobs that are closed, on hold or still drafts are not listed here.</Empty>
+      ? <Empty icon={Repeat2} title="No open jobs">{scopeClient ? `${scopeClient.name} has no open jobs right now.` : 'There are no open jobs right now.'} {NOT_LISTED}</Empty>
       : choices.untouched && !choices.ae
         ? <Empty icon={Repeat2} title={`Every open job was touched ${inPeriod}`}>Each one was ticked on somebody’s list at least once. Untick “Only jobs not touched in this period” to see them all.</Empty>
         : <Empty icon={Repeat2} title="No open jobs match these filters" action={<Button size="sm" icon={RefreshCw} onClick={() => choices.set({ ae: '', untouched: '' })}>Show every open job</Button>} />
@@ -227,7 +262,7 @@ export default function Cycles() {
       {data.rows.map((row) => (
         <li key={row.id} className="px-4 py-3">
           <div className="flex items-start gap-2">
-            <Opener row={row} open={opened.has(row.id)} onToggle={() => toggle(row.id)} />
+            <Opener row={row} open={opened.has(row.id)} onToggle={() => toggle(row.id)} large />
             <div className="min-w-0 flex-1">
               <JobName row={row} showClient />
               <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 text-sm">
@@ -248,7 +283,7 @@ export default function Cycles() {
 
   const table = data && data.rows.length > 0 && wide && (
     <div>
-      <table className="w-full text-sm">
+      <table className="w-full text-sm" aria-label="Open jobs">
         <thead>
           <tr className="text-xs text-stone-500">
             <th scope="col" className="w-10 py-2 pl-3"><span className="sr-only">Show cycles</span></th>
@@ -312,7 +347,7 @@ export default function Cycles() {
           <Card className="mt-6">
             <CardHeader title="By person" action={<span className="text-xs text-stone-500">{periodLabel}</span>} />
             {data.people.length ? (
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" aria-label={`By person, ${periodLabel.toLowerCase()}`}>
                 <thead>
                   <tr className="text-xs text-stone-500">
                     <th scope="col" className="px-4 py-2 text-left font-medium">Person</th>
@@ -341,8 +376,8 @@ export default function Cycles() {
           <dl className="mt-4 grid gap-x-8 gap-y-2 text-[13px] leading-relaxed text-stone-500 sm:grid-cols-2">
             <div><dt className="inline font-medium text-stone-700">A cycle. </dt><dd className="inline">One job ticked on somebody’s own Jobs to work on list. Un-ticking it takes the cycle away; ticking it again counts once more. People to prep and to debrief do not count.</dd></div>
             <div><dt className="inline font-medium text-stone-700">What it says. </dt><dd className="inline">That somebody ticked the job, and when: not what they did. Nobody else sees the notes on their list.</dd></div>
-            <div><dt className="inline font-medium text-stone-700">Which jobs. </dt><dd className="inline">Open jobs only. Cycles on jobs since closed, filled or put on hold are kept, and count in the summary and By person.</dd></div>
-            {data.history_from && <div><dt className="inline font-medium text-stone-700">Since when. </dt><dd className="inline">Cycles are counted from {fmtDate(data.history_from, true)}. Jobs ticked before then count only if they were still on somebody’s list that day.</dd></div>}
+            <div><dt className="inline font-medium text-stone-700">Which jobs. </dt><dd className="inline">{WHICH_JOBS}</dd></div>
+            {data.history_from && <div><dt className="inline font-medium text-stone-700">Since when. </dt><dd className="inline">{historyNote(fmtDate(data.history_from, true))}</dd></div>}
           </dl>
         </>
       )}

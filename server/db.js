@@ -787,6 +787,10 @@ CREATE INDEX IF NOT EXISTS idx_cycles_job ON cycles(job_id, at, user_id);
 -- "By person" and the summary count the cycles in a period whatever job they were on: a range on when, with who and
 -- which job in the index itself, so that counting them reads nothing else.
 CREATE INDEX IF NOT EXISTS idx_cycles_at ON cycles(at, user_id, job_id);
+-- By person for all time counts every cycle there is. Read in the order of this index, each person's cycles come
+-- together, so SQLite counts them as it goes instead of first sorting every cycle by person: about 2 ms rather than
+-- 8 with 20,000 cycles (measured with test/cycles-queries.mjs on 300 open jobs).
+CREATE INDEX IF NOT EXISTS idx_cycles_user ON cycles(user_id, job_id, at);
 -- One cycle per to-do item at a time: ticking, un-ticking and ticking again is one, and the first start's copy of
 -- what was already ticked can be run again without counting anything twice. (Rows with no item left are many.)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cycles_todo ON cycles(todo_id);`);

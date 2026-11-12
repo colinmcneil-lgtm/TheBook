@@ -1364,6 +1364,15 @@ test('the page asks the database the same few times however many jobs there are,
   assert.equal(big.answer.summary.open_jobs >= 300, true);
   t.diagnostic(`300 more open jobs and 20,000 cycles: ${big.ms.toFixed(1)} ms`);
   assert.ok(big.ms < 150, `the page took ${big.ms} ms`);
+  // All time counts every cycle under By person: read person by person from idx_cycles_user, never sorted first.
+  // (A time alone says little on a machine others share; how SQLite reads it says whether it can stay quick.)
+  const ever = inProcess('page', ids.olive, { query: { period: 'all' } }, grow(300, 20000));
+  t.diagnostic(`the same, all time: ${ever.ms.toFixed(1)} ms`);
+  assert.equal(ever.statements, now.statements);
+  const everyCycle = ever.plans.find((plan) => plan.some((step) => /COUNT\(DISTINCT\)/i.test(step)));
+  assert.ok(everyCycle?.some((step) => /idx_cycles_user/.test(step)), `By person for all time: ${JSON.stringify(everyCycle)}`);
+  assert.ok(!ever.plans.flat().some((step) => /TEMP B-TREE FOR GROUP BY/.test(step)), JSON.stringify(ever.plans));
+  assert.ok(ever.ms < 150, `the page took ${ever.ms} ms for all time`);
   // A job's history is a fixed number too, however long it is.
   const history1 = inProcess('job', ids.olive, { params: { id: String(orbitJobs.beacon) } });
   assert.ok(history1.statements <= 3, `${history1.statements} statements`);
@@ -1614,7 +1623,7 @@ test('the first start of the version with cycles counts every job already ticked
     ]);
     assert.ok(Math.abs(Date.now() - Date.parse(first.copied)) < 60000);
     assert.deepEqual(first.todos, before.map((x) => ({ ...x })));            // the lists are as they were
-    assert.deepEqual(first.shape.map((x) => x.name), ['cycles', 'idx_cycles_at', 'idx_cycles_job', 'idx_cycles_todo']);
+    assert.deepEqual(first.shape.map((x) => x.name), ['cycles', 'idx_cycles_at', 'idx_cycles_job', 'idx_cycles_todo', 'idx_cycles_user']);
 
     // Started again, nothing changes; nor when the setting is lost and the copy runs a second time.
     api = await startApi({ port: UPGRADE_PORT, dataDir: dir });

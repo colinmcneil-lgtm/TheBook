@@ -759,10 +759,11 @@ list, nor anything on your prep and debrief lists. The To do page says so under 
 
 - **A period**: This week (from Monday at midnight on the agency's own clock, the zone the reports use: Toronto
   unless `REPORTS_TIMEZONE` names another), Last 7 days, Last 30 days or All time. The choice, the filters and the
-  sorting are kept in the address, so a link shows somebody else the same view.
+  sorting are kept in the address, so a link shows somebody else the same view, apart from the client chosen in the
+  sidebar: that choice belongs to each person's own browser, as on Reports, so the link opens on theirs.
 - **A one-line summary** for the period, for every job of the client chosen in the sidebar (or all clients): how many
   cycles, how many of the open jobs were touched and how many were not. Only open jobs are in the table, but a job
-  ticked and since closed, filled, put on hold or set back to draft keeps its cycles: they count in the summary's
+  ticked and since closed, paused or set back to draft keeps its cycles: they count in the summary's
   total, which then says how many were on open jobs and how many on jobs no longer open, so the numbers add up in
   plain sight. Touched and not touched always add up to the open jobs.
 - **The table**: one row for every open job, with filters for the account executive and "Only jobs not touched in
@@ -774,7 +775,7 @@ list, nor anything on your prep and debrief lists. The To do page says so under 
 - **By person**: each active member of the agency team with their cycles in the period and on how many different
   jobs, including those with none (a nought is worth seeing here). People no longer on the team are listed only
   when they have cycles in the period.
-- On a phone each job is a card with the same facts. The page is read again when it is opened, when anything is
+- On a phone each job is a card with the same facts, and a **Sort by** list stands in for the column headings. The page is read again when it is opened, when anything is
   saved, and when its tab comes back into view; it does not keep asking the server on a clock.
 - Each job's own page says how many cycles it has had and the latest, "5 cycles · last 16h ago by Priya" (or "No
   cycles yet"), linking to Cycles; the To do page links to it beside Jobs to work on. Client users have no Cycles

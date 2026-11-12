@@ -4,7 +4,7 @@
 //
 // Run as: DATA_DIR=<a copy of the data folder> node test/cycles-queries.mjs <what> <user id> [<request as JSON>]
 //   <what> is "page" (GET /cycles) or "job" (GET /cycles/jobs/:id). The request is { query, params }.
-// Prints one line of JSON: { statements, ms, answer }.
+// Prints one line of JSON: { statements, ms, plans, answer }.
 import { q } from '../server/db.js';
 import { registerCycles } from '../server/cycles.js';
 
@@ -18,9 +18,11 @@ const int = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Ma
 registerCycles(api, { agencyOnly: () => {}, int, bad: (message, status = 400) => { throw Object.assign(new Error(message), { status }); } });
 
 let statements = 0;
+const asked = []; // each SELECT run, with its values, for the plans below
+const originals = {};
 for (const name of ['all', 'get', 'run', 'insert']) {
-  const original = q[name];
-  q[name] = (...args) => { statements += 1; return original(...args); };
+  const original = (originals[name] = q[name]);
+  q[name] = (...args) => { statements += 1; asked.push(args); return original(...args); };
 }
 
 const user = q.get('SELECT * FROM users WHERE id = ?', Number(userId));
@@ -32,7 +34,11 @@ const ask = () => {
 };
 ask(); // once to warm up: the first run of any statement is slower while SQLite prepares it
 statements = 0;
+asked.length = 0;
 const started = process.hrtime.bigint();
 const answer = ask();
 const ms = Number(process.hrtime.bigint() - started) / 1e6;
-console.log(JSON.stringify({ statements, ms, answer }));
+// How SQLite went about each statement (EXPLAIN QUERY PLAN), so that a test can see an index is used rather than
+// trust a time measured on a busy machine.
+const plans = asked.filter(([sql]) => /^\s*SELECT/i.test(sql)).map(([sql, ...values]) => originals.all(`EXPLAIN QUERY PLAN ${sql}`, ...values).map((r) => r.detail));
+console.log(JSON.stringify({ statements, ms, plans, answer }));

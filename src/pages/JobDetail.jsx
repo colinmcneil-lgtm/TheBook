@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CalendarDays, ChevronDown, Copy, ExternalLink, MessagesSquare, Pencil, Trash2, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
-import { api, url, ago, daysSince, firstName, fmtDate, photoUrl, salaryRange, sourceName, plural, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
+import { api, url, ago, agoInWords, daysSince, firstName, fmtDate, photoUrl, salaryRange, sourceName, plural, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
 import { Avatar, Badge, Button, Card, Empty, Menu, Page, Stars, Tabs, useAction, useToast, cx } from '../ui.jsx';
 import { JobStatusBadge, ReviewBadge } from '../components/bits.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
@@ -192,7 +192,8 @@ function CyclesLine({ jobId }) {
     <>
       <span aria-hidden="true"> · </span>
       <Link to="/cycles" className="whitespace-nowrap text-brand-700 hover:underline" title="Each job ticked on somebody’s Jobs to work on list is one cycle">
-        {data.total ? `${plural(data.total, 'cycle')} · last ${ago(last.at)} by ${by}` : 'No cycles yet'}
+        {/* "16h ago" for the eye; the words for a screen reader, which would spell the short form out. */}
+        {data.total ? <>{plural(data.total, 'cycle')}<span aria-hidden="true"> · last {ago(last.at)}</span><span className="sr-only">, the latest {agoInWords(last.at)},</span> by {by}</> : 'No cycles yet'}
       </Link>
     </>
   );

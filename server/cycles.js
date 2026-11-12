@@ -113,7 +113,7 @@ function cyclesPage({ period, clientId, accountExecutive, untouched, sort, dir }
   const scoped = clientId ? [clientId] : [];
 
   // Every open job in view, with its cycles: how many in all and in the period, and the latest with who made it.
-  // Closed, filled, on-hold and draft jobs are not in the table; their cycles are kept, and count in the summary and
+  // Closed, paused and draft jobs are not in the table; their cycles are kept, and count in the summary and
   // By person. Each count is a seek on idx_cycles_job for that one job, so 300 jobs with 20,000 cycles between
   // them take a millisecond or two, where counting every cycle row by row took several.
   const jobs = q.all(
@@ -135,10 +135,13 @@ function cyclesPage({ period, clientId, accountExecutive, untouched, sort, dir }
   }
   // Everybody's cycles in the period, on any job in view, open or not: read from idx_cycles_at alone (it holds who
   // and which job beside when), so nothing else is looked up for each cycle. With the client picker, only that
-  // client's jobs are looked at, each by its own seek on idx_cycles_job.
+  // client's jobs are looked at, each by its own seek on idx_cycles_job. All time is every cycle, not a range: there
+  // it is read person by person from idx_cycles_user, which needs no sorting. (The + keeps SQLite from taking the
+  // "up to now" for a range worth reading idx_cycles_at for.)
+  const when = from ? 'c.at >= ? AND c.at <= ?' : '+c.at <= ?';
   const byPerson = q.all(
     `SELECT c.user_id, COUNT(*) AS cycles, COUNT(DISTINCT c.job_id) AS jobs FROM cycles c
-     WHERE c.at >= ? AND c.at <= ? ${clientId ? 'AND c.job_id IN (SELECT j.id FROM jobs j WHERE j.client_id = ?)' : ''} GROUP BY c.user_id`, since, to, ...scoped);
+     WHERE ${when} ${clientId ? 'AND c.job_id IN (SELECT j.id FROM jobs j WHERE j.client_id = ?)' : ''} GROUP BY c.user_id`, ...(from ? [from] : []), to, ...scoped);
   // The team, for the people with no cycles in the period (a zero is worth seeing here), and the names of the
   // people who made the cycles.
   const users = new Map(q.all(`SELECT u.id, u.name, (${ON_TEAM}) AS on_team FROM users u`).map((u) => [u.id, u]));
