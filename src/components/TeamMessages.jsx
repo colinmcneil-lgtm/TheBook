@@ -16,6 +16,23 @@ export const messagesChanged = () => window.dispatchEvent(new Event('messages:ch
 
 // http and https links only; a link ends at a space, and punctuation that ends a sentence is not part of it.
 const LINK = /\bhttps?:\/\/[^\s<>"']+/gi;
+const PAIRS = { ')': '(', ']': '[', '}': '{' };
+/**
+ * A link without the punctuation that ends the sentence around it. A closing bracket stays when the link opened it
+ * ("http://example.com/wiki/Kestrel_(company)"), and goes when it closes words written around the link.
+ */
+function trimLink(href) {
+  let end = href.length;
+  while (end > 0 && /[.,;:!?)\]}]/.test(href[end - 1])) {
+    const ch = href[end - 1], open = PAIRS[ch];
+    if (open) {
+      const inside = href.slice(0, end);
+      if (inside.split(open).length - 1 >= inside.split(ch).length - 1) break; // this bracket closes one in the link
+    }
+    end -= 1;
+  }
+  return href.slice(0, end);
+}
 /**
  * A message's words as React elements: line breaks kept (by the caller's whitespace-pre-wrap), and http(s) links made
  * clickable. Built from text pieces and <a> elements, never from HTML, so nothing anybody writes can become markup.
@@ -24,15 +41,14 @@ export function MessageText({ text, className }) {
   const parts = [];
   let last = 0;
   for (const match of String(text || '').matchAll(LINK)) {
-    let href = match[0];
-    const trail = /[.,;:!?)\]}]+$/.exec(href);
-    if (trail) href = href.slice(0, -trail[0].length);
+    const href = trimLink(match[0]);
     if (match.index > last) parts.push(text.slice(last, match.index));
     parts.push(<a key={match.index} href={href} target="_blank" rel="noopener noreferrer" className="font-medium underline underline-offset-2 [overflow-wrap:anywhere]">{href}</a>);
     last = match.index + href.length;
   }
   if (last < String(text || '').length) parts.push(text.slice(last));
-  return <span className={cx('whitespace-pre-wrap [overflow-wrap:anywhere]', className)}>{parts}</span>;
+  // dir="auto": a message written in a right-to-left language reads right to left, whatever the page around it.
+  return <span dir="auto" className={cx('whitespace-pre-wrap [overflow-wrap:anywhere]', className)}>{parts}</span>;
 }
 
 /**
@@ -49,17 +65,20 @@ export function AttachmentChip({ attachment: a, onRemove, className }) {
       <span className="min-w-0 truncate"><span className="font-medium">{label}</span>{a.detail && <span className="opacity-70"> · {a.detail}</span>}</span>
     </>
   );
-  const cls = 'inline-flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-2.5 text-[12.5px] text-brand-900';
+  // The chip is drawn 28px tall, but on a phone it answers a tap a little above and below too (the ::before), for a
+  // target of 40px or so without making every message taller.
+  const cls = 'relative inline-flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-2.5 text-[12.5px] text-brand-900';
+  const tapArea = "max-sm:before:absolute max-sm:before:inset-x-0 max-sm:before:-inset-y-1.5 max-sm:before:content-['']";
   if (onRemove) {
     return (
       <span className={cx(cls, 'pr-1', className)}>
         {inner}
-        <button type="button" onClick={onRemove} aria-label={`Remove ${label}`} className="ml-0.5 rounded-full p-0.5 text-brand-700 hover:bg-brand-100"><X className="size-3.5" /></button>
+        <button type="button" onClick={onRemove} aria-label={`Remove ${label}`} className="relative ml-0.5 rounded-full p-0.5 text-brand-700 hover:bg-brand-100 max-sm:before:absolute max-sm:before:-inset-3 max-sm:before:content-['']"><X className="size-3.5" /></button>
       </span>
     );
   }
   const to = a.type === 'job' ? `/jobs/${a.job_id}` : `?c=${a.application_id}`;
-  return <Link to={to} className={cx(cls, 'hover:border-brand-300 hover:bg-brand-100', className)} title={a.type === 'job' ? 'Open the job' : 'Open their profile'}>{inner}</Link>;
+  return <Link to={to} className={cx(cls, tapArea, 'hover:border-brand-300 hover:bg-brand-100', className)} title={a.type === 'job' ? 'Open the job' : 'Open their profile'}>{inner}</Link>;
 }
 
 /** What a chip needs, from a row of the candidates list or the jobs list. */

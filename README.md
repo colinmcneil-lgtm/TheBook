@@ -493,7 +493,9 @@ a back arrow.
   **Shift+Enter** starts a new line. The paperclip attaches one candidate or one job, found by name as the search at
   the top of the page finds them; it shows as a chip that opens their profile or the job, and can be taken off before
   sending. You can delete your own messages: the conversation then says "This message was deleted", and the words are
-  removed from the database, not just hidden. Messages cannot be edited.
+  removed from the database, not just hidden. Messages cannot be edited. A message that could not be sent (no connection,
+  say) stays above the box, marked as not sent, with **Try again**, **Edit** and **Remove**: what you write next does not
+  replace it.
 - **One conversation for each pair of people.** Starting one with somebody you already have one with opens that one.
   You cannot write to yourself, to a client's user, or to somebody deactivated or still waiting for their account.
 - **Groups.** A group has a name (up to 80 characters) and at least two people besides you. Anybody in it can rename it,
@@ -506,17 +508,19 @@ a back arrow.
   the team. The profile (beside the review history) and the job (above its tabs, when there are any) list **Team
   messages**: the messages that carry that candidate or job, from the conversations you are in. A one-to-one
   conversation stays between its two people: nobody else sees its messages there or anywhere.
-- **Unread and keeping up to date.** A message is unread for you until you open its conversation. There are no
+- **Unread and keeping up to date.** A message is unread for you until its conversation has shown it to you, with the
+  tab in view (a conversation opened in a background tab is marked read when you look at it). There are no
   live connections: an open conversation asks for anything new every 5 seconds while the tab is in view, and the list
   and the menu's count every 20 seconds, so a message can take a few seconds to arrive. If you have scrolled up to read
   older messages, new ones do not pull you down: a **New messages** button appears instead.
 - **E-mail.** With e-mail connected, the others in a conversation are e-mailed when somebody writes ("Priya Nair sent
   you a message", or "Priya Nair wrote in Kestrel search" for a group), with the first 200 characters and a link to the
-  conversation (when `APP_URL` is set). Each person gets one e-mail about a conversation until they have read it, never
+  conversation (when `APP_URL` is set). Each person gets one e-mail about a conversation until they have read as far as
+  the message it was about (then the next message e-mails them again), never
   about their own messages, and none about a group they left or once deactivated. Each person can switch it off for
   themselves with **Email me about new messages** in Settings, under Your account. These are e-mails to the team: the
-  switch for e-mails to candidates does not affect them. If the e-mail cannot be sent, the message is still sent and
-  the log says so.
+  switch for e-mails to candidates does not affect them. If the e-mail cannot be sent, the message is still sent, the
+  log says so, and the next message tries again. Nobody is noted as e-mailed while e-mail is not connected.
 - **People who leave the team.** A deactivated teammate's messages stay, with their name; a one-to-one conversation with
   them can still be read but no longer written in. Somebody removed from the database outright is shown as "Somebody no
   longer on the team"; the conversation stays for the others.

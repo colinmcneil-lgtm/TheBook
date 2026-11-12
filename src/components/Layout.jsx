@@ -136,7 +136,7 @@ export default function Layout({ children }) {
       isAgency && { to: '/todo', label: 'To do', icon: ListTodo, count: counts?.todo },
       { to: '/inbox', label: isAgency ? 'Inbox' : 'To review', icon: Inbox, count: inboxCount },
       // The agency team's own chat, with how many messages are waiting to be read. A client's user is never shown it.
-      isAgency && { to: '/messages', label: 'Messages', icon: MessagesSquare, count: counts?.messages },
+      isAgency && { to: '/messages', label: 'Messages', icon: MessagesSquare, count: counts?.messages, countSays: (n) => `${n} unread` },
     ] },
     { label: 'Hiring', items: [
       { to: '/jobs', label: 'Jobs', icon: Briefcase },
@@ -180,7 +180,9 @@ export default function Layout({ children }) {
                     <>
                       <item.icon className={cx('size-[17px]', isActive ? 'text-gold' : 'opacity-70')} />
                       <span className="flex-1">{item.label}</span>
-                      {item.count > 0 && <span className="tabular inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gold px-1.5 text-xs font-semibold text-brand-950">{item.count}</span>}
+                      {/* A count that needs a word to make sense to a screen reader says it ("Messages, 3 unread"); the badge is for the eye. */}
+                      {item.count > 0 && <span className="tabular inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gold px-1.5 text-xs font-semibold text-brand-950" aria-hidden={item.countSays ? 'true' : undefined}>{item.count}</span>}
+                      {item.count > 0 && item.countSays && <span className="sr-only">, {item.countSays(item.count)}</span>}
                       {item.recording && <span className="size-2 rounded-full bg-red-500 ring-2 ring-red-500/30" role="img" aria-label="Recording" />}
                     </>
                   )}

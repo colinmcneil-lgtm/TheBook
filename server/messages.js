@@ -20,15 +20,17 @@
 //     never e-mailed. Somebody removed from the database outright is in no conversation; what they wrote stays,
 //     shown as from somebody no longer on the team (the same as reviews.js does for people removed).
 //
-// Unread is counted for each person: messages by anybody else, newer than how far they have read (last_read_at).
-// The thread marks the conversation read when it shows it. The app's own lines (a group made, renamed, joined or
+// Unread is counted for each person: messages by anybody else after the last one they have read (last_read_id, a
+// message id, so that two messages in the same millisecond are never read or unread together). The thread marks the
+// conversation read as far as the messages it has shown. The app's own lines (a group made, renamed, joined or
 // left) are not counted and are never e-mailed about.
 //
 // The e-mail heads-up goes through notify() in mail.js, which is the team's e-mail and does not wait for the switch
-// for e-mails to candidates. Each person gets at most one e-mail about a conversation until they have read it
-// (mailed_at against last_read_at), and none at all if they have switched "Email me about new messages" off.
+// for e-mails to candidates. Each person gets at most one e-mail about a conversation until they have read it: the
+// e-mail remembers the message it was about (mailed_id, with mailed_at saying when), and the next one can go once they
+// have read as far as that message (last_read_id). None at all if they have switched "Email me about new messages" off.
 import { q, tx, now, scrub, getSetting } from './db.js';
-import { notify, appUrl } from './mail.js';
+import { notify, appUrl, mailConfigured } from './mail.js';
 
 const BODY_MAX = 4000;
 const NAME_MAX = 80;
@@ -39,8 +41,13 @@ const ON_TEAM = `u.role != 'client' AND u.active = 1 AND u.pending = 0`;
 const onTeam = (userId) => Boolean(userId && q.get(`SELECT 1 AS x FROM users u WHERE u.id = ? AND ${ON_TEAM}`, userId));
 const firstName = (name) => String(name || '').split(/\s+/)[0];
 
-/** The words of a message as they are kept: line breaks made plain, spaces at either end trimmed. */
-const cleanBody = (value) => (typeof value === 'string' ? value.replace(/\r\n?/g, '\n').trim() : '');
+// Control characters have no place in what people write to each other, and a NUL would even cut the text short where
+// SQLite stores it. A message keeps its line breaks and tabs; a group's name is one line, and also loses the marks that
+// turn text right to left or isolate it, which could make a name read differently in the list or an e-mail's subject.
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/g;
+const NAME_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]/g;
+/** The words of a message as they are kept: line breaks made plain, control characters taken out, spaces at either end trimmed. */
+const cleanBody = (value) => (typeof value === 'string' ? value.replace(/\r\n?/g, '\n').replace(CONTROL, '').trim() : '');
 /** A user id from a request, or null: a whole number, written as one or as digits. */
 const idOf = (value) => (typeof value === 'number' && Number.isInteger(value) && value > 0) || (typeof value === 'string' && /^\d+$/.test(value)) ? Number(value) : null;
 
@@ -52,7 +59,7 @@ export function unreadFor(userId) {
   return q.get(
     `SELECT COUNT(*) AS n FROM conversation_members cm JOIN messages m ON m.conversation_id = cm.conversation_id
      WHERE cm.user_id = ? AND cm.left_at IS NULL AND m.kind = 'text' AND m.deleted_at IS NULL
-       AND (m.user_id IS NULL OR m.user_id != cm.user_id) AND (cm.last_read_at IS NULL OR m.created_at > cm.last_read_at)`, userId).n;
+       AND (m.user_id IS NULL OR m.user_id != cm.user_id) AND m.id > cm.last_read_id`, userId).n;
 }
 
 /**
@@ -94,11 +101,23 @@ function shown(m, user) {
   };
 }
 
+const MEMBER_SELECT = `SELECT cm.conversation_id, u.id, u.name, cm.left_at, (${ON_TEAM}) AS on_team
+  FROM conversation_members cm JOIN users u ON u.id = cm.user_id`;
+const member = (p) => ({ id: p.id, name: p.name, left: Boolean(p.left_at), on_team: Boolean(p.on_team) });
 /** The people in a conversation, with who is still in it and who can still be written to. */
-const membersOf = (conversationId) => q.all(
-  `SELECT u.id, u.name, cm.joined_at, cm.left_at, (${ON_TEAM}) AS on_team
-   FROM conversation_members cm JOIN users u ON u.id = cm.user_id WHERE cm.conversation_id = ? ORDER BY u.name, u.id`, conversationId)
-  .map((p) => ({ id: p.id, name: p.name, left: Boolean(p.left_at), on_team: Boolean(p.on_team) }));
+const membersOf = (conversationId) => q.all(`${MEMBER_SELECT} WHERE cm.conversation_id = ? ORDER BY u.name, u.id`, conversationId).map(member);
+/**
+ * The people in many conversations at once, in one query, by conversation id: for the list of conversations and the
+ * messages on a profile, which would otherwise ask once for every row they show.
+ */
+function membersOfMany(where, ...values) {
+  const byConversation = new Map();
+  for (const p of q.all(`${MEMBER_SELECT} WHERE cm.conversation_id IN (${where}) ORDER BY u.name, u.id`, ...values)) {
+    if (!byConversation.has(p.conversation_id)) byConversation.set(p.conversation_id, []);
+    byConversation.get(p.conversation_id).push(member(p));
+  }
+  return (conversationId) => byConversation.get(conversationId) || [];
+}
 
 /**
  * What a conversation is called for the person looking: a group's name, or the other person's name in a one-to-one
@@ -125,18 +144,21 @@ function postable(conversation, members, userId) {
 
 /**
  * Tell the others in the conversation by e-mail, when e-mail is connected: each person still in it, active on the team
- * and with the switch on, who has not been e-mailed about it since they last read it. Their mailed_at is set before
- * the e-mail is handed over, so a second message a moment later sends nothing more. Not waited for: a message is sent
- * whether or not the e-mail goes, and notify() only logs a failure.
+ * and with the switch on, who has read as far as the message their last e-mail was about (or has had none). The
+ * message is noted as e-mailed before the e-mail is handed over, so a second message a moment later sends nothing
+ * more. Not waited for: a message is sent whether or not the e-mail goes. An e-mail that did not go (the provider
+ * refused it) is not counted, so the next message tries again rather than leaving the person untold until they read.
  */
-function tellOthers({ conversation, sender, body, title }) {
+function tellOthers({ conversation, messageId, sender, body, title }) {
+  // With delivery not connected nothing would go, and nobody may be noted as told.
+  if (!mailConfigured()) return;
   const at = now();
   const people = tx(() => {
     const due = q.all(
       `SELECT u.id, u.name, u.email FROM conversation_members cm JOIN users u ON u.id = cm.user_id
        WHERE cm.conversation_id = ? AND cm.user_id != ? AND cm.left_at IS NULL AND ${ON_TEAM} AND u.message_mail = 1
-         AND (cm.mailed_at IS NULL OR (cm.last_read_at IS NOT NULL AND cm.mailed_at < cm.last_read_at))`, conversation.id, sender.id);
-    for (const p of due) q.run('UPDATE conversation_members SET mailed_at = ? WHERE conversation_id = ? AND user_id = ?', at, conversation.id, p.id);
+         AND (cm.mailed_id IS NULL OR cm.mailed_id <= cm.last_read_id)`, conversation.id, sender.id);
+    for (const p of due) q.run('UPDATE conversation_members SET mailed_at = ?, mailed_id = ? WHERE conversation_id = ? AND user_id = ?', at, messageId, conversation.id, p.id);
     return due;
   });
   if (!people.length) return;
@@ -145,7 +167,7 @@ function tellOthers({ conversation, sender, body, title }) {
   const excerpt = body.length > 200 ? `${body.slice(0, 200)}…` : body;
   const group = conversation.kind === 'group';
   for (const person of people) {
-    notify({
+    const sent = notify({
       to: person.email,
       subject: group ? `${sender.name} wrote in ${title}` : `${sender.name} sent you a message`,
       body: `Hi ${firstName(person.name)},\n\n${sender.name} wrote${group ? ` in ${title}` : ' to you'} in The Book:\n\n${excerpt}\n\n` +
@@ -154,6 +176,11 @@ function tellOthers({ conversation, sender, body, title }) {
         'To stop these e-mails, switch off "Email me about new messages" in Settings, under Your account.\n\n' +
         `${agency}\n`,
     });
+    sent.then((handedOver) => {
+      if (!handedOver) {
+        q.run('UPDATE conversation_members SET mailed_at = NULL, mailed_id = NULL WHERE conversation_id = ? AND user_id = ? AND mailed_id = ?', conversation.id, person.id, messageId);
+      }
+    }).catch(() => {});
   }
 }
 
@@ -166,7 +193,7 @@ export function registerMessages(api, { agencyOnly, bad }) {
   const load = (req) => {
     const id = idOf(req.params.id);
     const c = id && q.get(
-      `SELECT c.*, cm.last_read_at FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id
+      `SELECT c.*, cm.last_read_at, cm.last_read_id FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id
        WHERE c.id = ? AND cm.user_id = ? AND cm.left_at IS NULL`, id, req.user.id);
     if (!c) bad('That conversation is not in your messages.', 404);
     return c;
@@ -185,7 +212,7 @@ export function registerMessages(api, { agencyOnly, bad }) {
     return ids.map((id) => q.get('SELECT id, name FROM users WHERE id = ?', id));
   };
   const groupName = (value) => {
-    const name = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+    const name = typeof value === 'string' ? value.replace(NAME_CONTROL, ' ').replace(/\s+/g, ' ').trim() : '';
     if (!name) bad('Give the group a name.');
     if (name.length > NAME_MAX) bad(`Keep the group's name to ${NAME_MAX} characters.`);
     return name;
@@ -207,17 +234,22 @@ export function registerMessages(api, { agencyOnly, bad }) {
   // The conversations the signed-in person is in, newest first: what each is called, who is in it, its last line and
   // when, and how many messages in it they have not read.
   api.get('/messages/conversations', agencyOnly, (req, res) => {
+    // Two queries in all, however many conversations there are: the conversations with their last line, and everybody
+    // in them. The page asks again every twenty seconds, so it must not ask once more for each row.
     const rows = q.all(
-      `SELECT c.*, cm.last_read_at,
-         (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.kind = 'text' AND m.deleted_at IS NULL
-            AND (m.user_id IS NULL OR m.user_id != cm.user_id) AND (cm.last_read_at IS NULL OR m.created_at > cm.last_read_at)) AS unread,
-         (SELECT MAX(m.id) FROM messages m WHERE m.conversation_id = c.id) AS last_id
+      `SELECT c.*,
+         (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.id > cm.last_read_id AND m.kind = 'text' AND m.deleted_at IS NULL
+            AND (m.user_id IS NULL OR m.user_id != cm.user_id)) AS unread,
+         lm.id AS last_id, lm.kind AS last_kind, lm.user_id AS last_user_id, lm.body AS last_body, lm.deleted_at AS last_deleted_at,
+         lm.created_at AS last_created_at, lu.name AS last_user_name
        FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id
+       LEFT JOIN messages lm ON lm.id = (SELECT MAX(m.id) FROM messages m WHERE m.conversation_id = c.id)
+       LEFT JOIN users lu ON lu.id = lm.user_id
        WHERE cm.user_id = ? AND cm.left_at IS NULL ORDER BY c.updated_at DESC, c.id DESC LIMIT 500`, req.user.id);
-    const lastOf = (id) => (id ? q.get(`SELECT m.id, m.kind, m.user_id, m.body, m.deleted_at, m.created_at, u.name AS user_name FROM messages m LEFT JOIN users u ON u.id = m.user_id WHERE m.id = ?`, id) : null);
+    const membersIn = membersOfMany('SELECT conversation_id FROM conversation_members WHERE user_id = ? AND left_at IS NULL', req.user.id);
     res.json(rows.map((c) => {
-      const members = membersOf(c.id);
-      const last = lastOf(c.last_id);
+      const members = membersIn(c.id);
+      const last = c.last_id && { kind: c.last_kind, user_id: c.last_user_id, body: c.last_body, deleted_at: c.last_deleted_at, created_at: c.last_created_at, user_name: c.last_user_name };
       return {
         id: c.id, kind: c.kind, name: c.name, title: titleOf(c, members, req.user.id),
         members: members.filter((p) => !p.left).map((p) => ({ id: p.id, name: p.name, on_team: p.on_team })),
@@ -250,7 +282,7 @@ export function registerMessages(api, { agencyOnly, bad }) {
         const made = q.run(`INSERT INTO conversations (kind, pair_key, created_by, created_at, updated_at) VALUES ('direct', ?, ?, ?, ?) ON CONFLICT DO NOTHING`, pair, req.user.id, at, at);
         if (!made.changes) return { id: q.get('SELECT id FROM conversations WHERE pair_key = ?', pair).id, existing: true };
         const id = Number(made.lastInsertRowid);
-        for (const userId of [req.user.id, otherId]) q.run('INSERT INTO conversation_members (conversation_id, user_id, joined_at, last_read_at) VALUES (?, ?, ?, ?)', id, userId, at, at);
+        for (const userId of [req.user.id, otherId]) q.run('INSERT INTO conversation_members (conversation_id, user_id, joined_at, last_read_at, last_read_id) VALUES (?, ?, ?, ?, 0)', id, userId, at, at);
         return { id, existing: false };
       });
       // Somebody who left nothing: a one-to-one cannot be left, so both are always in it.
@@ -262,7 +294,7 @@ export function registerMessages(api, { agencyOnly, bad }) {
       if (people.length < 2) bad('A group needs at least two other people. For one person, start a one-to-one conversation.');
       const id = tx(() => {
         const made = q.insert(`INSERT INTO conversations (kind, name, created_by, created_at, updated_at) VALUES ('group', ?, ?, ?, ?)`, name, req.user.id, at, at);
-        for (const userId of [req.user.id, ...people.map((p) => p.id)]) q.run('INSERT INTO conversation_members (conversation_id, user_id, joined_at, last_read_at) VALUES (?, ?, ?, ?)', made, userId, at, at);
+        for (const userId of [req.user.id, ...people.map((p) => p.id)]) q.run('INSERT INTO conversation_members (conversation_id, user_id, joined_at, last_read_at, last_read_id) VALUES (?, ?, ?, ?, 0)', made, userId, at, at);
         systemLine(made, req.user.id, `${req.user.name} made the group “${name}” with ${people.map((p) => p.name).join(', ')}`, at);
         return made;
       });
@@ -285,6 +317,7 @@ export function registerMessages(api, { agencyOnly, bad }) {
       messages: page.slice(0, PAGE).reverse().map((m) => shown(m, req.user)),
       has_more: page.length > PAGE,
       last_read_at: c.last_read_at,
+      last_read_id: c.last_read_id,
       now: now(),
     });
   });
@@ -328,17 +361,23 @@ export function registerMessages(api, { agencyOnly, bad }) {
       q.run('UPDATE conversations SET updated_at = ? WHERE id = ?', at, c.id);
       return made;
     });
-    tellOthers({ conversation: c, sender: req.user, body, title: titleOf(c, members, req.user.id) });
+    tellOthers({ conversation: c, messageId: id, sender: req.user, body, title: titleOf(c, members, req.user.id) });
     res.json({ message: shown(q.get(`${MESSAGE_SELECT} WHERE m.id = ?`, id), req.user) });
   });
 
   // The thread has shown the conversation: everything in it up to now is read. `up_to` (a message id) marks it read
-  // only as far as that message, for a thread that has not been given anything newer yet.
+  // only as far as that message: the thread says which is the newest it has shown, so a message that arrived after it
+  // stays unread. Reading never goes backwards. Having read as far as the message an e-mail was about lets the next
+  // message e-mail them again (see tellOthers).
   api.post('/messages/conversations/:id/read', agencyOnly, (req, res) => {
     const c = load(req);
     const upTo = idOf(req.body?.up_to);
-    const at = (upTo && q.get('SELECT created_at FROM messages WHERE id = ? AND conversation_id = ?', upTo, c.id)?.created_at) || now();
-    q.run('UPDATE conversation_members SET last_read_at = ? WHERE conversation_id = ? AND user_id = ? AND (last_read_at IS NULL OR last_read_at < ?)', at, c.id, req.user.id, at);
+    const to = upTo
+      ? q.get('SELECT id FROM messages WHERE id = ? AND conversation_id = ?', upTo, c.id)?.id
+      : q.get('SELECT MAX(id) AS id FROM messages WHERE conversation_id = ?', c.id).id ?? 0;
+    if (to != null) {
+      q.run('UPDATE conversation_members SET last_read_at = ?, last_read_id = MAX(last_read_id, ?) WHERE conversation_id = ? AND user_id = ?', now(), to, c.id, req.user.id);
+    }
     res.json({ ok: true, unread: unreadFor(req.user.id) });
   });
 
@@ -381,8 +420,10 @@ export function registerMessages(api, { agencyOnly, bad }) {
     const at = now();
     tx(() => {
       for (const p of people) {
-        q.run(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, last_read_at) VALUES (?, ?, ?, ?)
-               ON CONFLICT (conversation_id, user_id) DO UPDATE SET left_at = NULL, joined_at = excluded.joined_at, last_read_at = excluded.last_read_at, mailed_at = NULL`, c.id, p.id, at, at);
+        q.run(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, last_read_at, last_read_id)
+               VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(id), 0) FROM messages WHERE conversation_id = ?))
+               ON CONFLICT (conversation_id, user_id) DO UPDATE SET left_at = NULL, joined_at = excluded.joined_at, last_read_at = excluded.last_read_at,
+                 last_read_id = excluded.last_read_id, mailed_at = NULL, mailed_id = NULL`, c.id, p.id, at, at, c.id);
       }
       systemLine(c.id, req.user.id, `${req.user.name} added ${people.map((p) => p.name).join(', ')}`, at);
     });
@@ -410,14 +451,14 @@ export function registerMessages(api, { agencyOnly, bad }) {
       `${MESSAGE_SELECT} JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = ? AND cm.left_at IS NULL
        WHERE m.kind = 'text' AND m.deleted_at IS NULL AND ${applicationId ? 'm.application_id = ?' : 'm.job_id = ?'}
        ORDER BY m.id DESC LIMIT 20`, req.user.id, applicationId || jobId);
-    const conversations = new Map();
-    const conversationOf = (conversationId) => {
-      if (!conversations.has(conversationId)) {
-        const c = q.get('SELECT * FROM conversations WHERE id = ?', conversationId);
-        conversations.set(conversationId, { kind: c.kind, title: titleOf(c, membersOf(c.id), req.user.id) });
-      }
-      return conversations.get(conversationId);
-    };
-    res.json(rows.map((m) => ({ ...shown(m, req.user), conversation_kind: conversationOf(m.conversation_id).kind, conversation_title: conversationOf(m.conversation_id).title })));
+    // The conversations these messages are in, and the people in them, in two more queries rather than two a row.
+    const ids = [...new Set(rows.map((m) => m.conversation_id))];
+    const marks = ids.map(() => '?').join(', ');
+    const conversations = new Map(ids.length ? q.all(`SELECT * FROM conversations WHERE id IN (${marks})`, ...ids).map((c) => [c.id, c]) : []);
+    const membersIn = ids.length ? membersOfMany(marks, ...ids) : () => [];
+    res.json(rows.map((m) => {
+      const c = conversations.get(m.conversation_id);
+      return { ...shown(m, req.user), conversation_kind: c.kind, conversation_title: titleOf(c, membersIn(c.id), req.user.id) };
+    }));
   });
 }

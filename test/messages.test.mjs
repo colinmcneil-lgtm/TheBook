@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { execFileSync } from 'node:child_process';
 import { startServer, session, tempDir, until, sleep, PORTS } from './oracle-helpers.mjs';
 import { look } from './metaview-helpers.mjs';
 
@@ -74,6 +75,26 @@ const thread = async (who, conversationId, query = '') => ok(await who.get(`/mes
 const list = async (who) => ok(await who.get('/messages/conversations'));
 const unread = async (who) => ok(await who.get('/nav')).messages;
 const markRead = async (who, conversationId) => ok(await who.post(`/messages/conversations/${conversationId}/read`));
+/** Read a conversation the way the Messages page does: open it, and mark it read as far as the newest message shown. */
+const readAsThePageDoes = async (who, conversationId, upTo) => {
+  const shown = (await thread(who, conversationId)).messages;
+  return ok(await who.post(`/messages/conversations/${conversationId}/read`, { up_to: upTo ?? shown.at(-1).id }));
+};
+/**
+ * Run one route of messages.js in a process of its own, on a copy of the server's database, with e-mail delivery not
+ * connected, and say how many SQL statements it ran (see messages-queries.mjs).
+ */
+function inProcess(what, userId, input = {}) {
+  const copy = tempDir('messages-copy');
+  try {
+    const db = new DatabaseSync(path.join(dataDir, 'app.db'));
+    try { db.exec(`VACUUM INTO '${path.join(copy, 'app.db').replace(/'/g, "''")}'`); } finally { db.close(); }
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(RESEND_|SMTP_|MAIL_FROM)/.test(key)));
+    const out = execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(import.meta.dirname, 'messages-queries.mjs'), what, String(userId), JSON.stringify(input)],
+      { env: { ...env, DATA_DIR: copy }, encoding: 'utf8' });
+    return JSON.parse(out.trim().split('\n').at(-1));
+  } finally { fs.rmSync(copy, { recursive: true, force: true }); }
+}
 const about = async (who, query) => ok(await who.get(`/messages/about?${query}`));
 /** Wait long enough for an e-mail that is not going to be sent to have been sent, were it going to be. */
 const settle = () => sleep(400);
@@ -235,6 +256,39 @@ test('unread: messages by others since you last read, per conversation and in al
   await markRead(priya, c);
 });
 
+test('unread goes by message, not by the clock: of two messages written in the same millisecond, reading the first leaves the second unread', async () => {
+  const c = (await direct(orla, id.marcus)).id;
+  await markRead(orla, c);
+  const at = new Date().toISOString();
+  const first = Number(write(`INSERT INTO messages (conversation_id, user_id, kind, body, created_at) VALUES (?, ?, 'text', 'Same moment, one', ?)`, c, id.marcus, at).lastInsertRowid);
+  write(`INSERT INTO messages (conversation_id, user_id, kind, body, created_at) VALUES (?, ?, 'text', 'Same moment, two', ?)`, c, id.marcus, at);
+  const before = await unread(orla);
+  ok(await orla.post(`/messages/conversations/${c}/read`, { up_to: first }));
+  assert.equal(await unread(orla), before - 1);
+  assert.equal((await list(orla)).find((x) => x.id === c).unread, 1);
+  // Reading never goes backwards, and a message from another conversation does not count as read here.
+  await markRead(orla, c);
+  ok(await orla.post(`/messages/conversations/${c}/read`, { up_to: first }));
+  assert.equal((await list(orla)).find((x) => x.id === c).unread, 0);
+  assert.equal(rows('SELECT last_read_id FROM conversation_members WHERE conversation_id = ? AND user_id = ?', c, id.orla)[0].last_read_id, first + 1);
+});
+
+test('the list of conversations and the messages on a profile ask the database a fixed number of times, however many rows they show', async () => {
+  for (let i = 0; i < 12; i += 1) {
+    const g = await group(alex, `Many ${i}`, [id.priya, id.orla]);
+    await say(priya, g, `About Nora, number ${i}`, { application_id: app.nora });
+  }
+  const listed = inProcess('list', id.alex);
+  assert.ok(listed.answer.length > 10, `${listed.answer.length} conversations`);
+  assert.ok(listed.statements <= 3, `the list ran ${listed.statements} statements for ${listed.answer.length} conversations`);
+  // What it answers is what the server answers.
+  assert.deepEqual(listed.answer, await list(alex));
+  const profile = inProcess('about', id.alex, { query: { application_id: String(app.nora) } });
+  assert.ok(new Set(profile.answer.map((m) => m.conversation_id)).size > 10);
+  assert.ok(profile.statements <= 4, `the messages on a profile ran ${profile.statements} statements`);
+  assert.deepEqual(profile.answer, await about(alex, `application_id=${app.nora}`));
+});
+
 // ---------- groups ----------
 
 test('a group needs a name of 1 to 80 characters and at least two other people from the team', async () => {
@@ -251,6 +305,17 @@ test('a group needs a name of 1 to 80 characters and at least two other people f
   const t = await thread(priya, g);
   assert.equal(t.conversation.name, 'n'.repeat(80));
   assert.deepEqual(t.members.map((m) => m.name), ['Alex Morgan', 'Marcus Bell', 'Priya Nair']);
+  // Control characters, and the marks that turn text right to left, are taken out of a name; a NUL no longer cuts it short.
+  const odd = await group(alex, 'Ctl\u0000\u001b[31m\u0085X\u202eevil\u2066', [id.priya, id.marcus]);
+  assert.equal((await thread(priya, odd)).conversation.name, 'Ctl [31m X evil');
+  refused(await alex.post('/messages/conversations', { kind: 'group', name: '\u0000\u202e\u001b', user_ids: [id.priya, id.marcus] }), 400, /Give the group a name/);
+  ok(await alex.patch(`/messages/conversations/${odd}`, { name: 'Renamed\u0000 \u202ewell' }));
+  assert.equal((await thread(priya, odd)).conversation.name, 'Renamed well');
+  // A message keeps its line breaks and tabs, and loses its control characters, all of its words kept.
+  const m = await say(alex, odd, 'Before\u0000after\u001b\n\tindented\u0007');
+  assert.equal(m.body, 'Beforeafter\n\tindented');
+  assert.equal(rows('SELECT body FROM messages WHERE id = ?', m.id)[0].body, 'Beforeafter\n\tindented');
+  for (const who of [alex, priya, marcus]) await markRead(who, odd);
 });
 
 test('in a group anybody can rename it, add teammates and leave; each writes a line; somebody added reads the whole history', async () => {
@@ -434,6 +499,32 @@ test('the e-mail heads-up: one per conversation until it is read, never to the s
   assert.deepEqual(mail.to('maya@kestrel.example'), []);
 });
 
+test('read on the Messages page (as far as the newest message shown), the next message e-mails again; read only partly, it does not', async () => {
+  const g = await group(alex, 'Read in the app', [id.priya, id.marcus]);
+  for (const who of [alex, priya, marcus]) await markRead(who, g);
+  const count = () => mail.to('priya@agency.example').filter((m) => /Read in the app/.test(m.subject)).length;
+  const first = await say(alex, g, 'first');
+  await until(count, (n) => n === 1);
+  // Priya opens it straight away: the reading lands in the same moment as the e-mail, and still counts.
+  await readAsThePageDoes(priya, g);
+  await say(alex, g, 'second');
+  await until(count, (n) => n === 2);
+  // Not read since: nothing more, whoever writes.
+  await say(marcus, g, 'third');
+  await settle();
+  assert.equal(count(), 2);
+  // Read only as far as a message before the one e-mailed about: still nothing.
+  await readAsThePageDoes(priya, g, first.id);
+  await say(alex, g, 'fourth');
+  await settle();
+  assert.equal(count(), 2);
+  // Read to the end: the next one e-mails her.
+  await readAsThePageDoes(priya, g);
+  await say(marcus, g, 'fifth');
+  await until(count, (n) => n === 3);
+  for (const who of [alex, priya, marcus]) await markRead(who, g);
+});
+
 test('each person can switch the e-mails off for themselves, and back on', async () => {
   assert.deepEqual(ok(await marcus.get('/messages/settings')), { email: true });
   for (const email of [undefined, 'no', 0, null]) refused(await marcus.putJson('/messages/settings', { email }), 400, /true or false/);
@@ -463,9 +554,24 @@ test('an e-mail that cannot be sent never stops the message', async () => {
     const m = await say(alex, c, 'Sent while the mail provider is down');
     assert.ok(m.id);
     await until(() => server.output(), (log) => log.includes('Notification email failed'));
+    // The e-mail that did not go is not counted as sent: Orla is still due one.
+    await until(() => rows('SELECT mailed_id FROM conversation_members WHERE conversation_id = ? AND user_id = ?', c, id.orla)[0].mailed_id, (mailed) => mailed === null);
   } finally { mail.failing = false; }
   assert.equal((await thread(orla, c)).messages.at(-1).body, 'Sent while the mail provider is down');
+  // Once the provider is back, the next message e-mails her, although she has not read anything since.
+  const before = mail.to('orla@agency.example').length;
+  await say(alex, c, 'And now the provider is back');
+  await until(() => mail.to('orla@agency.example'), (sent) => sent.length === before + 1);
+  assert.match(mail.to('orla@agency.example').at(-1).text, /And now the provider is back/);
   await markRead(orla, c);
+});
+
+test('with e-mail delivery not connected, nobody is noted as e-mailed, so they are told once it is connected', async () => {
+  const c = (await direct(priya, id.orla)).id;
+  await markRead(orla, c);
+  const sent = inProcess('send', id.priya, { params: { id: String(c) }, body: { body: 'While e-mail is not connected' } });
+  assert.equal(sent.answer.message.body, 'While e-mail is not connected');
+  assert.deepEqual(sent.members.map((m) => [m.user_id, m.mailed_at, m.mailed_id]), [[id.priya, null, null], [id.orla, null, null]].sort((x, y) => x[0] - y[0]));
 });
 
 // ---------- people, candidates and jobs that go ----------

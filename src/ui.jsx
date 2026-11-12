@@ -283,8 +283,23 @@ function useEscape(onClose) {
   }, []);
 }
 
+/**
+ * When a dialog closes, put the keyboard back on whatever opened it, so somebody using the keyboard carries on from
+ * there rather than from the top of the page. Nothing happens when that control is gone (a menu's item, say): the
+ * screen that opened the dialog then says where to go.
+ */
+function useReturnFocus() {
+  useEffect(() => {
+    const opener = document.activeElement;
+    return () => {
+      if (opener instanceof HTMLElement && opener !== document.body && opener.isConnected) opener.focus({ preventScroll: true });
+    };
+  }, []);
+}
+
 export function Modal({ title, subtitle, onClose, children, footer, size = 'md', onSubmit }) {
   useEscape(onClose);
+  useReturnFocus();
   const widths = { sm: 'max-w-md', md: 'max-w-xl', lg: 'max-w-3xl' };
   const Body = onSubmit ? 'form' : 'div';
   return (
@@ -327,6 +342,12 @@ export function Drawer({ onClose, children, label }) {
  * Button that opens a small menu. `items` is a list of { label, onClick, icon, danger } or null for a divider.
  * The menu opens below its button, or above it when it would otherwise run off the bottom of the window.
  */
+/** Escape closes an open menu, as it does a dialog, and the keyboard goes back to the menu's button. */
+function MenuEscape({ onClose }) {
+  useEscape(onClose);
+  return null;
+}
+
 export function Menu({ trigger, items, align = 'right', className }) {
   const [open, setOpen] = useState(false);
   const [above, setAbove] = useState(false);
@@ -343,12 +364,29 @@ export function Menu({ trigger, items, align = 'right', className }) {
     if (!open) { setAbove(false); return; }
     const menu = list.current.getBoundingClientRect(), button = ref.current.getBoundingClientRect();
     setAbove(menu.bottom > window.innerHeight - 8 && button.top - menu.height > 8);
+    // The first item has the keyboard, so the menu can be worked with the arrow keys and Enter at once.
+    list.current.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
   }, [open]);
+  const closeToButton = () => {
+    setOpen(false);
+    ref.current?.querySelector('[aria-haspopup="menu"]')?.focus();
+  };
+  // Up and down move between the items, Home and End go to the first and the last, Tab leaves the menu closed.
+  const onKeyDown = (e) => {
+    const menuItems = [...list.current.querySelectorAll('[role="menuitem"]')];
+    const at = menuItems.indexOf(document.activeElement);
+    const go = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: menuItems.length - 1 }[e.key];
+    if (go !== undefined) {
+      e.preventDefault();
+      menuItems[(go + menuItems.length) % menuItems.length]?.focus();
+    } else if (e.key === 'Tab') setOpen(false);
+  };
   return (
     <div ref={ref} className={cx('relative', className)}>
       {React.cloneElement(trigger, { onClick: () => setOpen((o) => !o), 'aria-expanded': open, 'aria-haspopup': 'menu' })}
+      {open && <MenuEscape onClose={closeToButton} />}
       {open && (
-        <div ref={list} role="menu" className={cx('animate-pop-in absolute z-40 min-w-48 overflow-hidden rounded-lg border border-line bg-white py-1 shadow-lg', above ? 'bottom-full mb-1' : 'mt-1', align === 'right' ? 'right-0' : 'left-0')}>
+        <div ref={list} role="menu" onKeyDown={onKeyDown} className={cx('animate-pop-in absolute z-40 min-w-48 overflow-hidden rounded-lg border border-line bg-white py-1 shadow-lg', above ? 'bottom-full mb-1' : 'mt-1', align === 'right' ? 'right-0' : 'left-0')}>
           {items.filter((i) => i !== false).map((item, i) =>
             item === null ? (
               <div key={i} className="my-1 border-t border-line" />
@@ -358,7 +396,7 @@ export function Menu({ trigger, items, align = 'right', className }) {
                 type="button"
                 role="menuitem"
                 onClick={() => { setOpen(false); item.onClick(); }}
-                className={cx('flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-stone-50', item.danger ? 'text-red-700' : 'text-stone-700')}
+                className={cx('flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-stone-50 focus-visible:bg-stone-100 focus-visible:-outline-offset-2', item.danger ? 'text-red-700' : 'text-stone-700')}
               >
                 {item.icon && <item.icon className="size-4 shrink-0 opacity-70" />}
                 {item.label}

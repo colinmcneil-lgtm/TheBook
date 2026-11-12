@@ -921,16 +921,21 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_pair ON conversations(pair_key) WHERE pair_key IS NOT NULL;
 
 -- Who is in each conversation. Leaving a group sets left_at and keeps the row, so the history stays as it was; adding
--- the person again clears it. last_read_at is how far they have read (what is newer and by somebody else is unread),
--- and mailed_at is when they were last e-mailed about it: one e-mail until they have read it. A person removed from
--- the database outright is in no conversation any more; what they wrote stays (messages.user_id below).
+-- the person again clears it. A person removed from the database outright is in no conversation any more; what they
+-- wrote stays (messages.user_id below).
+-- How far somebody has read, and what their last e-mail was about, are kept as message ids as well as times. Ids only
+-- go up, so unread is every message by somebody else after last_read_id (which the index on messages(conversation_id,
+-- id) answers without reading the rest of the history), and an e-mail is answered once they have read as far as the
+-- message it was about (mailed_id), however close together in time the message, the e-mail and the reading were.
 CREATE TABLE IF NOT EXISTS conversation_members (
   conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   joined_at TEXT NOT NULL,
-  last_read_at TEXT,
+  last_read_at TEXT,                                 -- when they last read it
+  last_read_id INTEGER NOT NULL DEFAULT 0,           -- the newest message they have read (0: none)
   left_at TEXT,
-  mailed_at TEXT,
+  mailed_at TEXT,                                    -- when they were last e-mailed about it
+  mailed_id INTEGER,                                 -- the message that e-mail was about: no other until they have read it
   PRIMARY KEY (conversation_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_members_user ON conversation_members(user_id);
