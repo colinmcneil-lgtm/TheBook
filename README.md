@@ -526,7 +526,8 @@ a back arrow.
   longer on the team"; the conversation stays for the others.
 - **Candidates and jobs that are deleted.** Deleting a candidate ("Delete all data on this person" included) or a job
   leaves the messages about them as they were written, and only drops the chip. So whatever was written about a person
-  in a message stays in that message after their record is erased; delete the message too if it must go.
+  in a message stays in that message after their record is erased. Only the person who wrote a message can delete it,
+  so if it must go, ask them to delete it; an admin cannot delete somebody else's message.
 - **Clients.** A client's user never sees Messages, a count, or that messaging exists: there is no menu item, the
   address takes them to the dashboard, and every route of it answers them "Only the agency team can do this." Messages
   are kept in three tables of their own (`conversations`, `conversation_members`, `messages`) and nothing is added to a

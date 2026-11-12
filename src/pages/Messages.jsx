@@ -159,7 +159,7 @@ function AddPeopleModal({ conversation, members, onClose, onDone }) {
 function MembersModal({ members, onClose }) {
   const { user } = useApp();
   return (
-    <Modal title="People in this group" subtitle={`${members.length} people`} size="sm" onClose={onClose} footer={<Button onClick={onClose}>Close</Button>}>
+    <Modal title="People in this group" subtitle={`${members.length} people`} size="sm" onClose={onClose} footer={<Button onClick={onClose} autoFocus>Close</Button>}>
       <ul className="divide-y divide-line">
         {members.map((m) => (
           <li key={m.id} className="flex items-center gap-3 py-2">
@@ -222,6 +222,13 @@ function Composer({ onSend, disabledReason, box }) {
     setBody((now) => (now.trim() ? `${u.text}\n${now}` : u.text));
     setChip((now) => now || u.chip);
   };
+  // Leaving the page while a message is still on its way asks first: its words are nowhere else yet.
+  useEffect(() => {
+    if (!sending) return undefined;
+    const ask = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', ask);
+    return () => window.removeEventListener('beforeunload', ask);
+  }, [sending]);
   if (disabledReason) return <p className="border-t border-line bg-stone-50 px-4 py-3 text-sm text-stone-600">{disabledReason}</p>;
   const tooLong = body.trim().length > BODY_MAX;
   return (
@@ -246,7 +253,7 @@ function Composer({ onSend, disabledReason, box }) {
       <div className="flex items-end gap-2">
         <Button variant="ghost" icon={Paperclip} onClick={() => setAttaching(true)} aria-label="Attach a candidate or a job" title="Attach a candidate or a job" className="!px-2.5 max-sm:h-10 max-sm:min-w-10" />
         <textarea ref={box} rows={1} value={body} onChange={(e) => setBody(e.target.value)} aria-label="Write a message"
-          placeholder="Write a message…" maxLength={BODY_MAX + 500}
+          placeholder="Write a message…"
           onKeyDown={(e) => {
             // Enter sends; Shift+Enter is a new line; Enter while an accented letter is being composed is left alone.
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
@@ -254,7 +261,7 @@ function Composer({ onSend, disabledReason, box }) {
           className="min-h-9 min-w-0 flex-1 resize-none max-sm:min-h-10 rounded-lg border border-line bg-white px-3 py-[7px] text-sm leading-relaxed text-stone-900 placeholder:text-stone-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20" />
         <Button type="submit" variant="primary" icon={Send} busy={sending > 0 && !body.trim()} disabled={!body.trim() || tooLong} aria-label="Send" title="Send (Enter)" className="max-sm:h-10 max-sm:min-w-11"><span className="max-sm:hidden">Send</span></Button>
       </div>
-      <p className={cx('mt-1 text-[11.5px] text-stone-500 max-sm:hidden', tooLong && 'text-red-700')}>
+      <p role={tooLong ? 'alert' : undefined} className={cx('mt-1 text-[11.5px]', tooLong ? 'text-red-700' : 'text-stone-500 max-sm:hidden')}>
         {tooLong ? `Too long: ${body.trim().length} of ${BODY_MAX} characters.` : 'Enter to send, Shift+Enter for a new line.'}
       </p>
       {attaching && <AttachModal onClose={() => setAttaching(false)} onPick={(a) => { setChip(a); setAttaching(false); setTimeout(() => box.current?.focus(), 0); }} />}
@@ -582,6 +589,10 @@ export default function MessagesPage() {
     .catch((err) => setList((s) => ({ ...s, error: err.message }))), []);
   useEffect(() => { load(); }, [load, activeId]);
   useWhileVisible(load, LIST_EVERY);
+  // When the list finds more or fewer unread messages than before, the count in the sidebar is looked at again too, so
+  // the two never disagree for long.
+  const unread = list.conversations?.reduce((n, c) => n + (c.unread || 0), 0) ?? null;
+  useEffect(() => { if (unread !== null) window.dispatchEvent(new Event('messages:counted')); }, [unread]);
   useEffect(() => {
     window.addEventListener('messages:changed', load);
     return () => window.removeEventListener('messages:changed', load);

@@ -149,9 +149,12 @@ export function PeoplePicker({ people, chosen, onChange, single, label = 'People
   const words = text.trim().toLowerCase();
   const shown = people.filter((p) => !words || p.name.toLowerCase().includes(words));
   const toggle = (id) => onChange(single ? [id] : chosen.includes(id) ? chosen.filter((x) => x !== id) : [...chosen, id]);
+  // The keyboard starts in the list (or in its search box), so a dialog that shows this can be used without a mouse.
+  const list = useRef(null);
+  useEffect(() => { list.current?.querySelector('input')?.focus({ preventScroll: true }); }, []);
   if (!people.length) return <p className="text-sm text-stone-500">There is nobody else active on your team to choose.</p>;
   return (
-    <fieldset>
+    <fieldset ref={list}>
       <legend className="mb-1 block text-[13px] font-medium text-stone-700">{label}</legend>
       {people.length > 6 && <Input type="search" value={text} onChange={(e) => setText(e.target.value)} placeholder="Find somebody…" aria-label="Find somebody" className="mb-2" />}
       <ul className="max-h-64 divide-y divide-line overflow-y-auto rounded-lg border border-line">
@@ -217,9 +220,10 @@ export function MessageTeamModal({ attachment, onClose }) {
     bump();
     onClose();
   });
+  const tooLong = body.trim().length > BODY_MAX;
   return (
     <Modal title="Message the team" size="sm" onClose={onClose} onSubmit={send}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" icon={Send} busy={busy} disabled={!to || !body.trim()}>Send</Button></>}>
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" icon={Send} busy={busy} disabled={!to || !body.trim() || tooLong}>Send</Button></>}>
       {!people || !conversations ? <Loading /> : (
         <>
           <Field label="Send to">
@@ -238,8 +242,9 @@ export function MessageTeamModal({ attachment, onClose }) {
             </Select>
           </Field>
           <Field label="Message">
-            <Textarea rows={4} value={body} onChange={(e) => setBody(e.target.value)} maxLength={BODY_MAX} required />
+            <Textarea rows={4} value={body} onChange={(e) => setBody(e.target.value)} required />
           </Field>
+          {tooLong && <p role="alert" className="text-xs text-red-700">Too long: {body.trim().length} of {BODY_MAX} characters.</p>}
           {chip && <div><AttachmentChip attachment={chip} onRemove={() => setChip(null)} /></div>}
           <p className="flex items-center gap-1.5 text-xs text-stone-500"><Lock className="size-3.5 shrink-0" />Only the people in the conversation see this message. The candidate and the client are never told.</p>
         </>

@@ -120,8 +120,14 @@ export default function Layout({ children }) {
     const look = () => document.visibilityState === 'visible' && setAgain((n) => n + 1);
     const timer = setInterval(look, 20000);
     window.addEventListener('messages:changed', look);
+    window.addEventListener('messages:counted', look);
     document.addEventListener('visibilitychange', look);
-    return () => { clearInterval(timer); window.removeEventListener('messages:changed', look); document.removeEventListener('visibilitychange', look); };
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('messages:changed', look);
+      window.removeEventListener('messages:counted', look);
+      document.removeEventListener('visibilitychange', look);
+    };
   }, [isAgency]);
   const { data: counts } = useApi(url('/nav', { client_id: scope }), again);
   const recording = useRecorder().live;

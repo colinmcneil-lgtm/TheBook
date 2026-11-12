@@ -347,6 +347,8 @@ test('in a group anybody can rename it, add teammates and leave; each writes a l
 test('somebody who left a group no longer sees it, cannot read or write in it, and is not counted or e-mailed about it; they can be added again', async () => {
   const g = await group(alex, 'Leaving test', [id.priya, id.marcus]);
   await say(priya, g, 'Before Marcus left');
+  // He has read everything, so only having left can be what keeps the next e-mail from him.
+  await markRead(marcus, g);
   ok(await marcus.post(`/messages/conversations/${g}/leave`));
   assert.equal((await list(marcus)).some((x) => x.id === g), false);
   const unreadBefore = await unread(marcus);
