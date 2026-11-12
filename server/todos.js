@@ -191,7 +191,13 @@ function settle(applicationId) {
       const forThis = (x) => x.user_id === who && x.kind === kind && x.interview_id === i.id;
       if (!who || rows.some((x) => forThis(x) && !x.set_aside)) continue;
       const theirs = rows.find((x) => x.user_id === who && x.kind === kind && open(x));
-      if (theirs) { set(theirs, { interview_id: i.id }); continue; } // on their list for an earlier interview: it follows this one now
+      if (theirs) {
+        // On their list for an earlier interview: it follows this one now. But an old debrief that only came along
+        // with the job does not pull theirs back from a later interview: theirs is the more recent, and it stays.
+        const later = !wanted[kind] && interviews.findIndex((x) => x.id === theirs.interview_id) > interviews.indexOf(i);
+        if (!later) set(theirs, { interview_id: i.id });
+        continue;
+      }
       // The item The Book set aside for this interview comes back as it was, note and all; otherwise a new one.
       let item = rows.find((x) => forThis(x) && x.set_aside);
       if (item) set(item, { removed_at: null, set_aside: 0, position: endOf(who, kind) });

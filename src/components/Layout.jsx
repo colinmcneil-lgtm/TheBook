@@ -113,7 +113,8 @@ export default function Layout({ children }) {
   const [params] = useSearchParams();
   const openCandidate = useOpenCandidate();
   // The counts are looked at again every twenty seconds while the tab is in view, for messages from the team (and
-  // straight away when a conversation is read or written in, or when the tab comes back into view).
+  // straight away when a conversation is read or written in, when the To do lists are read, or when the tab comes
+  // back into view).
   const [again, setAgain] = useState(0);
   useEffect(() => {
     if (!isAgency) return undefined;
@@ -121,11 +122,13 @@ export default function Layout({ children }) {
     const timer = setInterval(look, 20000);
     window.addEventListener('messages:changed', look);
     window.addEventListener('messages:counted', look);
+    window.addEventListener('todos:counted', look);
     document.addEventListener('visibilitychange', look);
     return () => {
       clearInterval(timer);
       window.removeEventListener('messages:changed', look);
       window.removeEventListener('messages:counted', look);
+      window.removeEventListener('todos:counted', look);
       document.removeEventListener('visibilitychange', look);
     };
   }, [isAgency]);

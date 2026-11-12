@@ -8,7 +8,7 @@ import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { session, sleep, tempDir, PORTS } from './oracle-helpers.mjs';
@@ -941,6 +941,26 @@ test('a job whose account executive changed without the job form (straight in th
   assert.deepEqual(openRows(apps.gil), [['sam', 'prep', 1]]);
 });
 
+test('an old debrief that moves to somebody who already has a later one for that candidate leaves theirs about the later interview', async () => {
+  // Two interviews ten and nine days ago, and a debrief for each on two lists at once: no route leaves things so,
+  // but a database put together by hand can. Sam's is about the first, Priya's about the second.
+  await aeJob('support', 'Support Lead', ids.sam);
+  apps.kit = await candidate(priya, 'support', 'Kit Twice', 'Hiring manager interview');
+  const first = await schedule(priya, apps.kit, at(91));
+  const second = await schedule(priya, apps.kit, at(92));
+  write('DELETE FROM todos WHERE application_id = ?', apps.kit);
+  const add = (userId, interviewId) => write(`INSERT INTO todos (user_id, kind, application_id, interview_id, position, auto, created_at) VALUES (?, 'debrief', ?, ?, 99, 1, ?)`, userId, apps.kit, interviewId, at(93));
+  add(ids.sam, first);
+  add(ids.priya, second);
+  // The job goes to Priya. Sam's is set aside; Priya keeps her one debrief, still about the second interview.
+  await handOver('support', 'Support Lead', ids.priya);
+  const open = () => rows('SELECT user_id, interview_id FROM todos WHERE application_id = ? AND done_at IS NULL AND removed_at IS NULL', apps.kit).map((r) => [r.user_id, r.interview_id]);
+  assert.deepEqual(open(), [[ids.priya, second]]);
+  await lists(priya);
+  assert.deepEqual(open(), [[ids.priya, second]]);
+  assert.equal((await itemOf(priya, 'debrief', 'Kit Twice')).interview.id, second);
+});
+
 // ---------- starting on a live database ----------
 
 test('starting on a database from before To do adds the table and leaves every existing row as it was; starting again changes nothing', async () => {
@@ -1093,6 +1113,37 @@ test('going live: prep and debrief items The Book had put on a recruiter\'s list
     db.close();
   } finally {
     await api.stop().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the demo data puts its prep and debrief on the job\'s account executive, so the first look at To do leaves them, note and all', async () => {
+  const dir = tempDir('todos-seed');
+  let api;
+  try {
+    const run = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/seed.js'], { cwd: ROOT, env: { PATH: process.env.PATH, HOME: process.env.HOME, DATA_DIR: dir }, encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    const people = () => {
+      const db = new DatabaseSync(path.join(dir, 'app.db'), { readOnly: true });
+      try {
+        return db.prepare(`SELECT t.id, t.user_id, t.kind, t.application_id, t.note, t.done_at IS NOT NULL AS done, t.removed_at IS NOT NULL AS removed, t.set_aside, j.account_executive_id
+          FROM todos t JOIN applications a ON a.id = t.application_id JOIN jobs j ON j.id = a.job_id WHERE t.kind != 'job' ORDER BY t.id`).all().map((r) => ({ ...r }));
+      } finally { db.close(); }
+    };
+    const seeded = people();
+    // Each open debrief, Priya's with its note among them, is on the list of the account executive of its job.
+    const debriefs = seeded.filter((r) => r.kind === 'debrief');
+    assert.equal(debriefs.length, 2);
+    for (const r of debriefs) assert.equal(r.user_id, r.account_executive_id);
+    assert.ok(debriefs.some((r) => r.note === 'Ask how the panel felt, then call the client'));
+    // The first look at To do changes none of it.
+    api = await startApi({ port: UPGRADE_PORT, dataDir: dir });
+    const alex = session(api.base);
+    ok(await alex.post('/login', { email: 'alex@harbourtalent.example', password: 'demo1234' }));
+    ok(await alex.get('/todos'));
+    assert.deepEqual(people(), seeded);
+  } finally {
+    await api?.stop().catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

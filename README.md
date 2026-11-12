@@ -594,7 +594,9 @@ Interviews scheduled in The Book fill the two people lists without anybody doing
   is set aside with their note on it, and is theirs again, note and all, if the job comes back to them. Items you
   added by hand stay on your list, and what you ticked or took off is not given back to you for that interview when
   the job returns; the new account executive still gets their own item for it while it is wanted. A note written on
-  an item is its owner's and does not go with it.
+  an item is its owner's and does not go with it. Somebody who already has the candidate to debrief about a later
+  interview keeps that one: an older debrief coming with the job does not make a second, or take theirs back to
+  the older interview.
 - On a job with no account executive, the same goes for the candidate changing hands: the item The Book added moves
   to the new owner's list.
 - Nobody is put on a debrief list for an interview that ended more than seven days ago, or before the day To do

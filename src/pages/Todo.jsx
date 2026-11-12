@@ -11,9 +11,9 @@ import { DragGhost, DropSlot, Grip, useDragDrop } from '../components/DragDrop.j
 const LISTS = {
   job: { title: 'Jobs to work on', picker: 'pick-jobs', add: 'Add jobs', icon: Briefcase, ticked: 'done' },
   prep: { title: 'People to prep', picker: 'pick-people', add: 'Add people', icon: GraduationCap, ticked: 'prepped',
-    hint: 'The Book adds people here by itself, seven days before an interview on a job you are the account executive of.' },
+    hint: 'The Book adds people here by itself, seven days before an interview on a job you are the account executive of, or for your own candidates on a job with none.' },
   debrief: { title: 'People to debrief', picker: 'pick-people', add: 'Add people', icon: MessagesSquare, ticked: 'debriefed',
-    hint: 'The Book adds people here by itself, when an interview has ended on a job you are the account executive of.' },
+    hint: 'The Book adds people here by itself, when an interview has ended on a job you are the account executive of, or for your own candidates on a job with none.' },
 };
 /** What an item is called: the job's title or the person's name. */
 const nameOf = (item) => item.title ?? item.name;
@@ -440,7 +440,13 @@ export default function Todo() {
     const s = sync.current, reading = ++s.readings;
     const counts = () => reading === s.readings && !s.waiting;
     api.get('/todos')
-      .then((lists) => { if (counts()) { setSaved(lists); setMine(null); setAdding([]); setError(null); } })
+      .then((lists) => {
+        if (!counts()) return;
+        setSaved(lists); setMine(null); setAdding([]); setError(null);
+        // The count in the menu is read again too, so that it says what the list says: items somebody else's work
+        // brought (a job handed to this person, an interview booked for their candidate) show in both at once.
+        window.dispatchEvent(new Event('todos:counted'));
+      })
       .catch((err) => { if (counts()) setError(err.message); });
     return () => { s.readings++; };
   }, [version]);

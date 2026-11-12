@@ -565,10 +565,12 @@ tx(() => {
   todo(alex, 'job', { job: jobs[1].id }, { note: 'Two portfolios still to review with Tom' });
   todo(alex, 'job', { job: jobs[6].id });
   for (const userId of [priya, alex]) {
-    // The latest interview held for a candidate of theirs who is still in play: prep ticked when it passed, debrief to do.
+    // The latest interview held on a job they are the account executive of, for a candidate still in play: prep
+    // ticked when it passed, debrief to do. On the account executive's list, as the server puts them, so that the
+    // first look at To do leaves them where they are, note and all.
     const held = q.get(
       `SELECT i.id AS interview, i.application_id AS application FROM interviews i JOIN applications a ON a.id = i.application_id
-       WHERE a.status = 'active' AND a.owner_id = ? AND i.status = 'completed' ORDER BY i.starts_at DESC LIMIT 1`, userId);
+       JOIN jobs j ON j.id = a.job_id WHERE a.status = 'active' AND j.account_executive_id = ? AND i.status = 'completed' ORDER BY i.starts_at DESC LIMIT 1`, userId);
     if (!held) continue;
     todo(userId, 'prep', held, { doneDays: 1, auto: 1 });
     todo(userId, 'debrief', held, { auto: 1, note: userId === priya ? 'Ask how the panel felt, then call the client' : null });
