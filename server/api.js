@@ -11,6 +11,7 @@ import { registerMetaview, conversationsWith, forgetConversations } from './meta
 import { webUrl, checkLink, profileUrl, identityKey } from './links.js';
 import * as reporting from './reporting.js';
 import * as todos from './todos.js';
+import { registerCycles } from './cycles.js';
 import * as board from './board.js';
 import * as reviews from './reviews.js';
 import * as messages from './messages.js';
@@ -585,6 +586,9 @@ reporting.registerReporting(api, { agencyOnly, adminOnly, bad, int, loadApp: (id
 // To do (each agency user's own list of jobs to work on and people to prep and debrief) is a module of its own as well.
 // The routes below tell it when an interview is scheduled, changed or cancelled: each call to `todos.` is one of those.
 todos.registerTodos(api, { agencyOnly, bad, clean, text, int });
+// Cycles (the whole team's view of which open jobs have been worked on: a job ticked on somebody's Jobs to work on is
+// one cycle) reads what To do writes, and is a module of its own too.
+registerCycles(api, { agencyOnly, bad, int });
 // Jobs on our website (the agency's confidential adverts and what the agency does with them) is a module of its own too.
 // The routes below tell it when a job, a client or somebody at a client changes, because a post has to be checked
 // again each time, and ask it before anything is e-mailed to somebody who applied through a post.

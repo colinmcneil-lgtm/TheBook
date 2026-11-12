@@ -766,6 +766,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_job_once ON todos(user_id, job_id) W
 CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_person_once ON todos(user_id, kind, application_id) WHERE kind != 'job' AND done_at IS NULL AND removed_at IS NULL;`);
 // A to-do table made before items could be set aside gets the column; its rows are left as they are.
 addColumn('todos', 'set_aside', 'INTEGER NOT NULL DEFAULT 0');
+
+// Cycles (see cycles.js): each time somebody on the agency team ticks a job on their own Jobs to work on list, one
+// row here. It is history, so it is kept in a table of its own rather than read from the to-do rows, which are taken
+// off, tidied away and go with their person. Only un-ticking that same item takes a cycle away (it was a mistake),
+// and only deleting the job deletes its cycles. Nothing of the to-do item is copied here but which one it was:
+// never its note, which stays its owner's alone.
+db.exec(`
+CREATE TABLE IF NOT EXISTS cycles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,             -- the job that was worked on
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,                    -- who ticked it; empty once that account is removed
+  todo_id INTEGER REFERENCES todos(id) ON DELETE SET NULL,                    -- the item it came from, so that un-ticking it finds this row
+  at TEXT NOT NULL                                                            -- when it was ticked
+);
+-- The Cycles page counts each open job's cycles, all and in a period, and finds its latest; a job's own history is
+-- read newest first. All of these are seeks on (job_id, at) for that job, never a pass over every cycle, and who made
+-- each is in the index too, so By person for one client reads nothing else either.
+CREATE INDEX IF NOT EXISTS idx_cycles_job ON cycles(job_id, at, user_id);
+-- "By person" and the summary count the cycles in a period whatever job they were on: a range on when, with who and
+-- which job in the index itself, so that counting them reads nothing else.
+CREATE INDEX IF NOT EXISTS idx_cycles_at ON cycles(at, user_id, job_id);
+-- One cycle per to-do item at a time: ticking, un-ticking and ticking again is one, and the first start's copy of
+-- what was already ticked can be run again without counting anything twice. (Rows with no item left are many.)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cycles_todo ON cycles(todo_id);`);
 // ---------- end of to do ----------
 
 // ---------- our website's jobs page ----------

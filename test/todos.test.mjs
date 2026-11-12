@@ -1,5 +1,6 @@
 // To do, end to end: each person's own lists of jobs to work on and people to prep and debrief, the two pickers
-// beside them, and what The Book puts on the people lists by itself from scheduled interviews. Run with `npm test`.
+// beside them, what The Book puts on the people lists by itself from scheduled interviews, and the cycles a job
+// ticked on a list makes for the whole team's Cycles page. Run with `npm test`.
 //
 // A story is acted out against The Book's real API on a throwaway data folder. People go on To prep seven days
 // before an interview and on To debrief when it has ended, so the API is started with one extra route (see
@@ -8,14 +9,23 @@ import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { session, sleep, tempDir, PORTS } from './oracle-helpers.mjs';
+import { zonedTimeToUtc } from '../server/zoned-time.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The two ports kept for this file (see PORT_PLAN in oracle-helpers.mjs for who uses which).
 const PORT = PORTS.todos, UPGRADE_PORT = PORTS.todos + 1;
+// What a client's user is sent about themselves and about a job, key by key: Cycles must add nothing to either.
+const CLIENT_USER_KEYS = ['active', 'client_id', 'email', 'id', 'name', 'role', 'title'];
+const CLIENT_JOB_KEYS = [
+  'active_candidates', 'brand_color', 'careers_page', 'client_id', 'client_name', 'client_slug', 'closed_at',
+  'created_at', 'criteria', 'currency', 'department', 'description', 'employment_type', 'hires', 'hiring_manager_id',
+  'hiring_manager_name', 'id', 'interviewing', 'location', 'new_applicants', 'offers', 'opened_at', 'openings',
+  'questions', 'salary_max', 'salary_min', 'salary_public', 'status', 'title', 'total_applicants', 'work_mode'
+];
 const DAY = 86400000, HOUR = 3600000, MINUTE = 60000;
 
 async function startApi({ port, dataDir }) {
@@ -961,6 +971,402 @@ test('an old debrief that moves to somebody who already has a later one for that
   assert.equal((await itemOf(priya, 'debrief', 'Kit Twice')).interview.id, second);
 });
 
+// ---------- cycles ----------
+// Each time somebody on the team ticks a job on their own Jobs to work on list, that is one cycle on the job, and the
+// whole agency team sees the cycles on the Cycles page (see cycles.js). Told on jobs at a client of their own, Orbit,
+// so that the page, scoped to Orbit with the sidebar's client picker, shows only what this part of the story did.
+
+let orbit;                                // the client
+const orbitJobs = {};                     // job ids, by name
+const CY = () => T0 + 120 * DAY;          // later than anything above, so the to-do clock only moves forward
+/** A moment `days` after the cycles part of the story starts. */
+const cat = (days, extra = 0) => new Date(CY() + days * DAY + extra).toISOString();
+/** The Cycles page, as somebody asks for it. Orbit's unless `client_id` says otherwise. */
+const page = async (who, query = {}) => ok(await who.get(`/cycles?${new URLSearchParams({ client_id: orbit, ...query })}`));
+const history = async (who, jobId, before) => ok(await who.get(`/cycles/jobs/${jobId}${before ? `?before=${before}` : ''}`));
+/** The cycles in the database for a job: [whose, the item it came from, when]. */
+const cycleRows = (jobId) => rows('SELECT user_id, todo_id, at FROM cycles WHERE job_id = ? ORDER BY at, id', jobId).map((r) => [r.user_id, r.todo_id, r.at]);
+const rowOf = (answer, jobId) => answer.rows.find((r) => r.id === jobId);
+/** A new job at Orbit, open unless said otherwise, made by Olive (so she is its account executive). */
+async function orbitJob(key, title, status = 'open') {
+  orbitJobs[key] = ok(await olive.post('/jobs', { client_id: orbit, title, status })).id;
+  return orbitJobs[key];
+}
+/** Put a job on somebody's list and tick it at a moment: one cycle. Answers the item's id. */
+async function workOn(who, jobId, when, extra = {}) {
+  await clock(when);
+  const id = await addJob(who, jobId, extra);
+  await tick(who, id);
+  return id;
+}
+
+test('a job ticked on somebody\'s list is one cycle; un-ticking takes it away; ticked again it counts once, at the new time', async () => {
+  orbit = ok(await olive.post('/clients', { name: 'Orbit' })).id;
+  ids.priya = await idOf(priya);
+  const job = await orbitJob('rocket', 'Rocket Engineer');
+  await clock(cat(0));
+  const item = await addJob(priya, job);
+  assert.deepEqual(cycleRows(job), []);                                       // on the list is not a cycle
+  // The tick answers exactly as it did before cycles existed.
+  assert.deepEqual(await tick(priya, item), { ok: true });
+  const done = rows('SELECT done_at FROM todos WHERE id = ?', item)[0].done_at;
+  assert.deepEqual(cycleRows(job), [[ids.priya, item, done]]);               // by her, from that item, at the tick
+  await tick(priya, item);                                                    // ticked twice over (two tabs): still one
+  assert.equal(cycleRows(job).length, 1);
+  await clock(cat(0, HOUR));
+  await untick(priya, item);
+  assert.deepEqual(cycleRows(job), []);                                       // a mistake: it goes
+  await clock(cat(0, 2 * HOUR));
+  await tick(priya, item);
+  assert.deepEqual(cycleRows(job), [[ids.priya, item, cat(0, 2 * HOUR)]]);    // one, at the new time
+  const answer = await page(olive, { period: 'all' });
+  assert.deepEqual([rowOf(answer, job).cycles_total, rowOf(answer, job).last_at, rowOf(answer, job).last_by], [1, cat(0, 2 * HOUR), { user_id: ids.priya, name: 'Priya Nair', on_team: true }]);
+});
+
+test('two people ticking the same job are two cycles, and the same person putting it back on the list and ticking it again is two', async () => {
+  ids.sam = await idOf(sam);
+  ids.olive = await idOf(olive);
+  const job = await orbitJob('lander', 'Lander Technician');
+  const first = await workOn(sam, job, cat(1));
+  const second = await workOn(olive, job, cat(1, HOUR));
+  // Sam puts it back on his list the next day and ticks it again: a second item, a second cycle.
+  const again = await workOn(sam, job, cat(2));
+  assert.notEqual(again, first);
+  assert.deepEqual(cycleRows(job), [[ids.sam, first, cat(1)], [ids.olive, second, cat(1, HOUR)], [ids.sam, again, cat(2)]]);
+  assert.equal(rowOf(await page(olive, { period: 'all' }), job).cycles_total, 3);
+});
+
+test('ticks on People to prep and People to debrief make no cycle, whether the person ticked them or The Book did', async () => {
+  const job = await orbitJob('pilot', 'Test Pilot');
+  const before = rows('SELECT COUNT(*) AS n FROM cycles')[0].n;
+  await clock(cat(3));
+  const stagesOf = Object.fromEntries(ok(await olive.get(`/jobs/${job}`)).stages.map((s) => [s.name, s.id]));
+  const app = ok(await priya.upload('/applications', { job_id: job, name: 'Juno Prepped', email: 'juno@mail.example', stage_id: stagesOf['Hiring manager interview'] })).id;
+  // By hand: Priya puts Juno on both people lists and ticks them.
+  await tick(priya, await addPerson(priya, 'prep', app));
+  await tick(priya, await addPerson(priya, 'debrief', app));
+  // By The Book: an interview tomorrow puts Juno on Olive's To prep (she is the job's account executive); when it has
+  // ended The Book ticks the prep itself and puts Juno on To debrief, which Olive then ticks.
+  await schedule(priya, app, cat(4));
+  await lists(olive);
+  await clock(cat(4, 2 * HOUR));
+  const after = await lists(olive);
+  assert.ok(after.prep.done.some((x) => x.name === 'Juno Prepped' && x.auto_done));
+  await tick(olive, after.debrief.open.find((x) => x.name === 'Juno Prepped').id);
+  assert.equal(rows('SELECT COUNT(*) AS n FROM cycles')[0].n, before);
+  assert.equal(rows('SELECT COUNT(*) AS n FROM cycles WHERE job_id = ?', job)[0].n, 0);
+});
+
+test('a cycle stays when the ticked job is taken off the Done list, when the seven days run out, and when its person is deactivated or removed; deleting the job deletes its cycles', async () => {
+  const job = await orbitJob('dock', 'Docking Specialist');
+  // Taken off the Done list with its X.
+  const item = await workOn(priya, job, cat(5));
+  await remove(priya, item);
+  assert.equal(cycleRows(job).length, 1);
+  // Seven days on, it has left Priya's page; the cycle has not.
+  await clock(cat(13));
+  assert.equal((await lists(priya)).job.done.some((x) => x.id === item), false);
+  assert.equal(cycleRows(job).length, 1);
+  // Somebody who leaves: deactivated, they are still named, as no longer on the team.
+  const rae = await join('recruiter', 'Rae Leaving', 'rae@agency.example');
+  ids.rae = await idOf(rae);
+  await workOn(rae, job, cat(13, HOUR));
+  ok(await olive.patch(`/users/${ids.rae}`, { active: false }));
+  assert.equal(cycleRows(job).length, 2);
+  let row = rowOf(await page(olive, { period: 'all' }), job);
+  assert.deepEqual([row.cycles_total, row.last_by], [2, { user_id: ids.rae, name: 'Rae Leaving', on_team: false }]);
+  // Their account removed altogether (no route does that to somebody who has signed in; the database can): their
+  // to-do items go with them, their cycle stays, by somebody no longer on the team.
+  const ned = await join('recruiter', 'Ned Removed', 'ned@agency.example');
+  ids.ned = await idOf(ned);
+  await workOn(ned, job, cat(13, 2 * HOUR));
+  write('DELETE FROM sessions WHERE user_id = ?', ids.ned);
+  write('DELETE FROM users WHERE id = ?', ids.ned);
+  assert.equal(rows('SELECT COUNT(*) AS n FROM todos WHERE user_id = ?', ids.ned)[0].n, 0);
+  assert.deepEqual(cycleRows(job).map(([who, fromItem]) => [who, fromItem === null]), [[ids.priya, false], [ids.rae, false], [null, true]]);
+  row = rowOf(await page(olive, { period: 'all' }), job);
+  assert.deepEqual([row.cycles_total, row.last_by], [3, { user_id: null, name: null, on_team: false }]);
+  assert.deepEqual((await history(olive, job)).cycles.map((c) => c.name), [null, 'Rae Leaving', 'Priya Nair']);
+  // The job deleted: its cycles go with it, and nobody else's.
+  const others = rows('SELECT COUNT(*) AS n FROM cycles WHERE job_id != ?', job)[0].n;
+  ok(await olive.del(`/jobs/${job}`));
+  assert.equal(cycleRows(job).length, 0);
+  assert.equal(rows('SELECT COUNT(*) AS n FROM cycles')[0].n, others);
+  refused(await olive.get(`/cycles/jobs/${job}`), 404, /no longer in The Book/);
+});
+
+test('the week starts on Monday at midnight on the agency\'s clock: a tick at 23:59 on Sunday and one at 00:01 on Monday fall in different weeks', async () => {
+  // The first Sunday after this part of the story started, read in Toronto, the agency's time zone here.
+  const zone = 'America/Toronto';
+  const weekday = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: zone, weekday: 'long' }).format(new Date(ms));
+  let sunday = CY() + 20 * DAY;
+  while (weekday(sunday) !== 'Sunday') sunday += DAY;
+  const [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(sunday)).split('-').map(Number);
+  const lateSunday = zonedTimeToUtc(y, m, d, 23, 59, 0, zone).toISOString();
+  const earlyMonday = zonedTimeToUtc(y, m, d + 1, 0, 1, 0, zone).toISOString();
+  const job = await orbitJob('orbiter', 'Orbiter Planner');
+  await workOn(priya, job, lateSunday);
+  await workOn(sam, job, earlyMonday);
+  // Monday at 00:02: this week holds Sam's tick only; the last 7 days hold both.
+  await clock(zonedTimeToUtc(y, m, d + 1, 0, 2, 0, zone).toISOString());
+  const week = await page(olive, { period: 'week' });
+  assert.equal(week.from, zonedTimeToUtc(y, m, d + 1, 0, 0, 0, zone).toISOString());
+  assert.equal(rowOf(week, job).cycles_period, 1);
+  assert.equal(rowOf(week, job).last_by.name, 'Sam Ode');
+  assert.equal(rowOf(await page(olive, { period: '7d' }), job).cycles_period, 2);
+  // Back on the Sunday, a minute before midnight: Priya's tick is this week's.
+  await clock(zonedTimeToUtc(y, m, d, 23, 59, 30, zone).toISOString());
+  const sundayWeek = await page(olive, { period: 'week' });
+  assert.equal(sundayWeek.from, zonedTimeToUtc(y, m, d - 6, 0, 0, 0, zone).toISOString());
+  assert.equal(rowOf(sundayWeek, job).cycles_period, 1);
+  // The last 30 days and all time hold both.
+  await clock(zonedTimeToUtc(y, m, d + 1, 0, 2, 0, zone).toISOString());
+  assert.equal(rowOf(await page(olive, { period: '30d' }), job).cycles_period, 2);
+  assert.equal(rowOf(await page(olive, { period: 'all' }), job).cycles_period, 2);
+});
+
+// The table, the summary and By person, told at a third client, Nova, where every number can be counted by hand.
+let nova;
+const novaJobs = {};
+const novaPage = async (who, query = {}) => page(who, { client_id: nova, ...query });
+const titlesOf = (answer) => answer.rows.map((r) => r.title);
+
+test('the table has one row for every open job in view, with its numbers, and the jobs touched longest ago, or never, first', async () => {
+  nova = ok(await olive.post('/clients', { name: 'Nova' })).id;
+  for (const [key, title, status] of [['alpha', 'Alpha', 'open'], ['bravo', 'Bravo', 'open'], ['charlie', 'Charlie', 'open'], ['delta', 'Delta', 'open'], ['echo', 'Echo', 'paused'], ['foxtrot', 'Foxtrot', 'draft']]) {
+    novaJobs[key] = ok(await olive.post('/jobs', { client_id: nova, title, status })).id;
+  }
+  // When each was opened, so that the order of the two never touched is certain: Alpha has been open longest.
+  for (const [key, days] of [['alpha', -60], ['bravo', -30], ['charlie', -20], ['delta', -10], ['echo', -10]]) write('UPDATE jobs SET opened_at = ? WHERE id = ?', cat(days), novaJobs[key]);
+  // Delta is Sam's job; Bravo has no account executive; the rest are Olive's, who made them.
+  ok(await olive.putJson(`/jobs/${novaJobs.delta}`, { title: 'Delta', status: 'open', account_executive_id: ids.sam }));
+  write('UPDATE jobs SET account_executive_id = NULL WHERE id = ?', novaJobs.bravo);
+  // Charlie was worked on long ago; Delta twice in the last week; Echo (on hold) once in the last week, the job was
+  // ticked while it was open and put on hold after.
+  await workOn(priya, novaJobs.charlie, cat(31));
+  await workOn(sam, novaJobs.delta, cat(39));
+  await workOn(priya, novaJobs.delta, cat(39, HOUR));
+  write(`UPDATE jobs SET status = 'open' WHERE id = ?`, novaJobs.echo);
+  await workOn(sam, novaJobs.echo, cat(39, 2 * HOUR));
+  write(`UPDATE jobs SET status = 'paused' WHERE id = ?`, novaJobs.echo);
+
+  await clock(cat(40));
+  const week7 = await novaPage(olive, { period: '7d' });
+  assert.equal(week7.from, cat(33));
+  // Four open jobs; the job on hold and the draft are not in the table. Never-touched first, the one open longest at
+  // the top; then the longest since its last cycle.
+  assert.deepEqual(titlesOf(week7), ['Alpha', 'Bravo', 'Charlie', 'Delta']);
+  assert.deepEqual([week7.sort, week7.dir], ['last', 'asc']);
+  const shape = (r) => [r.title, r.account_executive_name, r.cycles_period, r.cycles_total, r.last_at, r.last_by?.name ?? null, r.days_open];
+  assert.deepEqual(week7.rows.map(shape), [
+    ['Alpha', 'Olive Admin', 0, 0, null, null, 100],
+    ['Bravo', null, 0, 0, null, null, 70],
+    ['Charlie', 'Olive Admin', 0, 1, cat(31), 'Priya Nair', 60],
+    ['Delta', 'Sam Ode', 2, 2, cat(39, HOUR), 'Priya Nair', 50],
+  ]);
+  assert.equal(rowOf(week7, novaJobs.alpha).client_name, 'Nova');
+  // The summary adds up in plain sight: three cycles, two on open jobs and one on a job no longer open; one of four
+  // open jobs touched, three not.
+  assert.deepEqual(week7.summary, { cycles: 3, on_open_jobs: 2, on_other_jobs: 1, open_jobs: 4, touched: 1, untouched: 3 });
+  // All time: Charlie's old cycle counts too.
+  const all = await novaPage(olive, { period: 'all' });
+  assert.equal(all.from, null);
+  assert.deepEqual(all.summary, { cycles: 4, on_open_jobs: 3, on_other_jobs: 1, open_jobs: 4, touched: 2, untouched: 2 });
+  assert.deepEqual(all.rows.map((r) => r.cycles_period), [0, 0, 1, 2]);
+  // Without the client picker, the page holds every client's open jobs, Orbit's and Nova's among them.
+  const everyone = await page(olive, { client_id: '', period: 'all' });
+  for (const id of [novaJobs.alpha, orbitJobs.rocket, orbitJobs.lander]) assert.ok(rowOf(everyone, id));
+  assert.ok(everyone.summary.open_jobs > all.summary.open_jobs);
+  assert.ok(!rowOf(everyone, novaJobs.echo) && !rowOf(everyone, novaJobs.foxtrot));
+});
+
+test('the table sorts by any column and filters by account executive and by "not touched in this period"', async () => {
+  const by = async (query) => titlesOf(await novaPage(olive, { period: '7d', ...query }));
+  assert.deepEqual(await by({ sort: 'total' }), ['Delta', 'Charlie', 'Alpha', 'Bravo']);                // most first; ties neglected first
+  assert.deepEqual(await by({ sort: 'total', dir: 'asc' }), ['Alpha', 'Bravo', 'Charlie', 'Delta']);
+  assert.deepEqual(await by({ sort: 'period' }), ['Delta', 'Alpha', 'Bravo', 'Charlie']);
+  assert.deepEqual(await by({ sort: 'last', dir: 'desc' }), ['Delta', 'Charlie', 'Bravo', 'Alpha']);    // the latest first, never last
+  assert.deepEqual(await by({ sort: 'job' }), ['Alpha', 'Bravo', 'Charlie', 'Delta']);
+  assert.deepEqual(await by({ sort: 'job', dir: 'desc' }), ['Delta', 'Charlie', 'Bravo', 'Alpha']);
+  assert.deepEqual(await by({ sort: 'ae' }), ['Alpha', 'Charlie', 'Delta', 'Bravo']);                   // Olive, Olive, Sam; nobody last
+  assert.deepEqual(await by({ sort: 'open' }), ['Alpha', 'Bravo', 'Charlie', 'Delta']);                 // open longest first
+  assert.deepEqual(await by({ sort: 'nonsense', dir: 'sideways' }), ['Alpha', 'Bravo', 'Charlie', 'Delta']);
+  // Filters narrow the table only: the summary still describes every open job in view.
+  const untouched = await novaPage(olive, { period: '7d', untouched: '1' });
+  assert.deepEqual(titlesOf(untouched), ['Alpha', 'Bravo', 'Charlie']);
+  assert.deepEqual(untouched.summary, { cycles: 3, on_open_jobs: 2, on_other_jobs: 1, open_jobs: 4, touched: 1, untouched: 3 });
+  assert.deepEqual(await by({ account_executive: String(ids.sam) }), ['Delta']);
+  assert.deepEqual(await by({ account_executive: String(ids.olive) }), ['Alpha', 'Charlie']);
+  assert.deepEqual(await by({ account_executive: 'none' }), ['Bravo']);
+  assert.deepEqual(await by({ account_executive: String(ids.sam), untouched: '1' }), []);
+  assert.deepEqual(await by({ account_executive: String(ids.olive), untouched: '1', sort: 'job', dir: 'desc' }), ['Charlie', 'Alpha']);
+  // The account executives offered are those of the open jobs in view.
+  assert.deepEqual(untouched.account_executives.map((p) => p.name), ['Olive Admin', 'Sam Ode']);
+  // A period or an account executive that is not one The Book knows is refused plainly.
+  refused(await olive.get(`/cycles?period=year&client_id=${nova}`), 400, /Choose a period: this week, the last 7 days, the last 30 days or all time/);
+  refused(await olive.get('/cycles?account_executive=Sam'), 400, /account executive/);
+  refused(await olive.get('/cycles?account_executive=-3'), 400, /account executive/);
+  assert.equal(ok(await olive.get(`/cycles?client_id=${nova}`)).period, 'week');                          // none given: this week
+});
+
+test('"On a list now" is who has the job on their Jobs to work on at this moment, not ticked, and still on the team', async () => {
+  await clock(cat(40, HOUR));
+  await addJob(priya, novaJobs.alpha);
+  await addJob(sam, novaJobs.alpha);
+  await addJob(olive, novaJobs.bravo);
+  // Rae, deactivated, still has Alpha on her list in the database: she is not working on it any more.
+  write(`INSERT INTO todos (user_id, kind, job_id, position, created_at) VALUES (?, 'job', ?, 0, ?)`, ids.rae, novaJobs.alpha, cat(40));
+  const answer = await novaPage(olive, { period: '7d' });
+  const names = (key) => rowOf(answer, novaJobs[key]).on_list.map((p) => p.name);
+  assert.deepEqual([names('alpha'), names('bravo'), names('charlie'), names('delta')], [['Priya Nair', 'Sam Ode'], ['Olive Admin'], [], []]);
+  assert.deepEqual(rowOf(answer, novaJobs.alpha).on_list.map((p) => p.user_id), [ids.priya, ids.sam]);
+  assert.deepEqual(titlesOf(await novaPage(olive, { period: '7d', sort: 'on_list' })), ['Alpha', 'Bravo', 'Charlie', 'Delta']);
+  // Ticked, it is no longer on her list now: it is a cycle instead.
+  const priyas = (await lists(priya)).job.open.find((x) => x.job_id === novaJobs.alpha);
+  await tick(priya, priyas.id);
+  const after = await novaPage(olive, { period: '7d' });
+  assert.deepEqual(rowOf(after, novaJobs.alpha).on_list.map((p) => p.name), ['Sam Ode']);
+  assert.deepEqual([rowOf(after, novaJobs.alpha).cycles_period, after.summary.touched], [1, 2]);
+  assert.equal(titlesOf(after)[0], 'Bravo');                                  // Alpha is no longer the most neglected
+});
+
+test('By person lists every active teammate, with none or some, and people no longer on the team only when they have cycles in the period', async () => {
+  // Rae (deactivated) has one cycle in the week and one long before; somebody whose account was removed has one in
+  // the week. Written as the tick route writes them.
+  write('INSERT INTO cycles (job_id, user_id, todo_id, at) VALUES (?, ?, NULL, ?)', novaJobs.charlie, ids.rae, cat(38));
+  write('INSERT INTO cycles (job_id, user_id, todo_id, at) VALUES (?, NULL, NULL, ?)', novaJobs.charlie, cat(38, HOUR));
+  write('INSERT INTO cycles (job_id, user_id, todo_id, at) VALUES (?, ?, NULL, ?)', novaJobs.bravo, ids.rae, cat(1));
+  const people = (answer) => answer.people.map((p) => [p.name, p.on_team, p.cycles, p.jobs]);
+  // The last 7 days at Nova: Sam ticked Delta and Echo, Priya Delta and Alpha, Rae and the removed account Charlie,
+  // and Olive nothing, which is worth seeing.
+  assert.deepEqual(people(await novaPage(olive, { period: '7d' })), [
+    ['Priya Nair', true, 2, 2], ['Sam Ode', true, 2, 2], ['Rae Leaving', false, 1, 1], [null, false, 1, 1], ['Olive Admin', true, 0, 0],
+  ]);
+  // All time, Rae's earlier cycle counts too, on another job.
+  assert.deepEqual(people(await novaPage(olive, { period: 'all' })).find((p) => p[0] === 'Rae Leaving'), ['Rae Leaving', false, 2, 2]);
+  // In a period with nothing from them, people no longer on the team are not listed, and the team all are, at nought.
+  await clock(cat(60));
+  assert.deepEqual(people(await novaPage(olive, { period: '7d' })), [['Olive Admin', true, 0, 0], ['Priya Nair', true, 0, 0], ['Sam Ode', true, 0, 0]]);
+  assert.deepEqual((await novaPage(olive, { period: '7d' })).summary, { cycles: 0, on_open_jobs: 0, on_other_jobs: 0, open_jobs: 4, touched: 0, untouched: 4 });
+  // A client's user is never on it: Maya and Rob (now one of Lumen's users) are not on the team.
+  const all = (await novaPage(olive, { period: 'all' })).people.map((p) => p.name);
+  assert.ok(!all.includes('Maya Okonkwo') && !all.includes('Rob Leaving'));
+});
+
+test('a job\'s cycles are listed newest first, twenty at a time, with the rest behind "Show earlier"', async () => {
+  const job = await orbitJob('beacon', 'Beacon Operator');
+  const made = [];
+  for (let n = 0; n < 23; n += 1) made.push(await workOn(priya, job, cat(61, n * MINUTE)));
+  const first = await history(olive, job);
+  assert.deepEqual([first.total, first.cycles.length, first.more], [23, 20, true]);
+  assert.deepEqual(first.cycles.map((c) => c.at), Array.from({ length: 20 }, (_, n) => cat(61, (22 - n) * MINUTE)));
+  assert.deepEqual(first.cycles[0], { id: first.cycles[0].id, at: cat(61, 22 * MINUTE), user_id: ids.priya, name: 'Priya Nair', on_team: true });
+  const rest = await history(olive, job, first.cycles.at(-1).id);
+  assert.deepEqual([rest.cycles.length, rest.more], [3, false]);
+  assert.deepEqual(rest.cycles.map((c) => c.at), [cat(61, 2 * MINUTE), cat(61, MINUTE), cat(61)]);
+  // What is not a cycle of this job, or not a job, is refused.
+  refused(await olive.get(`/cycles/jobs/${job}?before=abc`), 400);
+  refused(await olive.get(`/cycles/jobs/${job}?before=${(await history(olive, novaJobs.delta)).cycles[0].id}`), 400);
+  refused(await olive.get('/cycles/jobs/abc'), 404, /no longer in The Book/);
+  refused(await olive.get('/cycles/jobs/99999999'), 404, /no longer in The Book/);
+  refused(await olive.get('/cycles/jobs/1.5'), 404);
+});
+
+test('the note on an item never appears in any cycles answer, and is not kept with the cycle', async () => {
+  const word = 'Zanzibarquill';
+  await clock(cat(62));
+  // A note on a job she ticks, on one still on her list, and on one ticked and then taken off.
+  await workOn(priya, orbitJobs.beacon, cat(62), { note: `${word} call the client` });
+  await addJob(priya, orbitJobs.rocket, { note: `${word} still to do` });
+  const off = await workOn(sam, novaJobs.charlie, cat(62, MINUTE), { note: `${word} done` });
+  ok(await sam.patch(`/todos/${off}`, { note: `${word} edited after the tick` }));
+  await remove(sam, off);
+  assert.ok(JSON.stringify(await lists(priya)).includes(word));              // it is on her own list, for her
+  const answers = [];
+  for (const period of ['week', '7d', '30d', 'all']) {
+    for (const client of [orbit, nova, '']) {
+      for (const sort of ['last', 'job', 'on_list']) answers.push(await page(olive, { client_id: client, period, sort }), await page(priya, { client_id: client, period, sort }));
+    }
+  }
+  for (const id of [...Object.values(orbitJobs), novaJobs.alpha, novaJobs.charlie, novaJobs.echo]) {
+    const res = await olive.get(`/cycles/jobs/${id}`);
+    if (res.status === 200) answers.push(res.body);
+  }
+  for (const answer of answers) assert.equal(JSON.stringify(answer).includes(word), false);
+  assert.deepEqual(rows('PRAGMA table_info(cycles)').map((c) => c.name), ['id', 'job_id', 'user_id', 'todo_id', 'at']);
+});
+
+test('client users and signed-out visitors are refused on every Cycles route, and a client\'s answers have gained nothing', async () => {
+  const job = orbitJobs.beacon;
+  const someCycle = (await history(olive, job)).cycles[0].id;
+  for (const path of ['/cycles', '/cycles?period=all', `/cycles?client_id=${lumen}`, `/cycles/jobs/${jobs.backend}`, `/cycles/jobs/${job}`, `/cycles/jobs/${job}?before=${someCycle}`, '/cycles/jobs/abc']) {
+    refused(await maya.get(path), 403, /Only the agency team/);
+    refused(await session(server.base).get(path), 401);
+  }
+  // What Maya can fetch has the same keys it had before cycles existed.
+  const nav = ok(await maya.get('/nav'));
+  assert.deepEqual(Object.keys(nav).sort(), ['new_applicants', 'pending_accounts', 'pending_review', 'scorecards_due']);
+  const me = ok(await maya.get('/me'));
+  assert.deepEqual(Object.keys(me).sort(), ['agencyName', 'candidateMail', 'clientPhotos', 'clients', 'mailConfigured', 'user']);
+  assert.deepEqual(Object.keys(me.user).sort(), CLIENT_USER_KEYS);
+  const lumenJob = ok(await maya.get(`/jobs/${jobs.backend}`));
+  assert.deepEqual(Object.keys(lumenJob).sort(), ['job', 'stages']);
+  assert.deepEqual(Object.keys(lumenJob.job).sort(), CLIENT_JOB_KEYS);
+  assert.equal(/cycle/i.test(JSON.stringify([nav, me, lumenJob, ok(await maya.get('/jobs'))])), false);
+  // Nor has the agency's own job answer: the line on the job's page comes from /cycles/jobs/:id.
+  assert.equal(/cycle/i.test(JSON.stringify(ok(await olive.get(`/jobs/${job}`)))), false);
+});
+
+/** Run one route of cycles.js in a process of its own, on a copy of the server's database (see cycles-queries.mjs). */
+function inProcess(what, userId, input = {}, change) {
+  const copy = tempDir('cycles-copy');
+  try {
+    const db = new DatabaseSync(path.join(dataDir, 'app.db'));
+    try { db.exec(`VACUUM INTO '${path.join(copy, 'app.db').replace(/'/g, "''")}'`); } finally { db.close(); }
+    if (change) {
+      const copied = new DatabaseSync(path.join(copy, 'app.db'));
+      try { change(copied); } finally { copied.close(); }
+    }
+    const out = execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(import.meta.dirname, 'cycles-queries.mjs'), what, String(userId), JSON.stringify(input)],
+      { env: { PATH: process.env.PATH, HOME: process.env.HOME, DATA_DIR: copy }, encoding: 'utf8' });
+    return JSON.parse(out.trim().split('\n').at(-1));
+  } finally { fs.rmSync(copy, { recursive: true, force: true }); }
+}
+/** Many more open jobs, cycles and to-do items, written straight into a copy of the database. */
+const grow = (jobsToAdd, cyclesToAdd) => (db) => {
+  const template = db.prepare(`SELECT id FROM jobs WHERE status = 'open' ORDER BY id LIMIT 1`).get().id;
+  const users = db.prepare(`SELECT id FROM users WHERE role != 'client' AND active = 1`).all().map((u) => u.id);
+  db.exec('BEGIN');
+  const made = [];
+  const copyJob = db.prepare(`INSERT INTO jobs (client_id, title, department, location, work_mode, employment_type, salary_min, salary_max, salary_public, description, ideal_profile,
+      status, hiring_manager_id, openings, questions, criteria, created_by, account_executive_id, created_at, opened_at)
+    SELECT client_id, title || ' ' || ?, department, location, work_mode, employment_type, salary_min, salary_max, salary_public, description, ideal_profile,
+      status, hiring_manager_id, openings, questions, criteria, created_by, account_executive_id, created_at, opened_at FROM jobs WHERE id = ?`);
+  for (let n = 0; n < jobsToAdd; n += 1) made.push(Number(copyJob.run(String(n), template).lastInsertRowid));
+  const cycle = db.prepare('INSERT INTO cycles (job_id, user_id, at) VALUES (?, ?, ?)');
+  for (let n = 0; n < cyclesToAdd; n += 1) cycle.run(made[n % made.length], users[n % users.length], new Date(Date.now() - (n % 1000) * HOUR).toISOString());
+  const item = db.prepare(`INSERT INTO todos (user_id, kind, job_id, position, created_at) VALUES (?, 'job', ?, 0, ?)`);
+  made.forEach((jobId, n) => { if (n % 3 === 0) item.run(users[n % users.length], jobId, cat(0)); });
+  db.exec('COMMIT');
+};
+
+test('the page asks the database the same few times however many jobs there are, and stays quick with 300 open jobs and 20,000 cycles', async (t) => {
+  const query = { query: { period: '30d' } };
+  const now = inProcess('page', ids.olive, query);
+  const more = inProcess('page', ids.olive, query, grow(60, 900));
+  assert.ok(more.answer.rows.length >= now.answer.rows.length + 60);
+  assert.equal(more.statements, now.statements);
+  assert.ok(now.statements <= 5, `${now.statements} statements`);
+  const big = inProcess('page', ids.olive, query, grow(300, 20000));
+  assert.equal(big.statements, now.statements);
+  assert.equal(big.answer.summary.open_jobs >= 300, true);
+  t.diagnostic(`300 more open jobs and 20,000 cycles: ${big.ms.toFixed(1)} ms`);
+  assert.ok(big.ms < 150, `the page took ${big.ms} ms`);
+  // A job's history is a fixed number too, however long it is.
+  const history1 = inProcess('job', ids.olive, { params: { id: String(orbitJobs.beacon) } });
+  assert.ok(history1.statements <= 3, `${history1.statements} statements`);
+});
+
 // ---------- starting on a live database ----------
 
 test('starting on a database from before To do adds the table and leaves every existing row as it was; starting again changes nothing', async () => {
@@ -1145,5 +1551,122 @@ test('the demo data puts its prep and debrief on the job\'s account executive, s
   } finally {
     await api?.stop().catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the first start of the version with cycles counts every job already ticked on a list, by its owner at the time it was ticked; starting again changes nothing', async () => {
+  const dir = tempDir('todos-cycles');
+  let api = await startApi({ port: UPGRADE_PORT, dataDir: dir });
+  try {
+    // A workspace with three jobs, Olive and Priya, and a candidate to prep and debrief.
+    const admin = session(api.base);
+    ok(await admin.post('/setup', { agencyName: 'Harbour Talent', name: 'Olive Admin', email: 'olive@agency.example', password: 'demo1234' }));
+    const client = ok(await admin.post('/clients', { name: 'Lumen' })).id;
+    const { token } = ok(await admin.post('/invites', { role: 'recruiter', email: 'priya@agency.example' }));
+    ok(await session(api.base).post(`/invites/${token}/accept`, { name: 'Priya Nair', password: 'demo1234' }));
+    const job = {};
+    for (const key of ['one', 'two', 'three']) job[key] = ok(await admin.post('/jobs', { client_id: client, title: `Job ${key}`, status: 'open' })).id;
+    const app = ok(await admin.upload('/applications', { job_id: job.one, name: 'Ana Reyes', email: 'ana@mail.example' })).id;
+    await api.stop();
+
+    // Make it what the version before this one left: no cycles table, no setting, and to-do rows as the old code
+    // wrote them. Olive ticked job one, and job two and then took it off her Done list; Priya ticked job one too, and
+    // un-ticked job three (so it is to do again); Olive ticked Ana's prep by hand and The Book ticked a prep itself.
+    const file = path.join(dir, 'app.db');
+    let db = new DatabaseSync(file);
+    db.exec(`DROP TABLE cycles; DELETE FROM settings WHERE key = 'cycles_copied'; DELETE FROM todos;`);
+    const olive = db.prepare(`SELECT id FROM users WHERE email = 'olive@agency.example'`).get().id;
+    const priya = db.prepare(`SELECT id FROM users WHERE email = 'priya@agency.example'`).get().id;
+    const put = db.prepare('INSERT INTO todos (user_id, kind, job_id, application_id, note, position, auto, auto_done, created_at, done_at, removed_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)');
+    const t = (day) => `2026-10-${String(day).padStart(2, '0')}T14:00:00.000Z`;
+    const item = {
+      oliveOne: put.run(olive, 'job', job.one, null, 'A private note', 0, 0, t(1), t(2), null).lastInsertRowid,
+      oliveTwo: put.run(olive, 'job', job.two, null, null, 0, 0, t(1), t(3), t(4)).lastInsertRowid,
+      priyaOne: put.run(priya, 'job', job.one, null, null, 0, 0, t(1), t(5), null).lastInsertRowid,
+      priyaThree: put.run(priya, 'job', job.three, null, null, 0, 0, t(1), null, null).lastInsertRowid,
+      prep: put.run(olive, 'prep', null, app, null, 0, 0, t(1), t(6), null).lastInsertRowid,
+      bookPrep: put.run(priya, 'prep', null, app, null, 1, 1, t(1), t(7), null).lastInsertRowid,
+      removedPrep: put.run(priya, 'debrief', null, app, null, 1, 0, t(1), t(8), t(9)).lastInsertRowid,
+    };
+    const before = db.prepare('SELECT * FROM todos ORDER BY id').all();
+    db.close();
+
+    const read = () => {
+      const r = new DatabaseSync(file, { readOnly: true });
+      try {
+        return {
+          cycles: r.prepare('SELECT id, job_id, user_id, todo_id, at FROM cycles ORDER BY id').all().map((x) => ({ ...x })),
+          copied: r.prepare(`SELECT value FROM settings WHERE key = 'cycles_copied'`).get()?.value,
+          todos: r.prepare('SELECT * FROM todos ORDER BY id').all().map((x) => ({ ...x })),
+          shape: r.prepare(`SELECT name, sql FROM sqlite_master WHERE tbl_name = 'cycles' ORDER BY name`).all().map((x) => ({ ...x })),
+        };
+      } finally { r.close(); }
+    };
+    api = await startApi({ port: UPGRADE_PORT, dataDir: dir });
+    await api.stop();
+    const first = read();
+    // Three cycles, oldest first: each ticked job, whether or not it was taken off the list since, by whose list it
+    // was on, when it was ticked. Not the un-ticked job, and nothing for prep or debrief.
+    assert.deepEqual(first.cycles.map(({ job_id, user_id, todo_id, at }) => [job_id, user_id, todo_id, at]), [
+      [job.one, olive, Number(item.oliveOne), t(2)], [job.two, olive, Number(item.oliveTwo), t(3)], [job.one, priya, Number(item.priyaOne), t(5)],
+    ]);
+    assert.ok(Math.abs(Date.now() - Date.parse(first.copied)) < 60000);
+    assert.deepEqual(first.todos, before.map((x) => ({ ...x })));            // the lists are as they were
+    assert.deepEqual(first.shape.map((x) => x.name), ['cycles', 'idx_cycles_at', 'idx_cycles_job', 'idx_cycles_todo']);
+
+    // Started again, nothing changes; nor when the setting is lost and the copy runs a second time.
+    api = await startApi({ port: UPGRADE_PORT, dataDir: dir });
+    await api.stop();
+    assert.deepEqual(read(), first);
+    db = new DatabaseSync(file);
+    db.exec(`DELETE FROM settings WHERE key = 'cycles_copied'`);
+    db.close();
+    api = await startApi({ port: UPGRADE_PORT, dataDir: dir });
+    const second = read();
+    assert.deepEqual(second.cycles, first.cycles);
+    // The copied cycles are like any other: un-ticking the item takes its cycle away, and the page shows the rest.
+    const oliveSession = session(api.base);
+    ok(await oliveSession.post('/login', { email: 'olive@agency.example', password: 'demo1234' }));
+    ok(await oliveSession.patch(`/todos/${item.oliveOne}`, { done: false }));
+    assert.deepEqual(read().cycles.map((c) => c.todo_id), [Number(item.oliveTwo), Number(item.priyaOne)]);
+    const shown = ok(await oliveSession.get('/cycles?period=all'));
+    assert.deepEqual(shown.rows.map((r) => [r.title, r.cycles_total]), [['Job three', 0], ['Job two', 1], ['Job one', 1]]);
+    assert.equal(JSON.stringify(shown).includes('A private note'), false);
+    await api.stop();
+  } finally {
+    await api.stop().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the first start of the version with cycles on a database from before To do, and on a new one, counts nothing and notes that it has looked', async () => {
+  for (const before of ['to do', 'new']) {
+    const dir = tempDir('todos-cycles-empty');
+    let api;
+    try {
+      if (before === 'to do') {
+        api = await startApi({ port: UPGRADE_PORT, dataDir: dir });
+        const owner = session(api.base);
+        ok(await owner.post('/setup', { agencyName: 'Harbour Talent', name: 'Olive Admin', email: 'olive@agency.example', password: 'demo1234' }));
+        const client = ok(await owner.post('/clients', { name: 'Lumen' })).id;
+        ok(await owner.post('/jobs', { client_id: client, title: 'Backend Engineer', status: 'open' }));
+        await api.stop();
+        const db = new DatabaseSync(path.join(dir, 'app.db'));
+        db.exec(`DROP TABLE cycles; DROP TABLE todos; DELETE FROM settings WHERE key LIKE 'todos_%' OR key = 'cycles_copied';`);
+        db.close();
+      }
+      for (let start = 0; start < 2; start += 1) {
+        api = await startApi({ port: UPGRADE_PORT, dataDir: dir });
+        await api.stop();
+        const db = new DatabaseSync(path.join(dir, 'app.db'), { readOnly: true });
+        try {
+          assert.equal(db.prepare('SELECT COUNT(*) AS n FROM cycles').get().n, 0, before);
+          assert.ok(db.prepare(`SELECT value FROM settings WHERE key = 'cycles_copied'`).get(), before);
+        } finally { db.close(); }
+      }
+    } finally {
+      await api?.stop().catch(() => {});
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 });

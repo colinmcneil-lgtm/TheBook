@@ -25,8 +25,8 @@ export function setReportClock(fn) { clock = fn || (() => new Date()); }
 const reportNow = () => clock();
 const stamp = () => reportNow().toISOString();
 
-/** The time zone the start day (and "this month") is read in: Toronto, unless REPORTS_TIMEZONE names another real one. */
-function reportZone() {
+/** The agency's own time zone, in which the start day (and "this month", and the Cycles page's week) is read: Toronto, unless REPORTS_TIMEZONE names another real one. */
+export function reportZone() {
   const zone = process.env.REPORTS_TIMEZONE;
   return zone && validZone(zone) ? zone : DEFAULT_ZONE;
 }

@@ -485,8 +485,11 @@ test('starting on a database from before fills in each job’s account executive
   const THE_SENT = ['sent_resumes', 'idx_sent_resumes_hash'];
   // (And messages between people on the agency team: three tables and five indexes, all empty; test/messages.test.mjs is about them.)
   const THE_MESSAGES = ['conversations', 'conversation_members', 'messages', 'idx_conversations_pair', 'idx_conversation_members_user', 'idx_messages_conversation', 'idx_messages_application', 'idx_messages_job'];
-  assert.deepEqual(Object.keys(first.objects).filter(notTheBoards).sort(), [...Object.keys(before.objects), ...THE_BOOKS, ...THE_REVIEWS, ...THE_SENT, ...THE_MESSAGES].sort(), 'nothing was added beside the column');
-  for (const table of [...THE_BOOKS, ...THE_REVIEWS, ...THE_SENT, ...THE_MESSAGES].filter((name) => first.rows[name])) assert.deepEqual(first.rows[table], [], `${table} is empty`);
+  // (And cycles, a job ticked on somebody's To do list: one table and three indexes. The fixture has no ticked job,
+  // so the table is empty; test/todos.test.mjs is about it.)
+  const THE_CYCLES = ['cycles', 'idx_cycles_at', 'idx_cycles_job', 'idx_cycles_todo'];
+  assert.deepEqual(Object.keys(first.objects).filter(notTheBoards).sort(), [...Object.keys(before.objects), ...THE_BOOKS, ...THE_REVIEWS, ...THE_SENT, ...THE_MESSAGES, ...THE_CYCLES].sort(), 'nothing was added beside the column');
+  for (const table of [...THE_BOOKS, ...THE_REVIEWS, ...THE_SENT, ...THE_MESSAGES, ...THE_CYCLES].filter((name) => first.rows[name])) assert.deepEqual(first.rows[table], [], `${table} is empty`);
   // (Starting also does what it did before this version: it notes when the server first ran and files candidates' names for looking up.)
   const STARTING_WRITES = ['jobs', 'settings', 'candidate_name_keys', 'candidate_name_dirty', 'candidate_phone_keys'];
   // (The agency's public jobs page adds one e-mail template of its own on start; the templates that were there are untouched.)

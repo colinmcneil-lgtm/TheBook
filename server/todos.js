@@ -21,6 +21,11 @@
 //  3. What a person took off their list, or ticked, is theirs to decide: The Book never puts the same person back
 //     for the same interview. That is why a removed item is kept as a row and only marked removed.
 //
+// One exception to rule 1, and only one: ticking a job on Jobs to work on is a cycle on that job (see cycles.js),
+// and the whole agency team sees who ticked which job and when. It is written here, in the same transaction as the
+// tick, and un-ticking the same item takes it away again. The list itself, its order, its notes and the two people
+// lists stay their owner's alone.
+//
 // Nothing here runs on a timer. The lists are brought up to date for the time it is now whenever somebody asks for
 // their list or for the menu's count (catchUp), and at once when an interview is scheduled, changed or cancelled,
 // or a job changes account executive: the routes in api.js call interviewChanged() and accountExecutiveChanged() at
@@ -43,6 +48,8 @@ let clock = () => new Date();
 /** For the tests only: lets them say what time it is, so an interview can come up and pass without waiting. */
 export function setTodoClock(fn) { clock = fn || (() => new Date()); }
 const stamp = () => clock().toISOString();
+/** What time the lists think it is: the Cycles page counts its periods by the same clock as the ticks it counts. */
+export const todoNow = () => clock();
 
 // When this version first ran on this workspace. Nobody is put on a debrief list for an interview that had already
 // ended by then: the lists start with what is coming up, not with every interview of the week before.
@@ -430,7 +437,13 @@ export function registerTodos(api, { agencyOnly, bad, clean, text, int }) {
     const noteId = tx(() => {
       if (b.note !== undefined) q.run('UPDATE todos SET note = ? WHERE id = ?', clean(b.note, NOTE_MAX), item.id);
       if (b.done === true) {
-        if (!item.done_at) q.run('UPDATE todos SET done_at = ?, auto_done = 0 WHERE id = ?', stamp(), item.id);
+        if (!item.done_at) {
+          const t = stamp();
+          q.run('UPDATE todos SET done_at = ?, auto_done = 0 WHERE id = ?', t, item.id);
+          // A job ticked is one cycle on it, by this person, at this moment (see cycles.js). Only a job: prep and
+          // debrief are about a candidate, and The Book ticks some of those by itself.
+          if (item.kind === 'job') q.run('INSERT INTO cycles (job_id, user_id, todo_id, at) VALUES (?, ?, ?, ?)', item.job_id, item.user_id, item.id, t);
+        }
         // What the candidate said is saved even when the debrief was already ticked (on a phone, say, before the
         // notes were typed into a page still open on a laptop): what somebody typed is never quietly dropped.
         const said = item.kind === 'debrief' ? text(b.debrief, 10000) : null;
@@ -449,6 +462,9 @@ export function registerTodos(api, { agencyOnly, bad, clean, text, int }) {
           bad(item.kind === 'job' ? 'This job is already on your list again.' : 'This person is already on this list again.', 409);
         }
         q.run('UPDATE todos SET done_at = NULL, auto_done = 0, position = ? WHERE id = ?', endOf(req.user.id, item.kind), item.id);
+        // Un-ticked, it was not done after all: the cycle that tick made goes too. Ticked again later, it counts
+        // once more, at that time.
+        if (item.kind === 'job') q.run('DELETE FROM cycles WHERE todo_id = ?', item.id);
         // A prep for an interview that has been held (or cancelled) would be ticked again at once, and a debrief
         // about one that was since moved to a later time (or cancelled) would be taken off. Un-ticked by hand, it
         // is the person's own item from here on, with no interview behind it.

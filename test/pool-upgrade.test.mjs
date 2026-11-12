@@ -922,11 +922,12 @@ forEachBefore('upgrading changes nothing but the three columns, the new column, 
 });
 
 // The database code is not all that runs when the server starts: some features write down, once, when they first
-// ran on the workspace (the reports and To do: server/reporting.js and server/todos.js, both loaded with the
-// routes). So the first start of the whole server on a database from before To do adds one more row than the tests
-// above show, and on a database from before the reports two. On the live release's database it adds none: both are
-// written there already, and they must be left as they are, since nobody is put on a debrief list for an interview
-// that ended before the moment To do first ran.
+// ran on the workspace (the reports, To do and cycles: server/reporting.js, server/todos.js and server/cycles.js, all
+// loaded with the routes). So the first start of the whole server on a database from before To do adds two more rows
+// than the tests above show, and on a database from before the reports three. On the live release's database it adds
+// one, the note that the cycles were counted: the other two are written there already, and they must be left as they
+// are, since nobody is put on a debrief list for an interview that ended before the moment To do first ran. Cycles
+// also counts, that once, every job already ticked on somebody's To do list (one, on the databases that had lists).
 //
 // Which settings those are is not listed here: they are the ones the whole server writes on a workspace made new
 // today, over and above what the database code alone leaves there.
@@ -977,13 +978,22 @@ forEachBefore('the first start of the whole server also writes down when each fe
     if (momentOfThisRun(onNew[row.key])) assert.ok(Date.parse(row.value) >= began && Date.parse(row.value) <= Date.now(), `${row.key} is the moment of this start (${row.value})`);
     else assert.equal(row.value, onNew[row.key], `${row.key} is what a new workspace is given`);
   }
+  // Where somebody had ticked a job on their To do list, the first start also counts each such tick as a cycle
+  // (server/cycles.js): by the person whose list it was, at the moment it was ticked, from that item, oldest first.
+  // The release with To do left one such tick; earlier ones had no lists, and so no cycles.
+  const ticked = (upgraded.rows.todos ?? []).filter((t) => t.kind === 'job' && t.job_id != null && t.done_at)
+    .sort((a, b) => a.done_at.localeCompare(b.done_at) || a.id - b.id);
+  assert.equal(ticked.length > 0, used(release, TODOS));
+  assert.deepEqual(first.rows.cycles.map(({ job_id, user_id, todo_id, at }) => [job_id, user_id, todo_id, at]), ticked.map((t) => [t.job_id, t.user_id, t.id, t.done_at]), 'the jobs ticked on a list are the cycles');
+  assert.deepEqual(upgraded.rows.cycles, [], 'the database code alone counts no cycles');
+  const withoutCycles = (shot) => ({ ...shot, rows: { ...shot.rows, cycles: [] }, counters: shot.counters.filter((c) => c.name !== 'cycles') });
   // Nothing else is different from what the database code alone left: no other row anywhere, no table, no index.
   // But for one thing every start of the server does, on the live release as on this one, which is no part of the
   // upgrade: a request for an account that nobody answered in time is removed (Ask Er's, from January).
   const withoutRequest = plain(upgraded);
   assert.deepEqual(withoutRequest.rows.users.filter((u) => u.pending).map((u) => [u.id, u.email]), [[5, 'asker@example.com']]);
   withoutRequest.rows.users = withoutRequest.rows.users.filter((u) => !u.pending);
-  assertSame({ ...first, rows: { ...first.rows, settings: first.rows.settings.filter((row) => !noted.includes(row)) } }, withoutRequest, 'after the whole server\'s first start, but for those settings');
+  assertSame(withoutCycles({ ...first, rows: { ...first.rows, settings: first.rows.settings.filter((row) => !noted.includes(row)) } }), withoutCycles(withoutRequest), 'after the whole server\'s first start, but for those settings and the cycles');
   // Where the release that left the database had written them, they are still what it wrote.
   const settings = (shot) => Object.fromEntries(shot.rows.settings.map((row) => [row.key, row.value]));
   for (const row of before.rows.settings) assert.equal(settings(first)[row.key], row.value, `the setting ${row.key} is as it was`);

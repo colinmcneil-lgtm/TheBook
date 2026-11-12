@@ -22,11 +22,12 @@ if (q.get('SELECT 1 AS x FROM users LIMIT 1')) {
   }
   console.log(`Wiping ${DATA_DIR} ...`);
   tx(() => {
-    for (const t of ['team_reviews', 'post_applications_set_aside', 'board_applications', 'board_log', 'board_overrules', 'board_posts', 'todos', 'report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'agency_emails', 'agency_activities', 'earlier_resumes', 'sent_resumes', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
+    for (const t of ['team_reviews', 'post_applications_set_aside', 'board_applications', 'board_log', 'board_overrules', 'board_posts', 'cycles', 'todos', 'report_events', 'metaview_forgotten', 'metaview_people', 'metaview_calls', 'calls', 'agency_emails', 'agency_activities', 'earlier_resumes', 'sent_resumes', 'emails', 'offers', 'scorecards', 'interview_panel', 'interviews', 'activities', 'notes', 'stage_history', 'applications', 'candidates', 'stages', 'jobs', 'sessions', 'invites', 'users', 'clients'])
       db.exec(`DELETE FROM ${t}`);
     db.exec(`DELETE FROM settings WHERE key LIKE 'metaview_%'`); // the demo is not connected to Metaview
     db.exec(`DELETE FROM settings WHERE key LIKE 'board_%'`);    // the demo's job board starts as a new one does
     db.exec(`DELETE FROM settings WHERE key = 'sent_resumes_backfilled'`); // the demo's résumés are recorded at the next start (see api.js)
+    db.exec(`DELETE FROM settings WHERE key = 'cycles_copied'`); // the demo's cycles history starts at the next start, as a new workspace's does
     db.exec('DELETE FROM sqlite_sequence'); // a wiped database starts numbering from 1 again
   });
   for (const file of fs.readdirSync(UPLOAD_DIR)) fs.rmSync(path.join(UPLOAD_DIR, file), { recursive: true, force: true }); // résumés, photos and call audio of the rows just deleted
@@ -577,6 +578,17 @@ tx(() => {
   }
   const firstPrep = q.get(`SELECT id FROM todos WHERE user_id = ? AND kind = 'prep' AND done_at IS NULL ORDER BY position LIMIT 1`, priya);
   if (firstPrep) q.run('UPDATE todos SET note = ? WHERE id = ?', 'Send the interview pack and confirm the time', firstPrep.id);
+
+  // Cycles: a few jobs ticked in the weeks before, since taken off the Done list, so that the Cycles page has some
+  // history and jobs not touched for a while. Each is written as the tick route writes it: the item, ticked, and its
+  // cycle; Priya's job ticked two days ago, above, gets its cycle too. Fixed times, with no random number drawn, so
+  // that the rest of the demo stays as it was.
+  const earlier = (days, hour) => { const d = new Date(Date.now() - days * DAY); d.setHours(hour, 15, 0, 0); return d.toISOString(); };
+  for (const [userId, job, days, hour] of [[alex, jobs[0], 9, 10], [marcus, jobs[4], 12, 15], [priya, jobs[1], 20, 11]]) {
+    q.run(`INSERT INTO todos (user_id, kind, job_id, position, created_at, done_at, removed_at) VALUES (?, 'job', ?, 0, ?, ?, ?)`,
+      userId, job.id, earlier(days + 1, hour), earlier(days, hour), earlier(days - 1, hour));
+  }
+  q.run(`INSERT INTO cycles (job_id, user_id, todo_id, at) SELECT job_id, user_id, id, done_at FROM todos WHERE kind = 'job' AND done_at IS NOT NULL ORDER BY done_at, id`);
 
   // Jobs on our website: two confidential posts, so the agency's public board (/board) has something on it. Each is saved
   // the way the form saves it, so each has been through the check.

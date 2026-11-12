@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CalendarDays, ChevronDown, Copy, ExternalLink, MessagesSquare, Pencil, Trash2, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate, Pending } from '../state.jsx';
-import { api, url, daysSince, fmtDate, photoUrl, salaryRange, sourceName, plural, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
+import { api, url, ago, daysSince, firstName, fmtDate, photoUrl, salaryRange, sourceName, plural, WORK_MODES, EMPLOYMENT, JOB_STATUS } from '../lib.js';
 import { Avatar, Badge, Button, Card, Empty, Menu, Page, Stars, Tabs, useAction, useToast, cx } from '../ui.jsx';
 import { JobStatusBadge, ReviewBadge } from '../components/bits.jsx';
 import ApplicationsTable from '../components/ApplicationsTable.jsx';
@@ -182,6 +182,22 @@ function Details({ job, stages }) {
   );
 }
 
+/** " · 5 cycles · last 16h ago by Priya", or " · No cycles yet", linking to the Cycles page. Nothing until it has loaded. */
+function CyclesLine({ jobId }) {
+  const { data } = useApi(`/cycles/jobs/${jobId}`);
+  if (!data) return null;
+  const last = data.cycles[0];
+  const by = last && (last.name ? (last.on_team ? firstName(last.name) : `${last.name} (no longer on the team)`) : 'somebody no longer on the team');
+  return (
+    <>
+      <span aria-hidden="true"> · </span>
+      <Link to="/cycles" className="whitespace-nowrap text-brand-700 hover:underline" title="Each job ticked on somebody’s Jobs to work on list is one cycle">
+        {data.total ? `${plural(data.total, 'cycle')} · last ${ago(last.at)} by ${by}` : 'No cycles yet'}
+      </Link>
+    </>
+  );
+}
+
 export default function JobDetail() {
   const { id } = useParams();
   const { user, isAgency, isAdmin, bump } = useApp();
@@ -234,10 +250,16 @@ export default function JobDetail() {
     <Page
       wide
       title={<span className="flex flex-wrap items-center gap-2.5">{job.title}<JobStatusBadge status={job.status} /></span>}
-      subtitle={[job.client_name, job.location, WORK_MODES[job.work_mode], salaryRange(job.salary_min, job.salary_max, job.currency),
-        job.status === 'open' && job.opened_at && `Open ${plural(daysSince(job.opened_at), 'day')}`,
-        // Whose job it is, for the agency. A client's user is never sent it.
-        isAgency && (job.account_executive_name ? `Account executive: ${job.account_executive_name}` : 'No account executive')].filter(Boolean).join(' · ')}
+      subtitle={(
+        <>
+          {[job.client_name, job.location, WORK_MODES[job.work_mode], salaryRange(job.salary_min, job.salary_max, job.currency),
+            job.status === 'open' && job.opened_at && `Open ${plural(daysSince(job.opened_at), 'day')}`,
+            // Whose job it is, for the agency. A client's user is never sent it.
+            isAgency && (job.account_executive_name ? `Account executive: ${job.account_executive_name}` : 'No account executive')].filter(Boolean).join(' · ')}
+          {/* How often the team has worked this job, for the agency only: read from its own route, so the job's answer carries nothing new. */}
+          {isAgency && <CyclesLine jobId={job.id} />}
+        </>
+      )}
       actions={
         <>
           {job.status === 'open' && job.careers_page && (

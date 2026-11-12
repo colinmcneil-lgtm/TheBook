@@ -19,6 +19,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **Otterview** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [Otterview](#otterview) and [Metaview in Otterview](#metaview-in-otterview). |
 | **To do** | Each person on your team has their own list: the jobs they have picked to work on, the people to prep before an interview and the people to debrief after one. Jobs and people are dragged across from a picker, or added with a button; The Book adds people by itself from the interviews scheduled in it, to the lists of the job's account executive. Agency only. See [To do](#to-do). |
+| **Cycles** | Each job ticked on somebody's Jobs to work on list is one cycle on that job. One page for the whole agency team shows every open job with its cycles this week (or the last 7 or 30 days, or all time), when it was last touched and by whom, who has it on their list now, and above all which jobs nobody has touched. Agency only. See [Cycles](#cycles). |
 | **Messages** | Chat for the agency team: one-to-one conversations and named groups, with a candidate or a job attached to a message when it is about them, an unread count in the menu and an e-mail heads-up each person can switch off. Agency only. See [Messages](#messages). |
 | **Inbox** | Every new application across all clients lands in one review queue, oldest first. Candidates somebody on your team has asked you to review are there too, under **For your review**. See [Asking for a review](#asking-for-a-review). |
 | **Pipeline** | A drag-and-drop board per job with stages you define. Ratings, notes (optionally agency-only), rejection reasons, withdrawals, offers. |
@@ -628,8 +629,9 @@ a back arrow.
 ## To do
 
 Everyone on the agency team has a **To do** page, straight after Dashboard in the menu, with a count beside it of
-what is still to do. The list is the person's own: nobody else sees it or can change it, not even an admin, and
-client users have no such page.
+what is still to do. The list is the person's own: nobody else can change it, not even an admin, and client users
+have no such page. Nobody else sees its order, its notes or the two people lists. What the rest of the agency team
+does see is which jobs are on it and each job ticked: a job ticked is a cycle on that job (see [Cycles](#cycles)).
 
 There are three lists on it. Each is in the order its owner puts it in, and every item has a tick box.
 
@@ -729,6 +731,64 @@ window under 1100 wide (a phone, a tablet, a small laptop window) the lists come
 picker opens behind **Add jobs** or **Add people**.
 
 Deleting a job or a candidate removes their items from every list. Merging two records of one person keeps them.
+
+### Cycles
+
+The team works its open jobs in passes. **Each time anybody on the agency team ticks a job on their own Jobs to work
+on list, that is one cycle on that job**, by that person, at that moment. The **Cycles** page, straight after To do
+in the menu, shows the whole agency team every open job with its cycles, so that everybody can see what has been
+touched and, above all, what has not.
+
+**What counts.**
+
+- A tick of a **job** on anybody's Jobs to work on list. The same person putting the job back on their list later
+  and ticking it again is another cycle; two people ticking the same job are two.
+- Ticks on **People to prep** and **People to debrief** never count: they are about a candidate, not a job, and The
+  Book ticks some of those by itself.
+- **Un-ticking** takes that tick's cycle away: it was a mistake. Ticking it again counts once, at the new time.
+- Nothing else takes a cycle away. Taking the ticked job off your Done list (its ×), the seven days running out,
+  being deactivated or having your account removed all leave it: a cycle is history. Somebody no longer on the team
+  is shown as such ("Rae Leaving (no longer on the team)", or "somebody no longer on the team" for an account that
+  was removed). Deleting the job deletes its cycles.
+
+**What the team sees of your list.** That you ticked a job, and when; and which jobs are on your Jobs to work on
+right now ("On a list now"). Never the note on an item (it is not even copied into the cycle), nor the order of your
+list, nor anything on your prep and debrief lists. The To do page says so under Jobs to work on.
+
+**The page.**
+
+- **A period**: This week (from Monday at midnight on the agency's own clock, the zone the reports use: Toronto
+  unless `REPORTS_TIMEZONE` names another), Last 7 days, Last 30 days or All time. The choice, the filters and the
+  sorting are kept in the address, so a link shows somebody else the same view.
+- **A one-line summary** for the period, for every job of the client chosen in the sidebar (or all clients): how many
+  cycles, how many of the open jobs were touched and how many were not. Only open jobs are in the table, but a job
+  ticked and since closed, filled, put on hold or set back to draft keeps its cycles: they count in the summary's
+  total, which then says how many were on open jobs and how many on jobs no longer open, so the numbers add up in
+  plain sight. Touched and not touched always add up to the open jobs.
+- **The table**: one row for every open job, with filters for the account executive and "Only jobs not touched in
+  this period". For each job: its client, its account executive, its cycles in the period and in all, its last cycle
+  (how long ago and by whom, or **Never**), who has it on their list now, and how long it has been open. It opens
+  with the jobs nobody has ever touched at the top, the longest open first, then the longest since their last cycle:
+  the neglected jobs lead. Every column heading sorts. The arrow at the start of a row opens that job's cycles,
+  newest first, twenty at a time with **Show earlier**. The job's name opens the job.
+- **By person**: each active member of the agency team with their cycles in the period and on how many different
+  jobs, including those with none (a nought is worth seeing here). People no longer on the team are listed only
+  when they have cycles in the period.
+- On a phone each job is a card with the same facts. The page is read again when it is opened, when anything is
+  saved, and when its tab comes back into view; it does not keep asking the server on a clock.
+- Each job's own page says how many cycles it has had and the latest, "5 cycles · last 16h ago by Priya" (or "No
+  cycles yet"), linking to Cycles; the To do page links to it beside Jobs to work on. Client users have no Cycles
+  page, no menu item and nothing about cycles in anything they are sent.
+
+**Where history starts.** Cycles are recorded from the first start of the version that has them. At that start,
+every job already ticked on somebody's list whose to-do item was still in the database (still in Done, or taken off
+it since) became a cycle at the time it was ticked, by the person whose list it was on. A tick whose item was gone
+by then (its person's account removed) cannot be known, so history starts with what the lists still held. This is
+done once (a setting records it), and doing it again would count nothing twice.
+
+**Its limits.** A cycle says that somebody ticked a job, and when: not what they did. Nothing stops somebody ticking
+a job without working it, or working one without ticking it. Read the page as a prompt (which jobs has nobody
+looked at?), not as a measure of anybody's work. There are no targets, charts, exports or e-mails about it.
 
 ## Jobs on our website (confidential posts)
 

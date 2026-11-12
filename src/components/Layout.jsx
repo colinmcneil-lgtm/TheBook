@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { LayoutDashboard, ListTodo, Inbox, MessagesSquare, Briefcase, Users, CalendarDays, AudioLines, ChartColumn, Building2, Settings, ChevronsUpDown, Check, LogOut, Menu as MenuIcon, X, Search, Plus, UserPlus } from 'lucide-react';
+import { LayoutDashboard, ListTodo, Repeat2, Inbox, MessagesSquare, Briefcase, Users, CalendarDays, AudioLines, ChartColumn, Building2, Settings, ChevronsUpDown, Check, LogOut, Menu as MenuIcon, X, Search, Plus, UserPlus } from 'lucide-react';
 import { useApp, useApi, useOpenCandidate } from '../state.jsx';
 import { url } from '../lib.js';
 import { Avatar, Button, ClientDot, Menu, cx } from '../ui.jsx';
@@ -143,6 +143,8 @@ export default function Layout({ children }) {
     { label: 'Today', items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
       isAgency && { to: '/todo', label: 'To do', icon: ListTodo, count: counts?.todo },
+      // The whole team's cycles on its open jobs: which have been worked on, and which nobody has touched. Agency only.
+      isAgency && { to: '/cycles', label: 'Cycles', icon: Repeat2 },
       { to: '/inbox', label: isAgency ? 'Inbox' : 'To review', icon: Inbox, count: inboxCount },
       // The agency team's own chat, with how many messages are waiting to be read. A client's user is never shown it.
       isAgency && { to: '/messages', label: 'Messages', icon: MessagesSquare, count: counts?.messages, countSays: (n) => `${n} unread` },

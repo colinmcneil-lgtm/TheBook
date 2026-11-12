@@ -9,7 +9,8 @@ import { DragGhost, DropSlot, Grip, useDragDrop } from '../components/DragDrop.j
 
 // The three lists, by the name the server gives each kind of item.
 const LISTS = {
-  job: { title: 'Jobs to work on', picker: 'pick-jobs', add: 'Add jobs', icon: Briefcase, ticked: 'done' },
+  job: { title: 'Jobs to work on', picker: 'pick-jobs', add: 'Add jobs', icon: Briefcase, ticked: 'done',
+    hint: 'Each job you tick counts as one cycle on it. The whole team sees it on Cycles: who ticked it and when, never your note.' },
   prep: { title: 'People to prep', picker: 'pick-people', add: 'Add people', icon: GraduationCap, ticked: 'prepped',
     hint: 'The Book adds people here by itself, seven days before an interview on a job you are the account executive of, or for your own candidates on a job with none.' },
   debrief: { title: 'People to debrief', picker: 'pick-people', add: 'Add people', icon: MessagesSquare, ticked: 'debriefed',
@@ -206,7 +207,13 @@ function ListCard({ kind, list, dnd, wide, picker, actions }) {
   return (
     <Card className="min-w-0">
       <CardHeader title={meta.title} count={list.open.length}
-        action={!wide && <Button size="sm" variant={adding ? 'secondary' : 'primary'} icon={adding ? X : Plus} aria-expanded={adding} onClick={() => setAdding(!adding)}>{adding ? 'Close' : meta.add}</Button>} />
+        action={(
+          <span className="flex items-center gap-3">
+            {/* Ticking a job here is a cycle on it: the whole team's are on the Cycles page. */}
+            {kind === 'job' && <Link to="/cycles" className="text-[13px] font-medium whitespace-nowrap text-brand-700 hover:underline">See the team’s cycles</Link>}
+            {!wide && <Button size="sm" variant={adding ? 'secondary' : 'primary'} icon={adding ? X : Plus} aria-expanded={adding} onClick={() => setAdding(!adding)}>{adding ? 'Close' : meta.add}</Button>}
+          </span>
+        )} />
       {meta.hint && <p className="px-4 pt-2.5 text-xs text-stone-500">{meta.hint}</p>}
       {!wide && adding && <div className="mx-3 mt-3 rounded-lg border border-line bg-paper">{picker}</div>}
       {/* The list takes the focus itself (data-list) when the last row on it is ticked or taken off with the keyboard. */}
@@ -591,7 +598,7 @@ export default function Todo() {
   const dragged = dnd.drag?.item;
 
   return (
-    <Page title="To do" subtitle="Your own list: the jobs you have picked to work on, and the people to prep before an interview and to debrief after one. Only you see it.">
+    <Page title="To do" subtitle="Your own list: the jobs you have picked to work on, and the people to prep before an interview and to debrief after one. Your notes, your order and the two people lists are yours alone. The rest of the team sees which jobs are on your list, and each job you tick: that counts as a cycle on it.">
       <div className="space-y-6">
         <div className={BESIDE}>
           {list('job')}
