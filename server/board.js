@@ -465,7 +465,7 @@ function check(fields, { job, overrules = [] }) {
     const shared = sentencesOf(fields.description).filter((s) => theirText.has(s.key));
     if (shared.length) {
       const example = shared[0].shown.length > 140 ? `${shared[0].shown.slice(0, 140).trimEnd()}…` : shared[0].shown;
-      warnings.push({ kind: 'same_text', message: `${shared.length === 1 ? 'One sentence of this advert is' : `${shared.length} sentences of this advert are`} word for word the same as on ${client.name}’s own careers page, which is public${shared.length === 1 ? '' : ', for example'}: “${example}”. Anybody who searches for ${shared.length === 1 ? 'it' : 'one of them'} finds both adverts. Put ${shared.length === 1 ? 'it' : 'them'} in other words.` });
+      warnings.push({ kind: 'same_text', count: shared.length, example, message: `${shared.length === 1 ? 'One sentence of this advert is' : `${shared.length} sentences of this advert are`} word for word the same as on ${client.name}’s own careers page, which is public${shared.length === 1 ? '' : ', for example'}: “${example}”. Anybody who searches for ${shared.length === 1 ? 'it' : 'one of them'} finds both adverts. Put ${shared.length === 1 ? 'it' : 'them'} in other words.` });
     }
     warnings.push({ kind: 'both_public', message: `While this job is open it is also advertised in ${client.name}’s name on their careers page, at the same web address as your board and with the same working pattern and contract. Somebody who suspects ${client.name} can put the two side by side. To rule that out, ${keepOff}.` });
   }
@@ -489,13 +489,22 @@ function check(fields, { job, overrules = [] }) {
 /**
  * The check, for a job description downloaded as a PDF without the client's name (see jobdescription.js): the same
  * search as for a post, on exactly the title, location and text that go in the file, with the overrules an admin
- * has made on the job's post. Only what was found counts here: an empty location is no problem in a document, and
- * matching with the client's careers page is about the public board, so the post's own rules for that are left out.
+ * has made on the job's post. An empty location is no problem in a document. Matching with the client's careers page
+ * counts as it does for a post: a PDF made from the job's own advert is that advert word for word, and the client
+ * shows it under their own name whenever the job is open. So unless the job is kept off the careers page, the same
+ * title, the same (or the rounded) pay range and sentences the two share are found too. `pay` is whether the file
+ * shows the pay range, and `round` whether it is rounded, as in the file.
  */
-export function checkDocument(jobId, fields) {
-  const post = q.get('SELECT id FROM board_posts WHERE job_id = ?', jobId);
-  const result = check({ ...fields, hide_from_careers: 1, show_salary: 0 }, { job: jobFacts(jobId), overrules: post ? overrulesOf(post.id) : [] });
-  return { problems: result.problems.filter((p) => p.kind !== 'missing'), overruled: result.overruled };
+export function checkDocument(jobId, fields, { pay = false, round = false } = {}) {
+  const post = q.get('SELECT id, enabled, hide_from_careers FROM board_posts WHERE job_id = ?', jobId);
+  const offCareers = Boolean(post?.enabled && post?.hide_from_careers);
+  const result = check({ ...fields, hide_from_careers: offCareers ? 1 : 0, show_salary: pay ? 1 : 0, round_salary: round ? 1 : 0 },
+    { job: jobFacts(jobId), overrules: post ? overrulesOf(post.id) : [] });
+  // Sentences the file shares with the careers page are only a warning on a post, which the recruiter sees beside it
+  // all the time; here the list before the download is the only warning there is, so they are found like the rest.
+  const shared = result.warnings.filter((w) => w.kind === 'same_text')
+    .map((w) => ({ kind: 'same_text', field: 'description', found: w.example, count: w.count }));
+  return { problems: [...result.problems.filter((p) => p.kind !== 'missing'), ...shared], overruled: result.overruled };
 }
 /** A job's confidential post as saved, for the PDF without the client's name: its own wording and its pay choices. Null when it has none. */
 export const savedPost = (jobId) => q.get('SELECT enabled, title, location, description, show_salary, round_salary FROM board_posts WHERE job_id = ?', jobId) ?? null;

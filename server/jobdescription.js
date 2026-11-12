@@ -38,17 +38,27 @@ const WHAT = {
 };
 const times = (n) => (n === 1 ? '' : n === 2 ? ' twice' : ` ${n} times`);
 
+// Finds about the client's own careers page, where the job's advert is shown under the client's name while the job
+// is open: a sentence each, since they are about the whole file rather than a word in it.
+const CAREERS = {
+  same_title: (client) => `The title is the same as on ${client}’s own careers page, where this job is advertised in their name while it is open. Anybody who searches for it finds them.`,
+  same_salary: (client) => `The pay range is the same as on ${client}’s own careers page. To somebody comparing the two it is as good as a name. Leave the pay range out.`,
+  similar_salary: (client) => `The pay range is the one on ${client}’s own careers page, rounded. Somebody comparing the two could still match them by it. Leave the pay range out.`,
+  same_text: (client, g) => `${g.count === 1 ? 'One sentence of the description is' : `${g.count} sentences of the description are`} word for word the same as on ${client}’s own careers page${g.count === 1 ? '' : ', for example'}: “${g.found}”${/[.!?…]$/.test(g.found) ? '' : '.'} Anybody who searches for ${g.count === 1 ? 'it' : 'one of them'} finds the client.`,
+};
+
 /** What the check found, one line per thing found in one place, with how many times: "The description mentions “Lumen” 3 times: part of the client’s name (Lumen Health)." */
 function findingsOf(problems, clientName) {
   const groups = new Map();
   for (const p of problems) {
     const key = `${p.field}\u0000${p.kind}\u0000${String(p.found ?? '').toLowerCase()}`;
     if (groups.has(key)) groups.get(key).count++;
-    else groups.set(key, { field: p.field, kind: p.kind, found: p.found ?? '', count: 1 });
+    else groups.set(key, { field: p.field, kind: p.kind, found: p.found ?? '', count: p.count ?? 1 });
   }
   return [...groups.values()].map((g) => ({
     ...g,
-    message: `The ${FIELD[g.field] ?? g.field} mentions “${g.found}”${times(g.count)}: ${(WHAT[g.kind] ?? (() => 'something that may give the client away'))(clientName)}.`,
+    message: CAREERS[g.kind] ? CAREERS[g.kind](clientName, g)
+      : `The ${FIELD[g.field] ?? g.field} mentions “${g.found}”${times(g.count)}: ${(WHAT[g.kind] ?? (() => 'something that may give the client away'))(clientName)}.`,
   }));
 }
 
@@ -84,6 +94,8 @@ export function documentFor(job, { named, pay }) {
   const client = named ? printable(job.client_name).text.trim() : null;
   return {
     named, usesPost, fields, agency,
+    // Whether the file shows the pay range and whether rounded, for the check (the same as the post's own choices).
+    pay: { pay: range.min != null || range.max != null, round: Boolean(usesPost && post.round_salary) },
     // Whether some characters (emoji, say) cannot be printed and are left out.
     dropped: Object.values(printed).some((v) => v.dropped),
     pdf: {
@@ -95,6 +107,13 @@ export function documentFor(job, { named, pay }) {
     fileName: named ? `${forFileName(client, 80) || 'Client'} - ${forFileName(fields.title, 120) || 'Job'}.pdf`
       : `${forFileName(fields.title, 120) || 'Job'} - ${forFileName(agency, 80) || 'Agency'}.pdf`,
   };
+}
+
+/** A file's name cut to 200 characters with its extension kept, so the saved download still opens by a double click. */
+export function keptName(name, ext) {
+  if (name.length <= 200) return name;
+  const end = ext && name.toLowerCase().endsWith(ext) ? name.slice(-ext.length) : '';
+  return name.slice(0, 200 - end.length).trimEnd() + end;
 }
 
 /** The client's own file as the agency is shown it, or null when none is kept. */
@@ -155,7 +174,7 @@ export function registerJobDescription(api, { agencyOnly, bad, clean, takeHit, r
   /** What the check finds in the PDF without the client's name. Nothing is looked for in one that gives it. */
   const findingsFor = (job, made) => {
     if (made.named) return { findings: [], overruled: 0 };
-    const { problems, overruled } = board.checkDocument(job.id, made.fields);
+    const { problems, overruled } = board.checkDocument(job.id, made.fields, made.pay);
     return { findings: findingsOf(problems, job.client_name), overruled: overruled.length };
   };
   const noDescription = 'This job has no description to make a PDF from. Add one first: Edit, then the Job advert box.';
@@ -192,7 +211,11 @@ export function registerJobDescription(api, { agencyOnly, bad, clean, takeHit, r
     res.setHeader('Content-Disposition', downloadAs(job.jd_file_name));
     res.setHeader('Cache-Control', 'no-store');
     res.sendFile(path.basename(job.jd_file), { root: UPLOAD_DIR, dotfiles: 'allow' }, (err) => {
-      if (err && !res.headersSent) res.status(404).json({ error: 'The file is missing from the server.' });
+      // The answer is not the file, so it must not be saved under the file's name.
+      if (err && !res.headersSent) {
+        res.removeHeader('Content-Disposition');
+        res.status(404).json({ error: 'The file is missing from the server.' });
+      }
     });
   });
 
@@ -206,7 +229,7 @@ export function registerJobDescription(api, { agencyOnly, bad, clean, takeHit, r
       if (!req.file.size) bad('That file is empty.');
       const ext = path.extname(req.file.originalname).toLowerCase();
       // The name as it came, without anything that cannot be seen (a right-to-left mark can make "fdp.exe" read as "exe.pdf").
-      const name = clean(String(req.file.originalname).replace(/\p{Cf}/gu, ''), 200) || `Job description${ext}`;
+      const name = keptName(clean(String(req.file.originalname).replace(/\p{Cf}/gu, ''), 1000) || '', ext) || `Job description${ext}`;
       const had = q.get('SELECT jd_file, jd_file_name FROM jobs WHERE id = ?', job.id);
       if (had.jd_file && req.body?.replace !== '1') {
         bad(`This job already has the client’s file (${had.jd_file_name}). Replace it, or keep the one it has.`, 409, { file: had.jd_file_name });

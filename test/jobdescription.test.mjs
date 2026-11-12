@@ -13,6 +13,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { startServer, session, tempDir, until, PORTS } from './oracle-helpers.mjs';
 import * as appWords from '../src/lib.js';
 import * as serverWords from '../server/jobwords.js';
+import { printable, blocksOf, makePdf } from '../server/jobpdf.js';
 
 const PORT = PORTS.jobDescription; // the one kept for this file (see PORT_PLAN in oracle-helpers.mjs)
 
@@ -207,6 +208,7 @@ test('an odd file name is kept without what cannot be seen, and comes back as a 
   assert.equal(answer.status, 200, JSON.stringify(answer.body));
   const name = answer.body.file.name;
   assert.equal(name.length, 200);
+  assert.ok(name.endsWith('x.pdf'), 'a name cut short keeps its extension, so the download still opens');
   assert.equal(/[\u202E\n\r]/.test(name), false);
   assert.ok(name.startsWith('Lumen "advert" v2 fdp.exe xxx'), name);
   const download = await marcus.get(`/jobs/${job.full}/job-description/file`);
@@ -335,7 +337,9 @@ async function givesNothingAway(res, label) {
 
 test('the PDF without the client’s name has nothing of the client in its text, its bytes, its metadata or its headers', async () => {
   for (const pay of ['1', '0']) {
-    const res = await pdfOf(priya, job.full, `name=without&pay=${pay}`);
+    // The job's own advert is the one on the careers page, which the check finds (see the test of that below); what
+    // is looked at here is the file made after "Download anyway".
+    const res = await pdfOf(priya, job.full, `name=without&pay=${pay}&anyway=1`);
     const { text, info } = await givesNothingAway(res, `pay=${pay}`);
     assert.equal(res.headers.get('content-disposition'), `attachment; filename="Senior Backend Engineer - Harbour Talent.pdf"; filename*=UTF-8''Senior%20Backend%20Engineer%20-%20Harbour%20Talent.pdf`);
     const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -347,7 +351,7 @@ test('the PDF without the client’s name has nothing of the client in its text,
 });
 
 test('nothing from the brief, the fee, who we are looking for or who works on the job is in either PDF', async () => {
-  for (const query of ['name=with&pay=1', 'name=without&pay=1']) {
+  for (const query of ['name=with&pay=1', 'name=without&pay=1&anyway=1']) {
     const { text, info } = await readPdf((await pdfOf(priya, job.full, query)).body);
     const all = `${text}\n${JSON.stringify(info)}`;
     for (const secret of Object.values(SECRET)) assert.equal(all.includes(secret.split(' ')[0]), false, `${query}: ${secret}`);
@@ -361,9 +365,12 @@ test('with a confidential post, the PDF without the client’s name uses the pos
   assert.equal((await priya.putJson(`/jobs/${job.full}/board`, post)).status, 200);
   const info = (await priya.get(`/jobs/${job.full}/job-description`)).body;
   assert.deepEqual(info.post, { enabled: false, wording: true, show_salary: false, round_salary: true });
+  // Its own words are not the careers page's, but the pay range, even rounded, is that page's, as for the post.
   const check = (await priya.get(`/jobs/${job.full}/job-description/check?name=without&pay=1`)).body;
-  assert.deepEqual([check.uses_post, check.findings], [true, []]);
-  const res = await pdfOf(priya, job.full, 'name=without&pay=1');
+  assert.deepEqual([check.uses_post, check.findings.map((f) => f.kind)], [true, ['similar_salary']]);
+  assert.deepEqual((await priya.get(`/jobs/${job.full}/job-description/check?name=without&pay=0`)).body.findings, []);
+  assert.equal((await pdfOf(priya, job.full, 'name=without&pay=1')).status, 409);
+  const res = await pdfOf(priya, job.full, 'name=without&pay=1&anyway=1');
   const { text } = await givesNothingAway(res, 'post');
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
   // The pay range as the post rounds it.
@@ -385,7 +392,9 @@ test('the check refuses the PDF without the client’s name until the recruiter 
   const messages = check.findings.map((f) => f.message);
   assert.ok(messages.includes('The description mentions “Lumen Health” 3 times: the client’s name.'), messages.join('\n'));
   assert.ok(messages.some((m) => /“www\.lumenhealth\.example”/.test(m)), messages.join('\n'));
-  assert.ok(check.findings.every((f) => f.field === 'description'));
+  // Besides the name and the website, it is the careers page's advert: the same title, and sentences word for word.
+  assert.deepEqual([...new Set(check.findings.map((f) => f.field))].sort(), ['description', 'title']);
+  assert.ok(check.findings.some((f) => f.kind === 'same_title'));
   const refused = await pdfOf(priya, job.named, 'name=without&pay=1');
   assert.equal(refused.status, 409);
   assert.match(refused.body.error, /could give the client away/);
@@ -404,7 +413,9 @@ test('the check refuses the PDF without the client’s name until the recruiter 
 });
 
 test('an admin’s overrule on the job’s confidential post holds for its PDF too', async () => {
-  const post = { title: 'Store Planner', location: 'Greater Toronto Area', description: 'Plan the stock for a retailer that sells in the north of the country.', show_salary: true, enabled: false };
+  // A title of its own, and the pay not shown on the careers page, so the one find is the word "north".
+  write('UPDATE jobs SET salary_public = 0 WHERE id = ?', job.north);
+  const post = { title: 'Stock Planner', location: 'Greater Toronto Area', description: 'Plan the stock for a retailer that sells in the north of the country.', show_salary: true, enabled: false };
   const view = (await alex.putJson(`/jobs/${job.north}/board`, post)).body;
   const alarm = view.check.problems.find((p) => p.can_overrule);
   assert.ok(alarm, JSON.stringify(view.check.problems));
@@ -480,4 +491,132 @@ test('the PDF gives the working pattern, contract and pay in the careers page’
   // jobMeta in the careers page: the same facts in the same order.
   const careers = fs.readFileSync(new URL('../src/pages/Careers.jsx', import.meta.url), 'utf8');
   assert.match(careers, /const jobMeta = \(job, currency\) => \[job\.location, WORK_MODES\[job\.work_mode\], EMPLOYMENT\[job\.employment_type\], salaryRange\(job\.salary_min, job\.salary_max, currency\)\]\.filter\(Boolean\);/);
+});
+
+test('a PDF without the client’s name made from the advert on their careers page is held back: same title, same pay, same sentences', async () => {
+  // job.full is open and on Lumen Health's careers page, which shows its title, pay and advert under Lumen's name.
+  const published = (await session(base).get(`/public/careers/lumen-health/jobs/${job.full}`)).body.job;
+  assert.equal(published.title, 'Senior Backend Engineer');
+  const check = (await priya.get(`/jobs/${job.full}/job-description/check?name=without&pay=1`)).body;
+  assert.equal(check.uses_post, false);
+  assert.deepEqual(check.findings.map((f) => f.kind).sort(), ['same_salary', 'same_text', 'same_title']);
+  const messages = check.findings.map((f) => f.message).join('\n');
+  assert.match(messages, /The title is the same as on Lumen Health’s own careers page/);
+  assert.match(messages, /The pay range is the same as on Lumen Health’s own careers page/);
+  assert.match(messages, /\d sentences of the description are word for word the same as on Lumen Health’s own careers page, for example: “We are looking for a senior engineer to own the services behind a busy scheduling engine.” Anybody who searches/);
+  const refused = await pdfOf(priya, job.full, 'name=without&pay=1');
+  assert.deepEqual([refused.status, refused.body.findings], [409, check.findings]);
+  // Without the pay, the pay is not found; the title and the text still are.
+  assert.deepEqual((await priya.get(`/jobs/${job.full}/job-description/check?name=without&pay=0`)).body.findings.map((f) => f.kind).sort(), ['same_text', 'same_title']);
+  // A confidential post that keeps the job off the careers page: nothing there to match, so nothing is found.
+  const post = { title: 'Senior Software Engineer', location: 'London', description: 'Our client builds software for clinics, and wants an engineer for its booking services.', show_salary: true, round_salary: false, hide_from_careers: true, enabled: true };
+  assert.equal((await priya.putJson(`/jobs/${job.full}/board`, post)).status, 200);
+  try {
+    assert.equal((await session(base).get(`/public/careers/lumen-health/jobs/${job.full}`)).status, 404);
+    const off = (await priya.get(`/jobs/${job.full}/job-description/check?name=without&pay=1`)).body;
+    assert.deepEqual([off.uses_post, off.findings], [true, []]);
+    assert.equal((await pdfOf(priya, job.full, 'name=without&pay=1')).status, 200);
+  } finally {
+    write('DELETE FROM board_posts WHERE job_id = ?', job.full);
+  }
+});
+
+test('the check reads the text as it is printed: a name spaced out with tabs or runs of spaces is found', async () => {
+  for (const [description, printed] of [
+    ['Join L\tu\tm\te\tn H\te\ta\tl\tt\th today.', 'Join L u m e n H e a l t h today.'],
+    ['Join L    u    m    e    n    H    e    a    l    t    h today.', 'Join L u m e n H e a l t h today.'],
+  ]) {
+    const id = await newJob(priya, { client_id: lumen, title: 'Clinic Analyst', location: 'London', description, status: 'draft' });
+    const check = (await priya.get(`/jobs/${id}/job-description/check?name=without&pay=0`)).body;
+    assert.ok(check.findings.some((f) => f.field === 'description' && f.kind === 'name'), JSON.stringify(check.findings));
+    assert.equal((await pdfOf(priya, id, 'name=without&pay=0')).status, 409);
+    // What was checked is what is printed.
+    const { text } = await readPdf((await pdfOf(priya, id, 'name=without&pay=0&anyway=1')).body);
+    assert.ok(flat(text).includes(printed), flat(text));
+    assert.equal(printable(description).text, printed);
+  }
+});
+
+test('private-use characters are never printed, so a name cannot be spelt with letters the check does not read', async () => {
+  // Inter draws U+EE26 and U+E02C as forms of "u" and "a"; U+E000 as a diamond.
+  const description = 'Join Lmen Helth, the clinic software company.  Apply now.\n Word’s own bullet';
+  const id = await newJob(priya, { client_id: lumen, title: 'Clinic Analyst', location: 'London', description, status: 'draft' });
+  const check = (await priya.get(`/jobs/${id}/job-description/check?name=without&pay=0`)).body;
+  assert.equal(check.dropped, true);
+  const { text } = await readPdf((await pdfOf(priya, id, 'name=without&pay=0&anyway=1')).body);
+  assert.equal(/\p{Co}/u.test(text), false);
+  assert.ok(flat(text).includes('Join Lmen Helth, the clinic software company. Apply now.'), flat(text));
+  assert.ok(text.includes('• Word’s own bullet'));
+});
+
+test('words in scripts the fonts lack go with their brackets and the space before them, and the dialog is told', async () => {
+  const description = 'Offices in Japan (日本) and Korea (한국).\nSome Japanese (日本語) or Arabic (العربية) helps.\nWe love social media 🎮.';
+  assert.equal(printable(description).text, 'Offices in Japan and Korea.\nSome Japanese or Arabic helps.\nWe love social media.');
+  const id = await newJob(priya, { client_id: north, title: 'Regional Lead', location: 'Toronto', description, status: 'draft' });
+  assert.equal((await priya.get(`/jobs/${id}/job-description/check?name=with`)).body.dropped, true);
+  const { text } = await readPdf((await pdfOf(priya, id, 'name=with&pay=0')).body);
+  for (const line of ['Offices in Japan and Korea.', 'Some Japanese or Arabic helps.', 'We love social media.']) assert.ok(text.includes(line), line);
+  assert.equal(/\(\s*\)/.test(text), false);
+});
+
+test('a run of nearly 20,000 characters with no spaces is laid out in well under a second and wraps across the page', async () => {
+  const id = await newJob(priya, { client_id: north, title: 'Separator', description: 'Short for now.', status: 'draft' });
+  write('UPDATE jobs SET description = ? WHERE id = ?', `Before.\n${'='.repeat(19980)}\nAfter.`, id);
+  const started = Date.now();
+  const res = await pdfOf(priya, id, 'name=with&pay=0');
+  const took = Date.now() - started;
+  assert.equal(res.status, 200);
+  assert.ok(took < 1000, `took ${took} ms`);
+  const { text } = await readPdf(res.body);
+  assert.equal(text.replace(/[^=]/g, '').length, 19980, 'every character is printed');
+  assert.ok(text.indexOf('Before.') < text.indexOf('=') && text.lastIndexOf('=') < text.indexOf('After.'));
+});
+
+test('a paragraph or list item is never split so that one line of it stands alone at a page break', async () => {
+  // Paragraphs of one to five lines (laid out as they were before, one of them left a single line at a page foot), each word tagged with its paragraph, so every printed line says which it is from.
+  const paragraphs = Array.from({ length: 40 }, (_, n) => {
+    const tag = `p${String(n).padStart(2, '0')}`;
+    const words = Array.from({ length: 9 * (1 + (n % 4)) + (n % 5) }, () => `${tag}word`).join(' ');
+    return n % 3 === 0 ? `• ${words}` : words;
+  });
+  const pdf = await makePdf({ agency: 'Harbour Talent', title: 'Lines', facts: [], description: paragraphs.join('\n'), date: '1 January 2026', info: {} });
+  const { pages } = await readPdf(pdf);
+  assert.ok(pages.length >= 3, `${pages.length} pages`);
+  const linesOn = pages.map((page) => {
+    const count = {};
+    for (const line of page.split('\n')) { const tag = /p(\d\d)word/.exec(line)?.[1]; if (tag) count[tag] = (count[tag] ?? 0) + 1; }
+    return count;
+  });
+
+  for (let i = 0; i + 1 < linesOn.length; i++) {
+    for (const tag of Object.keys(linesOn[i]).filter((t) => linesOn[i + 1][t])) {
+
+      assert.ok(linesOn[i][tag] >= 2 && linesOn[i + 1][tag] >= 2, `paragraph ${tag}: ${linesOn[i][tag]} line(s) on page ${i + 1}, ${linesOn[i + 1][tag]} on page ${i + 2}`);
+    }
+  }
+  // Every paragraph is printed, in full.
+  const all = {};
+  for (const page of linesOn) for (const [tag, n] of Object.entries(page)) all[tag] = (all[tag] ?? 0) + n;
+  assert.equal(Object.keys(all).length, 40);
+});
+
+test('tick boxes keep their own mark, and a short fact line is not set as a heading', async () => {
+  assert.deepEqual(blocksOf('☐ one\n☑ two\n✓ three\n• four').map((b) => b.marker), ['☐', '☑', '✓', '•']);
+  const kinds = (text) => blocksOf(text).map((b) => `${b.kind}${b.text ? `:${b.text}` : ''}`);
+  assert.deepEqual(kinds('Intro.\n\nSalary: £50,000\nMore text'), ['line:Intro.', 'gap', 'line:Salary: £50,000', 'line:More text']);
+  assert.deepEqual(kinds('Intro.\n\nHours 9 to 5\nMore text'), ['line:Intro.', 'gap', 'line:Hours 9 to 5', 'line:More text']);
+  assert.deepEqual(kinds('Intro.\n\nWhat you will do\nMore text\nAbout the role:\nMore'), ['line:Intro.', 'gap', 'heading:What you will do', 'line:More text', 'heading:About the role:', 'line:More']);
+  const { text } = await readPdf(await makePdf({ agency: 'A', title: 'T', facts: [], description: '☐ one\n☑ two', date: 'd', info: {} }));
+  assert.ok(text.includes('☐ one') && text.includes('☑ two'), text);
+});
+
+test('a client’s file missing from the disk answers 404 without being offered as a download', async () => {
+  const sent = await keep(priya, job.full, { name: 'gone.pdf', bytes: Buffer.from('%PDF-1.4 gone') });
+  assert.equal(sent.status, 200);
+  const stored = db('SELECT jd_file FROM jobs WHERE id = ?', job.full)[0].jd_file;
+  fs.rmSync(path.join(dataDir, 'uploads', stored));
+  const res = await priya.get(`/jobs/${job.full}/job-description/file`);
+  assert.deepEqual([res.status, res.body.error], [404, 'The file is missing from the server.']);
+  assert.equal(res.headers.get('content-disposition'), null);
+  assert.equal((await alex.del(`/jobs/${job.full}/job-description/file`)).status, 200);
 });

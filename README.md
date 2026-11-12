@@ -106,7 +106,11 @@ the fee, internal notes, the account executive's or any recruiter's name, anythi
 footer has your agency's name and the day it was made, and the page number when there is more than one page.
 
 The advert is laid out as written: paragraphs and blank lines kept, list lines (•, -, *, numbers, Word's own bullets)
-with a hanging indent, and a short line standing on its own ("What you will do", "About the role:") set as a heading.
+with a hanging indent (tick boxes ☐ ☑ ✓ keep their own mark), and a short line standing on its own ("What you will
+do", "About the role:") set as a heading; a short fact line such as "Salary: £50,000" is not. A paragraph or list item
+is not split across pages so that one line of it is left on its own. Spaces and tabs inside a line are printed as one
+space, so columns lined up with spaces in the advert are not kept lined up (all the text stays, in order). A very long
+run of text with no spaces, such as a link, is broken where it reaches the edge of the page.
 
 **The check, before a PDF without the client's name.** The same check a confidential post goes through (see
 [The check](#the-check)) is run on exactly the title, location and text that go in the file: the client's name and
@@ -116,18 +120,29 @@ handle. If it finds anything, the dialog lists what and where ("The description 
 the client's name.") and the download waits until you tick **Download anyway**, or you change the advert (or the
 confidential post) first. The server holds to it too: a request without that tick is refused with the same list, so
 a link put together by hand cannot skip it. An admin's overrules on the job's confidential post count here as they
-do for the post. Matching with the client's careers page, which matters for a public post, is not looked at.
+do for the post. The text checked is character for character the text printed: tabs and runs of spaces are one space
+in both, and characters from the private part of Unicode (which some fonts draw as ordinary letters) are left out of
+both, so a name spelt with them or letter-spaced with tabs is found as it would read on the page.
+
+The client's own careers page counts too, as it does for a post. While the job is open, the client shows its advert
+there under their own name, so a PDF made from that same advert gives them away to anybody who searches for one of
+its sentences. Unless the job's confidential post keeps it off the careers page, the check also finds a title that is
+the same as there, a pay range that is the same (or the same rounded), and sentences of the description that are word
+for word the same; the dialog then suggests writing the role in other words in a confidential post, whose wording the
+PDF uses.
 
 **The client's own file.** The file the client sent (a PDF, Word, RTF or text file, up to 8 MB, the same rules as a
 résumé) can be kept with the job: drop it on the card or choose it. The card shows its name, size, who added it and
-when, and **Download**, which always saves it under the name it came with and never opens it inside The Book.
+when, and **Download**, which always saves it under the name it came with (a name over 200 characters is cut short,
+keeping its extension) and never opens it inside The Book.
 Anybody on the agency team can download it; only the job's account executive or an admin can **Replace** or
 **Remove** it (the rest are told who can). It is the client's own document and names them, so it is not for
 candidates on a confidential role: the card says so.
 
 When a job description file is dropped (or chosen) in the **Job description** box of "Fill in the job" on the new-job
 form, or of "Fill in the brief" in the brief form, its text is read as before and the file itself is kept with the
-job as the client's file once the job is created or the brief is saved. A line under the box says so ("advert.pdf will
+job as the client's file once the job is created or the brief is saved (an old Word .doc gives no text to read, but
+is still kept). A line under the box says so ("advert.pdf will
 be kept with the job as the client's file") with **Don't keep it**. If the job already keeps a file, nothing is
 replaced unless you choose **Replace it** there. A file dropped in the **Intake call** box is never kept, and pasted
 text keeps nothing. If the job is saved and the file is refused, the job stays saved and you are told the file was not
@@ -142,8 +157,10 @@ careers pages, are exactly as they were.
 typeface, with [DejaVu Sans](https://dejavu-fonts.github.io/) (Bitstream Vera licence, DejaVu changes in the public
 domain) for the characters Inter lacks, such as ☐. Both licences allow the fonts to be shipped with the app and
 embedded in documents; the files and their licences are in `server/fonts/`. Nothing is fetched while a PDF is made.
-Characters neither font can show (most emoji, Chinese, Japanese and Korean, and right-to-left scripts, which would
-come out in the wrong order) are left out, and the dialog says when some were.
+Characters neither font can show (most emoji, Chinese, Japanese and Korean, and right-to-left scripts such as Arabic
+and Hebrew, which would come out in the wrong order) are left out, with the brackets they stood in and the space
+before them, so "Japan (日本) and" prints as "Japan and". When anything was left out the dialog says so in those words,
+since whole words in those scripts are missing from the PDF.
 
 **Limits.** The PDF is made from the saved text, so the formatting, tables, images and logos of the client's original
 are not carried over. A scanned file is kept as a file but gives no text to fill anything in from. The advert is cut
@@ -1605,8 +1622,9 @@ they made at that client, their résumé files, and their recorded calls with th
   refused to a client's user, their answers unchanged by a kept file, the file's rules, replacing, removing and
   deleting it from the disk, who may change it, both PDFs read back with pdfjs-dist, nothing of the client in the one
   without, the confidential post's wording, the check and its overrules, characters the fonts lack, a 50,000-character
-  advert and hostile file names); the card, the dialog and a file dropped in the new-job form were driven in Chromium
-  at 1280 and 390 wide on the demo data, and the PDFs looked at page by page.
+  advert, a 20,000-character run with no spaces, and hostile file names); the card, the dialog (by mouse and keyboard)
+  and a file chosen in the new-job form's Job description box were driven in Chromium at 1280 and 390 wide on the
+  demo data, and the PDFs looked at page by page.
   Messages is tested against the real server with a stand-in for the mail provider (`test/messages.test.mjs`: who can
   be written to, one conversation for each pair also when two requests arrive at once, groups joined and left, every
   route refused to somebody not in the conversation and to a client's user, deleting, unread counts, every e-mail rule,

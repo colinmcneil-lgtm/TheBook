@@ -23,6 +23,12 @@ function Source({ label, hint, placeholder, value, onChange, onFile, children })
   const [over, setOver] = useState(false);
   const take = async (file) => {
     if (!file) return;
+    // An old Word .doc cannot be read here, but where the file is kept with the job (the Job description box) it is
+    // still the client's own document, so it is kept and the text is asked for.
+    if (onFile && /\.doc$/i.test(file.name)) {
+      onFile(file);
+      return toast('No text can be read from an old Word (.doc) file. It will be kept with the job; paste its text into the box.');
+    }
     if (!/\.(pdf|docx|rtf|txt|md|vtt|srt)$/i.test(file.name)) return toast('Use a PDF, Word (.docx), RTF or text file, or paste the text.', 'error');
     onFile?.(file);
     setReading(true);
@@ -51,7 +57,7 @@ function Source({ label, hint, placeholder, value, onChange, onFile, children })
         <label className="inline-flex cursor-pointer items-center gap-1 text-xs font-medium text-brand-700 hover:underline">
           {reading ? <LoaderCircle className="size-3.5 animate-spin" /> : <FileUp className="size-3.5" />}
           {reading ? 'Reading…' : 'Choose a file'}
-          <input type="file" accept=".pdf,.docx,.rtf,.txt,.md,.vtt,.srt" className="sr-only" aria-label={`${label} file`} onChange={(e) => { take(e.target.files[0]); e.target.value = ''; }} />
+          <input type="file" accept={`.pdf,${onFile ? '.doc,' : ''}.docx,.rtf,.txt,.md,.vtt,.srt`} className="sr-only" aria-label={`${label} file`} onChange={(e) => { take(e.target.files[0]); e.target.value = ''; }} />
         </label>
       </div>
       <Textarea rows={5} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} aria-label={label}

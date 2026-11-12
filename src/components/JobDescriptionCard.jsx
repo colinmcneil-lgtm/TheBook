@@ -184,7 +184,9 @@ function PdfDialog({ job, info, onClose, onEditJob }) {
 
   const option = (value, title, detail, disabled) => (
     <label className={cx('flex cursor-pointer items-start gap-3 rounded-xl border px-3.5 py-3', named === value ? 'border-brand-500 bg-brand-50/60' : 'border-line hover:bg-stone-50', disabled && 'cursor-not-allowed opacity-50')}>
-      <input type="radio" name="jd-name" className="mt-0.5 size-4 accent-brand-700" checked={named === value} disabled={disabled} onChange={() => setNamed(value)} />
+      {/* The dialog starts at the choice that is made, so the keyboard begins inside it. */}
+      <input type="radio" name="jd-name" className="mt-0.5 size-4 accent-brand-700" checked={named === value} disabled={disabled} onChange={() => setNamed(value)}
+        autoFocus={named === value} />
       <span className="min-w-0">
         <span className="block text-sm font-medium text-stone-900">{title}</span>
         <span className="block text-xs leading-relaxed text-stone-500">{detail}</span>
@@ -218,6 +220,13 @@ function PdfDialog({ job, info, onClose, onEditJob }) {
             <div className="rounded-xl border border-gold-200 bg-gold-50 px-4 py-3 text-[13px] text-gold-900">
               <p className="flex items-start gap-2 font-medium"><AlertTriangle className="mt-0.5 size-4 shrink-0" />This PDF could give the client away.</p>
               <ul className="mt-2 list-disc space-y-1 pl-5 leading-relaxed [overflow-wrap:anywhere]">{findings.map((f, i) => <li key={i}>{f.message}</li>)}</ul>
+              {!check.uses_post && findings.some((f) => ['same_title', 'same_text', 'same_salary', 'similar_salary'].includes(f.kind)) && (
+                <p className="mt-2 leading-relaxed">
+                  This PDF is made from the advert {job.client_name} shows on their own careers page. To send it without
+                  giving them away, write the role in other words in a <Link className="font-medium underline" to={`/jobs/${job.id}?tab=post`} onClick={onClose}>confidential post</Link>:
+                  the PDF then uses that wording.
+                </p>
+              )}
               <p className="mt-2 leading-relaxed">
                 {check.uses_post
                   ? <>Change it in the <Link className="font-medium underline" to={`/jobs/${job.id}?tab=post`} onClick={onClose}>confidential post</Link>, or download it as it is.</>
@@ -229,7 +238,12 @@ function PdfDialog({ job, info, onClose, onEditJob }) {
             <p className="text-[13px] text-brand-800">The check found nothing that names the client{check.overruled ? ` (${check.overruled === 1 ? 'one find an admin overruled is' : `${check.overruled} finds an admin overruled are`} left out)` : ''}.</p>
           )
       )}
-      {check?.dropped && <p className="text-xs text-stone-500">A few characters (such as emoji) cannot be printed and are left out of the PDF.</p>}
+      {check?.dropped && (
+        <p className="text-xs leading-relaxed text-stone-500">
+          Some of the text cannot be printed and is left out of the PDF: words in Chinese, Japanese, Korean, Arabic or
+          Hebrew, most emoji and a few symbols. Read the PDF before you send it.
+        </p>
+      )}
     </Modal>
   );
 }

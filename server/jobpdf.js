@@ -27,32 +27,65 @@ const RIGHT_TO_LEFT = /[\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Syriac}\p{Sc
 const WORD_BULLETS = /[\uF0B7\uF0A7\uF0D8\uF076\uF0FC\uF0A8\uF0D9\uF06C\uF06E]/g;
 
 /**
- * Text as it can be printed: control and invisible characters out, Word's bullets as bullets, tabs as spaces, and
- * anything neither font can draw left out. `dropped` says whether something was left out.
+ * Text as it can be printed: control and invisible characters out, Word's bullets as bullets, and anything neither
+ * font can draw left out. `dropped` says whether something was left out.
+ *
+ * What comes out is exactly what is printed, character for character, so the check for the PDF without the client's
+ * name (jobdescription.js) is run on the very words in the file. So spaces and tabs inside a line become one space
+ * here and nowhere later ("L\tu\tm\te\tn" is checked as it prints, "L u m e n"); only the spaces a line starts with
+ * are kept, a tab as four, because they say how far a list item is indented. Private-use characters are all left out,
+ * whatever the font has for them: Inter draws some as other forms of ordinary letters, so a name could be spelt with
+ * them and print as the name while the check reads something else. Where a word in a script neither font has was
+ * left out, the brackets around it and the space before it go too, so "Japan (日本) and" reads "Japan and".
  */
 export function printable(input) {
   let dropped = false;
-  const out = String(input ?? '').normalize('NFC').replace(/\r\n?/g, '\n').replace(WORD_BULLETS, '•').replace(/\t/g, '    ')
-    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029]/g, ' ')
+  const GONE = '\u0000'; // marks what was left out, until it is tidied away (control characters are spaces by then)
+  let out = String(input ?? '').normalize('NFC').replace(/\r\n?/g, '\n').replace(WORD_BULLETS, '•')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/g, ' ')
     .replace(/\p{Cf}/gu, '')
-    .replace(/[^\n]/gu, (ch) => {
-      if (ch === ' ' || COVER.body.hasGlyphForCodePoint(ch.codePointAt(0))) return ch;
-      if (!RIGHT_TO_LEFT.test(ch) && !/\p{Co}/u.test(ch) && COVER.fallback.hasGlyphForCodePoint(ch.codePointAt(0))) return ch;
+    .replace(/[^\n\t]/gu, (ch) => {
+      const code = ch.codePointAt(0);
+      if (!/\p{Co}/u.test(ch)) {
+        if (ch === ' ' || COVER.body.hasGlyphForCodePoint(code)) return ch;
+        if (!RIGHT_TO_LEFT.test(ch) && COVER.fallback.hasGlyphForCodePoint(code)) return ch;
+      }
       dropped = true;
-      return '';
+      return GONE;
     });
+  if (dropped) {
+    out = out.replace(/[ \t]*[([{]([ \t\u0000]*\u0000[ \t\u0000]*)[)\]}]/g, '') // brackets with nothing left in them
+      .replace(/[ \t]+[ \t\u0000]*\u0000[ \t\u0000]*(?=[.,;:!?]|$)/gm, '') // the space before what went, at a stop or the end of a line
+      .replace(/\u0000/g, '');
+  }
+  out = out.split('\n').map((line) => {
+    const lead = /^[ \t]*/.exec(line)[0];
+    return lead.replace(/\t/g, '    ') + line.slice(lead.length).replace(/[ \t]+/g, ' ');
+  }).join('\n');
   return { text: out, dropped };
 }
+
+/**
+ * A word too long for a line (a long link, a pasted separator) can only be broken one character at a time, and
+ * pdfkit's way of doing that takes time that grows with the square of the word's length: a 20,000-character word
+ * held the server for half a minute. So a run of more than 40 characters with no space gets a zero-width space every
+ * 10, where the line may break; it is not seen on the page and the words around it are untouched. Done only as the
+ * text is laid out, after the check has seen it, and invisible, so the check and the page still read the same.
+ */
+const breakable = (text) => text.replace(/\S{41,}/gu, (word) => word.match(/[\s\S]{1,10}/gu).join('\u200b'));
 
 // A line that starts a list item: a bullet of any kind, a dash or star with a space after it, or a number.
 const BULLET = /^(\s*)(?:([•●▪■◦‣⁃∙·☐☑✓✔➢➤►▸→])\s*|([*–—-])\s+|(\(?\d{1,2}[.)])\s+|(o)\s+(?=\S))/u;
 const SECOND_LEVEL = new Set(['◦', '‣', '⁃', 'o', '▸']);
+// Tick boxes keep their own mark, as numbers do: ticked and not ticked mean different things.
+const TICKS = new Set(['☐', '☑', '✓', '✔']);
 
 /**
  * The advert cut into blocks to lay out: headings, list items, lines of a paragraph, and gaps where a blank line was.
  * A heading is a short line standing on its own, as adverts are written ("What you will do", "About the role:"): no
  * more than eight words, not ending as a sentence does, starting with a capital, after a blank line (or ending with
- * a colon), and with something after it.
+ * a colon), and with something after it. A line with a colon in the middle, a currency sign or ending in a figure is
+ * a fact ("Salary: £50,000", "Hours 9 to 5"), not a heading.
  */
 export function blocksOf(text) {
   const lines = text.split('\n');
@@ -67,13 +100,14 @@ export function blocksOf(text) {
       const symbol = m[2] || m[3] || m[5];
       const level = m[1].replace(/\t/g, '    ').length >= 2 || SECOND_LEVEL.has(symbol) ? 1 : 0;
       const rest = line.slice(m[0].length).trim();
-      if (rest) blocks.push({ kind: 'item', marker: m[4] ? m[4] : level ? '◦' : '•', level, text: rest });
+      if (rest) blocks.push({ kind: 'item', marker: m[4] ? m[4] : TICKS.has(symbol) ? symbol : level ? '◦' : '•', level, text: rest });
       return;
     }
     const prev = i > 0 ? lines[i - 1].trim() : '';
     const later = lines.slice(i + 1).some((l) => l.trim());
     const short = t.length <= 70 && t.split(/\s+/).length <= 8;
-    const heading = short && later && !/[.,;!?…]$/.test(t) && /^[\p{Lu}\p{N}]/u.test(t) && (!prev || t.endsWith(':'));
+    const fact = /:\s*\S/.test(t) || /\p{Sc}/u.test(t) || /\d$/.test(t);
+    const heading = short && later && !fact && !/[.,;!?…]$/.test(t) && /^[\p{Lu}\p{N}]/u.test(t) && (!prev || t.endsWith(':'));
     blocks.push({ kind: heading ? 'heading' : 'line', text: t });
   });
   while (blocks.length && blocks.at(-1).kind === 'gap') blocks.pop();
@@ -104,17 +138,18 @@ export function makePdf(input) {
   const width = pdf.page.width - left - pdf.page.margins.right;
   const bottom = () => pdf.page.height - pdf.page.margins.bottom;
   const lineHeight = (size) => size * 1.21 + GAP;
+  const body = lineHeight(SIZE.body);
 
   /**
    * Write text in one style, at x and across width, wrapping as it goes. A character the main font lacks is written
    * in the fallback font, as a run of its own inside the same line.
    */
   function write(raw, { font = 'body', size = SIZE.body, color = INK, x = left, w = width, y, gap = GAP, characterSpacing = 0, align = 'left' } = {}) {
-    const text = printable(raw).text.replace(/ {2,}/g, ' ');
-    if (!text.trim()) return;
+    const text = breakable(printable(raw).text.trim());
+    if (!text) return;
     const runs = [];
     for (const ch of text) {
-      const own = ch === ' ' || COVER[font].hasGlyphForCodePoint(ch.codePointAt(0)) ? font : 'fallback';
+      const own = ch === ' ' || ch === '\u200b' || COVER[font].hasGlyphForCodePoint(ch.codePointAt(0)) ? font : 'fallback';
       if (runs.length && runs.at(-1).font === own) runs.at(-1).text += ch; else runs.push({ font: own, text: ch });
     }
     pdf.fillColor(color);
@@ -128,6 +163,29 @@ export function makePdf(input) {
   }
   /** Start a new page unless `room` points fit on this one. */
   const roomFor = (room) => { if (pdf.y + room > bottom()) pdf.addPage(); };
+  /**
+   * Write a paragraph or list item so that a page break never leaves a single line of it on its own, at the foot of a
+   * page or at the top of the next. When only its last line would go over, the page ends a line early and two go
+   * over; when only one line would fit, all of it goes to the next page. It is measured only near the foot of a page,
+   * where it could matter: measuring every block would double the work.
+   */
+  const keepLines = (text, w, draw) => {
+    const room = bottom() - pdf.y;
+    // More lines than it can take: a character is narrower than its type size, and wrapping wastes less than half a line.
+    const most = Math.ceil((text.length * SIZE.body * 1.5) / w) + 1;
+    if (most * body <= room) return draw();
+    pdf.font('body').fontSize(SIZE.body);
+    // As pdfkit counts: a line fits while its own height does, and each line after the first is a gap further down.
+    const own = pdf.currentLineHeight(true), step = own + GAP;
+    const lines = Math.round(pdf.heightOfString(breakable(printable(text).text.trim()), { width: w, lineGap: GAP }) / step);
+    const fit = room < own ? 0 : Math.floor((room - own) / step) + 1;
+    if (lines <= fit) return draw();
+    if (fit < 2 || (lines - fit < 2 && fit < 3)) { pdf.addPage(); return draw(); }
+    if (lines - fit >= 2) return draw();
+    const page = pdf.page;
+    page.margins.bottom += step;
+    try { return draw(); } finally { page.margins.bottom -= step; }
+  };
 
   // ----- the heading -----
   write(input.agency.toUpperCase(), { font: 'bold', size: SIZE.agency, color: ACCENT, characterSpacing: 0.8 });
@@ -142,7 +200,6 @@ export function makePdf(input) {
 
   // ----- the advert -----
   const blocks = blocksOf(printable(String(input.description ?? '').slice(0, MAX_TEXT)).text);
-  const body = lineHeight(SIZE.body);
   let previous = null;
   for (const block of blocks) {
     if (block.kind === 'gap') { pdf.y += body * 0.6; previous = block; continue; }
@@ -156,14 +213,17 @@ export function makePdf(input) {
       roomFor(body);
       const indent = 15 + block.level * 16;
       const markerX = left + block.level * 16 + (block.marker.length > 1 ? 0 : 3);
-      const y = pdf.y;
-      write(block.marker, { x: markerX, y, w: indent, color: block.marker.length > 1 ? INK : ACCENT });
-      pdf.y = y;
-      write(block.text, { x: left + indent + (block.marker.length > 1 ? 6 : 0), y, w: width - indent - (block.marker.length > 1 ? 6 : 0) });
+      const w = width - indent - (block.marker.length > 1 ? 6 : 0);
+      keepLines(block.text, w, () => {
+        const y = pdf.y;
+        write(block.marker, { x: markerX, y, w: indent, color: block.marker.length > 1 ? INK : ACCENT });
+        pdf.y = y;
+        write(block.text, { x: left + indent + (block.marker.length > 1 ? 6 : 0), y, w });
+      });
       pdf.y += 2.5;
     } else {
       roomFor(body);
-      write(block.text);
+      keepLines(block.text, width, () => write(block.text));
     }
     previous = block;
   }

@@ -289,12 +289,27 @@ function useEscape(onClose) {
  * screen that opened the dialog then says where to go.
  */
 function useReturnFocus() {
+  // Taken as the dialog is first drawn, before a field in it takes focus with autoFocus, which happens before effects run.
+  const [opener] = useState(() => document.activeElement);
   useEffect(() => {
-    const opener = document.activeElement;
     return () => {
       if (opener instanceof HTMLElement && opener !== document.body && opener.isConnected) opener.focus({ preventScroll: true });
     };
   }, []);
+}
+
+/**
+ * Tab and Shift+Tab go round the dialog's own buttons and fields rather than on to the page behind it, which a
+ * keyboard user cannot see while the dialog is open.
+ */
+function keepTabInside(e) {
+  if (e.key !== 'Tab' || e.defaultPrevented) return;
+  const stops = [...e.currentTarget.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')]
+    .filter((el) => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length);
+  if (!stops.length) return;
+  const first = stops[0], last = stops.at(-1);
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }
 
 export function Modal({ title, subtitle, onClose, children, footer, size = 'md', onSubmit }) {
@@ -308,6 +323,7 @@ export function Modal({ title, subtitle, onClose, children, footer, size = 'md',
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        onKeyDown={keepTabInside}
         onSubmit={onSubmit ? (e) => { e.preventDefault(); onSubmit(e); } : undefined}
         className={cx('animate-pop-in flex max-h-[calc(92dvh-var(--recording-bar,0px))] w-full flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl', widths[size])}
       >
