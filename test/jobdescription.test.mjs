@@ -620,3 +620,34 @@ test('a client’s file missing from the disk answers 404 without being offered 
   assert.equal(res.headers.get('content-disposition'), null);
   assert.equal((await alex.del(`/jobs/${job.full}/job-description/file`)).status, 200);
 });
+
+test('a link that fits on a line is printed whole, so it can be copied out of the PDF as it was written', async () => {
+  const link = 'https://careers.example.com/apply/senior-analyst-clinic-systems?ref=abc&utm=xyz';
+  assert.ok(link.length > 40 && link.length < 90);
+  const id = await newJob(priya, { client_id: north, title: 'Linked', description: `Apply here:\n${link}\nThank you.`, status: 'draft' });
+  const { text } = await readPdf((await pdfOf(priya, id, 'name=with&pay=0')).body);
+  assert.ok(text.includes(link), text);
+});
+
+test('a name spelt with Latin letters that carry a hook or a bar, or with Lisu letters, is found like the plain name', async () => {
+  for (const description of ['Join Ƚumen Health today.', 'Join ƚumen ɦealth today.', 'Join Lʊmɛn Hɛalth today.', 'Join ꓡꓴꓟꓰꓠ Health today.']) {
+    const id = await newJob(priya, { client_id: lumen, title: 'Clinic Analyst', location: 'London', description, status: 'draft' });
+    const check = (await priya.get(`/jobs/${id}/job-description/check?name=without&pay=0`)).body;
+    assert.ok(check.findings.some((f) => f.field === 'description' && ['name', 'word', 'mixed_letters'].includes(f.kind)), `${description}: ${JSON.stringify(check.findings)}`);
+  }
+});
+
+test('"Download anyway" answers the findings that were shown: if the advert has changed since, the new list comes back first', async () => {
+  const id = await newJob(priya, { client_id: lumen, title: 'Clinic Analyst', location: 'London', description: 'Work with www.lumenhealth.example on rotas.', status: 'draft' });
+  const shown = (await priya.get(`/jobs/${id}/job-description/check?name=without&pay=0`)).body;
+  assert.ok(shown.findings.length && shown.seen);
+  // Somebody else adds the client's name before the download is pressed.
+  write('UPDATE jobs SET description = ? WHERE id = ?', 'Join Lumen Health and work with www.lumenhealth.example on rotas.', id);
+  const stale = await pdfOf(priya, id, `name=without&pay=0&anyway=1&seen=${shown.seen}`);
+  assert.equal(stale.status, 409);
+  assert.match(stale.body.error, /has changed since you looked/);
+  assert.ok(stale.body.findings.some((f) => /“Lumen Health”/.test(f.message)), JSON.stringify(stale.body.findings));
+  assert.notEqual(stale.body.seen, shown.seen);
+  // Having seen the new list, the same answer downloads it.
+  assert.equal((await pdfOf(priya, id, `name=without&pay=0&anyway=1&seen=${stale.body.seen}`)).status, 200);
+});

@@ -308,13 +308,17 @@ function keepTabInside(e) {
     .filter((el) => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length);
   if (!stops.length) return;
   const first = stops[0], last = stops.at(-1);
-  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === e.currentTarget)) { e.preventDefault(); last.focus(); }
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }
 
 export function Modal({ title, subtitle, onClose, children, footer, size = 'md', onSubmit }) {
   useEscape(onClose);
   useReturnFocus();
+  // A dialog none of whose fields takes the keyboard when it opens takes it itself, so that Tab starts inside it and
+  // not on the page behind.
+  const box = useRef(null);
+  useEffect(() => { if (box.current && !box.current.contains(document.activeElement)) box.current.focus({ preventScroll: true }); }, []);
   const widths = { sm: 'max-w-md', md: 'max-w-xl', lg: 'max-w-3xl' };
   const Body = onSubmit ? 'form' : 'div';
   return (
@@ -323,9 +327,11 @@ export function Modal({ title, subtitle, onClose, children, footer, size = 'md',
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        ref={box}
+        tabIndex={-1}
         onKeyDown={keepTabInside}
         onSubmit={onSubmit ? (e) => { e.preventDefault(); onSubmit(e); } : undefined}
-        className={cx('animate-pop-in flex max-h-[calc(92dvh-var(--recording-bar,0px))] w-full flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl', widths[size])}
+        className={cx('animate-pop-in flex max-h-[calc(92dvh-var(--recording-bar,0px))] w-full flex-col rounded-t-2xl bg-white shadow-2xl outline-none sm:rounded-2xl', widths[size])}
       >
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div>

@@ -112,11 +112,11 @@ export function frameAncestors() {
 
 // Letters that have no accent to take off but are still read as a plain letter: "Sørensen" is found as "Sorensen".
 const PLAIN_LETTERS = { ø: 'o', đ: 'd', ð: 'd', ł: 'l', ß: 'ss', æ: 'ae', œ: 'oe', þ: 'th', ı: 'i' };
-// Letters of the Cyrillic and Greek alphabets, and small capitals, that a reader takes for a Latin letter: a name
+// Letters of the Cyrillic, Greek and Lisu alphabets, small capitals, and Latin letters with a hook or a bar, that a reader takes for a plain Latin letter: a name
 // written with one of them looks the same on the page, so it is compared as the letter it looks like.
 const LOOK_ALIKE = Object.fromEntries(Object.entries({
-  a: 'АаΑαᴀ', b: 'ВвΒβʙ', c: 'СсϹϲᴄ', d: 'Ԁԁᴅ', e: 'ЕеΕεᴇ', f: 'ꜰ', g: 'ɢԌ', h: 'НнΗһҺʜ', i: 'ІіΙιɪ', j: 'Јјᴊ', k: 'КкΚκᴋ', l: 'ʟӏ', m: 'МмΜᴍ',
-  n: 'Νηɴ', o: 'ОоΟοᴏ', p: 'РрΡρᴘ', q: 'Ԛԛ', r: 'ʀг', s: 'Ѕѕꜱ', t: 'ТтΤτᴛ', u: 'υᴜμ', v: 'νᴠѵ', w: 'Ԝԝᴡω', x: 'ХхΧχ', y: 'УуΥγʏ', z: 'Ζᴢ',
+  a: 'АаΑαᴀꓮ', b: 'ВвΒβʙꓐ', c: 'СсϹϲᴄꓚ', d: 'Ԁԁᴅꓓ', e: 'ЕеΕεᴇɛꓰ', f: 'ꜰꓝ', g: 'ɢԌꓖ', h: 'НнΗһҺʜɦꓧ', i: 'ІіΙιɪꓲ', j: 'Јјᴊꓙ', k: 'КкΚκᴋꓗ', l: 'ʟӏȽƚɫɭꓡ', m: 'МмΜᴍꓟ',
+  n: 'Νηɴꓠ', o: 'ОоΟοᴏꓳ', p: 'РрΡρᴘꓑ', q: 'Ԛԛ', r: 'ʀгꓣ', s: 'Ѕѕꜱꓢ', t: 'ТтΤτᴛꓔ', u: 'υᴜμʊꓴ', v: 'νᴠѵꓦ', w: 'Ԝԝᴡωꓪ', x: 'ХхΧχꓫ', y: 'УуΥγʏꓬ', z: 'Ζᴢꓜ',
 }).flatMap(([latin, alike]) => [...alike].map((ch) => [ch, latin])));
 const ALIKE = new RegExp(`[${Object.keys(LOOK_ALIKE).join('')}]`, 'gu');
 // Characters that take up no room on the page: joiners, soft hyphens, direction marks, and a few letters that are drawn as nothing.

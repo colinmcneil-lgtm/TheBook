@@ -163,10 +163,10 @@ function PdfDialog({ job, info, onClose, onEditJob }) {
   const findings = check?.findings || [];
   const blocked = !check || Boolean(check.error) || (findings.length > 0 && !anyway);
   const [download, busy] = useAction(async () => {
-    const res = await fetch(`/api/jobs/${job.id}/job-description/pdf?${query}${anyway ? '&anyway=1' : ''}`, { credentials: 'same-origin' });
+    const res = await fetch(`/api/jobs/${job.id}/job-description/pdf?${query}${anyway ? `&anyway=1&seen=${check.seen || ''}` : ''}`, { credentials: 'same-origin' });
     if (!res.ok) {
       const answer = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
-      if (answer?.findings) { setCheck((c) => ({ ...c, findings: answer.findings })); setAnyway(false); }
+      if (answer?.findings) { setCheck((c) => ({ ...c, findings: answer.findings, seen: answer.seen })); setAnyway(false); }
       throw new Error(answer?.error || 'The PDF could not be made. Please try again.');
     }
     const blob = await res.blob();

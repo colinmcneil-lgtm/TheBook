@@ -173,9 +173,11 @@ export function registerJobDescription(api, { agencyOnly, bad, clean, takeHit, r
   };
   /** What the check finds in the PDF without the client's name. Nothing is looked for in one that gives it. */
   const findingsFor = (job, made) => {
-    if (made.named) return { findings: [], overruled: 0 };
+    if (made.named) return { findings: [], overruled: 0, seen: '' };
     const { problems, overruled } = board.checkDocument(job.id, made.fields, made.pay);
-    return { findings: findingsOf(problems, job.client_name), overruled: overruled.length };
+    const findings = findingsOf(problems, job.client_name);
+    // A short mark of exactly what was found, which the dialog sends back with "Download anyway": see the PDF route.
+    return { findings, overruled: overruled.length, seen: crypto.createHash('sha256').update(JSON.stringify(findings)).digest('hex').slice(0, 16) };
   };
   const noDescription = 'This job has no description to make a PDF from. Add one first: Edit, then the Job advert box.';
 
@@ -190,9 +192,14 @@ export function registerJobDescription(api, { agencyOnly, bad, clean, takeHit, r
     const job = loadJob(req.params.id, req.user);
     const made = documentFor(job, choices(req.query));
     if (!made.fields.description) bad(noDescription);
-    const { findings } = findingsFor(job, made);
+    const { findings, seen } = findingsFor(job, made);
     if (findings.length && req.query.anyway !== '1') {
-      bad('This PDF could give the client away. Look at what was found, then download it anyway or change the advert first.', 409, { findings });
+      bad('This PDF could give the client away. Look at what was found, then download it anyway or change the advert first.', 409, { findings, seen });
+    }
+    // "Download anyway" answers the list the person was shown. If the advert or the post was changed since (by
+    // somebody else, in another window) and the check now finds something different, they are shown the new list first.
+    if (findings.length && req.query.seen !== undefined && req.query.seen !== seen) {
+      bad('The advert has changed since you looked. This is what the check finds now.', 409, { findings, seen });
     }
     if (!takeHit(`jd-pdf:${req.user.id}`, 120, 10 * 60000)) bad('That is a lot of PDFs in a few minutes. Try again shortly.', 429);
     const pdf = await makePdf(made.pdf);

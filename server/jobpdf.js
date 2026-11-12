@@ -72,7 +72,7 @@ export function printable(input) {
  * 10, where the line may break; it is not seen on the page and the words around it are untouched. Done only as the
  * text is laid out, after the check has seen it, and invisible, so the check and the page still read the same.
  */
-const breakable = (text) => text.replace(/\S{41,}/gu, (word) => word.match(/[\s\S]{1,10}/gu).join('\u200b'));
+const breakable = (text, tooWide) => text.replace(/\S{41,}/gu, (word) => (tooWide(word) ? word.match(/[\s\S]{1,10}/gu).join('\u200b') : word));
 
 // A line that starts a list item: a bullet of any kind, a dash or star with a space after it, or a number.
 const BULLET = /^(\s*)(?:([•●▪■◦‣⁃∙·☐☑✓✔➢➤►▸→])\s*|([*–—-])\s+|(\(?\d{1,2}[.)])\s+|(o)\s+(?=\S))/u;
@@ -145,7 +145,10 @@ export function makePdf(input) {
    * in the fallback font, as a run of its own inside the same line.
    */
   function write(raw, { font = 'body', size = SIZE.body, color = INK, x = left, w = width, y, gap = GAP, characterSpacing = 0, align = 'left' } = {}) {
-    const text = breakable(printable(raw).text.trim());
+    // Only a run too wide for its line is given break points: a link that fits is left whole, so that it can be
+    // copied out of the PDF as it was written (some viewers copy a break point as a space).
+    pdf.font(font).fontSize(size);
+    const text = breakable(printable(raw).text.trim(), (word) => word.length > 400 || pdf.widthOfString(word, { characterSpacing }) > w * 0.95);
     if (!text) return;
     const runs = [];
     for (const ch of text) {
@@ -177,7 +180,7 @@ export function makePdf(input) {
     pdf.font('body').fontSize(SIZE.body);
     // As pdfkit counts: a line fits while its own height does, and each line after the first is a gap further down.
     const own = pdf.currentLineHeight(true), step = own + GAP;
-    const lines = Math.round(pdf.heightOfString(breakable(printable(text).text.trim()), { width: w, lineGap: GAP }) / step);
+    const lines = Math.round(pdf.heightOfString(breakable(printable(text).text.trim(), (word) => word.length > 400 || pdf.widthOfString(word) > w * 0.95), { width: w, lineGap: GAP }) / step);
     const fit = room < own ? 0 : Math.floor((room - own) / step) + 1;
     if (lines <= fit) return draw();
     if (fit < 2 || (lines - fit < 2 && fit < 3)) { pdf.addPage(); return draw(); }
