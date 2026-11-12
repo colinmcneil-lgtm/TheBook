@@ -5,6 +5,7 @@ import { useApp } from '../state.jsx';
 import { Badge, Button, Card, Empty, Field, Input, Loading, Modal, Textarea, useAction, useToast } from '../ui.jsx';
 import { locationClause, xraySearch, xrayUrl } from '../xray.js';
 import JobAutofill from './JobAutofill.jsx';
+import JobDescriptionCard, { keepClientFile } from './JobDescriptionCard.jsx';
 
 // The recruiter brief for a job: everything someone sourcing for the role needs. Agency only.
 
@@ -55,7 +56,7 @@ function Bullets({ items, icon: Icon = Check, tone = 'text-brand-600' }) {
 const Chips = ({ items }) => <div className="flex flex-wrap gap-1.5">{items.map((item, i) => <Badge key={i} className={`max-w-full !rounded-xl !text-[13px] !whitespace-normal ${WRAP}`}>{item}</Badge>)}</div>;
 const Label = ({ children }) => <div className="mb-1.5 text-xs font-medium tracking-wide text-stone-500 uppercase">{children}</div>;
 
-export default function JobBrief({ job, stages }) {
+export default function JobBrief({ job, stages, onEditJob }) {
   const toast = useToast();
   const { user, isAdmin } = useApp();
   const canEdit = isAdmin || (job.account_executive_id != null && job.account_executive_id === user.id); // the brief belongs to the job's account executive
@@ -81,18 +82,20 @@ export default function JobBrief({ job, stages }) {
     : null;
   const copy = async (value, what) => { try { await navigator.clipboard.writeText(value); toast(`${what} copied`); } catch { window.prompt('Copy this', value); } };
 
+  // The job description exists before the brief does, so its card is there with or without one.
   if (empty) {
     return (
-      <>
-        <Card>
+      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+        <Card className="min-w-0 self-start">
           <Empty icon={NotebookPen} title="No brief for this role yet" action={canEdit && <Button variant="primary" icon={Pencil} onClick={() => setEditing(true)}>Write the brief</Button>}>
             {canEdit
               ? 'Give your recruiters what they need to start sourcing: must-haves, where to look, what to search for, the pay and how to sell the role.'
               : owner ? `${owner} is this job’s account executive and can write its brief. An admin can too.` : 'This job has no account executive, so only an admin can write its brief.'}
           </Empty>
         </Card>
+        <div className="min-w-0"><JobDescriptionCard job={job} onEditJob={onEditJob} /></div>
         {editing && <BriefForm job={job} onClose={() => setEditing(false)} />}
-      </>
+      </div>
     );
   }
 
@@ -189,6 +192,8 @@ export default function JobBrief({ job, stages }) {
 
         {has('selling_points') && <Section title="How to sell it" icon={Sparkles}><Bullets items={brief.selling_points} /></Section>}
 
+        <JobDescriptionCard job={job} onEditJob={onEditJob} />
+
         <Section title="The role at a glance">
           <dl className="divide-y divide-line text-sm">
             {[['Client', job.client_name], ['Account executive', job.account_executive_name || 'Not set'],
@@ -242,6 +247,7 @@ function BriefEditor({ job, onClose }) {
   const opened = useRef(form);
   const latest = useRef(form);
   latest.current = form;
+  const [keep, setKeep] = useState(null); // the client's file dropped in the job description box, to keep when the brief is saved
   const bind = (key) => ({ value: form[key], onChange: (e) => setForm((f) => ({ ...f, [key]: e.target.value })) });
   const [save, busy] = useAction(async () => {
     await api.put(`/jobs/${job.id}/brief`, {
@@ -250,12 +256,17 @@ function BriefEditor({ job, onClose }) {
       brief: { ...Object.fromEntries(TEXTS.map((k) => [k, form[k]])), ...Object.fromEntries(LISTS.map((k) => [k, toList(form[k])])) },
     });
     toast('Brief saved');
+    // The client's own file, dropped in the job description box above. The brief is saved either way.
+    if (keep) {
+      try { await keepClientFile(job.id, keep.file, keep.replace); }
+      catch (err) { toast(`The brief was saved, but ${keep.file.name} was not kept with the job: ${err.message} You can add it on the Brief.`, 'error'); }
+    }
     bump();
     onClose();
   });
   // Escape, a click outside and Cancel all close the form; with sixteen boxes of typing in it, they ask first.
   const close = () => {
-    const changed = Object.keys(form).some((key) => form[key] !== opened.current[key]);
+    const changed = keep || Object.keys(form).some((key) => form[key] !== opened.current[key]);
     if (!changed || window.confirm('Close without saving? What you have typed in the brief will be lost.')) onClose();
   };
   const list = (key, label, placeholder, rows = 4) => (
@@ -289,7 +300,7 @@ function BriefEditor({ job, onClose }) {
   return (
     <Modal title="Recruiter brief" subtitle={`${job.title} · ${job.client_name}. Only your agency sees this.`} size="lg" onClose={close} onSubmit={save}
       footer={<><Button onClick={close}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>Save brief</Button></>}>
-      <JobAutofill collapsible what="the brief" onResult={applyDraft} />
+      <JobAutofill collapsible what="the brief" onResult={applyDraft} onKeep={setKeep} existingFile={job.client_file} />
       {heading('About the role')}
       <Field label="The role, the team and why it is open"><Textarea rows={4} {...bind('about')} placeholder="What the person will own, who they report to, how big the team is, why the role exists now." /></Field>
       <Field label="Who we are looking for"><Textarea rows={3} {...bind('ideal_profile')} placeholder="The ideal person in a few sentences, including what the hiring manager cares about most." /></Field>

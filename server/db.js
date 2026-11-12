@@ -961,6 +961,16 @@ CREATE INDEX IF NOT EXISTS idx_messages_job ON messages(job_id) WHERE job_id IS 
 addColumn('users', 'message_mail', 'INTEGER NOT NULL DEFAULT 1');
 // ---------- end of messages between people on the agency team ----------
 
+// ---------- the client's own job description file ----------
+// The file a client sent with a job (a PDF or Word document), kept on the job for the agency: its name in the
+// uploads folder, the name it came with, its size, and who added it and when. Agency only (see jobdescription.js);
+// it goes from the disk when it is removed or replaced, and when its job is deleted.
+addColumn('jobs', 'jd_file', 'TEXT');
+addColumn('jobs', 'jd_file_name', 'TEXT');
+addColumn('jobs', 'jd_file_size', 'INTEGER');
+addColumn('jobs', 'jd_file_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+addColumn('jobs', 'jd_file_at', 'TEXT');
+
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
   get: (sql, ...p) => db.prepare(sql).get(...p),

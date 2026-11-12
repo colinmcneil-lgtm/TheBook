@@ -864,7 +864,10 @@ forEachBefore('upgrading changes nothing but the three columns, the new column, 
       'from the live release, the first start makes this change\'s own tables and indexes and, but for a newer feature\'s, nothing else');
     assert.deepEqual(upgraded.rows.todos, before.rows.todos, 'every item on a to-do list is as it was');
     for (const table of ['board_posts', 'board_applications', 'board_log', 'board_overrules', 'board_names']) assert.deepEqual(upgraded.rows[table], before.rows[table], `every row of ${table} is as it was`);
-    assert.deepEqual(upgraded.rows.jobs, before.rows.jobs, 'every job is as it was: a job handed on, and a job with nobody, are not given their creator again');
+    // (Columns a newer feature added to jobs, held to the general rule above, are left out of the comparison.)
+    const newer = others.columns.jobs ?? [];
+    const asTheyWere = upgraded.rows.jobs.map((row) => Object.fromEntries(Object.entries(row).filter(([column]) => !newer.includes(column))));
+    assert.deepEqual(asTheyWere, before.rows.jobs, 'every job is as it was: a job handed on, and a job with nobody, are not given their creator again');
   }
   // A database from before account executives is given them in this start, as the live release gives them: each job
   // its creator, who is on the agency's team here. Nothing is filled in a second time on a database that had them.

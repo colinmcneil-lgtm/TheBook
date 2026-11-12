@@ -4,6 +4,7 @@ import { api, url, agencyStageName, WORK_MODES, EMPLOYMENT } from '../lib.js';
 import { useApp, useApi } from '../state.jsx';
 import { Button, Checkbox, Field, Input, Modal, Select, Textarea, useAction, useToast } from '../ui.jsx';
 import JobAutofill from './JobAutofill.jsx';
+import { keepClientFile } from './JobDescriptionCard.jsx';
 
 const BRIEF_LABELS = { must_haves: ['must-have', 'must-haves'], nice_to_haves: ['nice-to-have', 'nice-to-haves'], not_a_fit: ['not-a-fit note', 'not-a-fit notes'],
   target_companies: ['target company', 'target companies'], where_to_look: ['place to look', 'places to look'], search_titles: ['job title to search', 'job titles to search'],
@@ -101,6 +102,7 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
   const [executiveAtOpen] = useState(form.account_executive_id); // who the form showed as account executive when it was opened
   const [draft, setDraft] = useState(null); // the last autofill result, for the notes shown about it
+  const [keep, setKeep] = useState(null); // the client's file dropped in the job description box, to keep once the job is created
   const latest = useRef(form);
   latest.current = form;
   const fromDraft = useRef({}); // what the last draft put into each field, to tell it apart from what was typed
@@ -155,6 +157,12 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
     const id = job ? job.id : saved.id;
     toast(job ? 'Job saved' : form.status === 'open' ? 'Job created and published. Add the recruiter brief next.' : 'Job saved as a draft. Add the recruiter brief next.');
     if (saved.board_notice) toast(saved.board_notice, 'error'); // the change took the job's confidential post down
+    // The client's own file goes on the job once it exists. The job is saved either way: if the file is refused, the
+    // person is told, and can add it from the Brief.
+    if (!job && keep) {
+      try { await keepClientFile(id, keep.file); }
+      catch (err) { toast(`The job was saved, but ${keep.file.name} was not kept with it: ${err.message} You can add it on the job’s Brief.`, 'error'); }
+    }
     bump();
     onClose();
     onSaved?.(id);
@@ -163,7 +171,7 @@ export default function JobForm({ job, stages, clientId, onClose, onSaved }) {
   return (
     <Modal title={job ? 'Edit job' : 'New job'} size="lg" onClose={onClose} onSubmit={save}
       footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" busy={busy}>{job ? 'Save changes' : 'Create job'}</Button></>}>
-      {!job && <JobAutofill onResult={applyDraft} />}
+      {!job && <JobAutofill onResult={applyDraft} onKeep={setKeep} />}
       {draft && (briefParts.length > 0 || draft.brief.about) && (
         <p className="rounded-lg bg-violet-50 px-3 py-2 text-[13px] leading-relaxed text-violet-900">
           A recruiter brief was drafted too{briefParts.length ? `: ${briefParts.join(', ')}` : ''}. It is saved with the job, and you can review and edit it on the job’s Brief tab.

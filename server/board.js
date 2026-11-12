@@ -486,6 +486,21 @@ function check(fields, { job, overrules = [] }) {
   return { ok: problems.length === 0, problems, overruled, warnings, looked_for, client_advert_public: theirsIsPublic };
 }
 
+/**
+ * The check, for a job description downloaded as a PDF without the client's name (see jobdescription.js): the same
+ * search as for a post, on exactly the title, location and text that go in the file, with the overrules an admin
+ * has made on the job's post. Only what was found counts here: an empty location is no problem in a document, and
+ * matching with the client's careers page is about the public board, so the post's own rules for that are left out.
+ */
+export function checkDocument(jobId, fields) {
+  const post = q.get('SELECT id FROM board_posts WHERE job_id = ?', jobId);
+  const result = check({ ...fields, hide_from_careers: 1, show_salary: 0 }, { job: jobFacts(jobId), overrules: post ? overrulesOf(post.id) : [] });
+  return { problems: result.problems.filter((p) => p.kind !== 'missing'), overruled: result.overruled };
+}
+/** A job's confidential post as saved, for the PDF without the client's name: its own wording and its pay choices. Null when it has none. */
+export const savedPost = (jobId) => q.get('SELECT enabled, title, location, description, show_salary, round_salary FROM board_posts WHERE job_id = ?', jobId) ?? null;
+export { roundedRange };
+
 // ---------- a post and whether it is public ----------
 const newToken = () => crypto.randomBytes(9).toString('hex'); // 18 characters, from nothing but chance
 const TOKEN = /^[a-f0-9]{18}$/;

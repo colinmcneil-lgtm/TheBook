@@ -14,6 +14,7 @@ import * as todos from './todos.js';
 import * as board from './board.js';
 import * as reviews from './reviews.js';
 import * as messages from './messages.js';
+import * as jobDescription from './jobdescription.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -595,6 +596,10 @@ reviews.registerReviews(api, { agencyOnly, bad, text, int, loadApp: (id, user) =
 // Messages between people on the agency team are a module of their own as well. The routes below tell it when an
 // application is folded into another, so that messages about it stay on the person's profile.
 messages.registerMessages(api, { agencyOnly, bad });
+// A job's description as a PDF, and the client's own file kept with the job, are a module of their own too. Both are
+// the agency's: every route there is for the agency only and finds the job through loadJob, as the job's own routes do.
+jobDescription.registerJobDescription(api, { agencyOnly, bad, clean, takeHit, removeUpload, ALLOWED_RESUME, HttpError,
+  loadJob: (id, user) => loadJob(id, user), ownsJob: (user, job) => ownsJob(user, job), downloadAs: (name) => downloadAs(name) });
 
 /** Client the request is scoped to: forced for client users, optional (?client_id=) for the agency. */
 const scopeOf = (req) => (isAgency(req.user) ? int(req.query.client_id) : req.user.client_id);
@@ -886,12 +891,18 @@ const jobSelect = `
  * Who a job belongs to inside the agency is the agency's own business: its account executive, and who created it
  * (the same person until the job is handed on). The client's hiring team is never sent either.
  */
-const withoutAgencyPeople = ({ created_by, created_by_name, account_executive_id, account_executive_name, account_executive_active, ...job }) => job;
+const withoutAgencyPeople = ({ created_by, created_by_name, account_executive_id, account_executive_name, account_executive_active, ...job }) => withoutClientFile(job);
+/**
+ * The client's own job description file is the agency's (see jobdescription.js): a client's user is never told
+ * whether there is one. Nobody is sent where it is kept; the agency is sent what it needs on the job itself
+ * (GET /jobs/:id), and the job lists leave it out for everybody.
+ */
+const withoutClientFile = ({ jd_file, jd_file_name, jd_file_size, jd_file_by, jd_file_at, ...job }) => job;
 /** Changes whenever the brief or the ideal profile is saved, so a form opened on an older copy can be refused instead of overwriting the newer one. */
 const briefVersion = (j) => crypto.createHash('sha1').update(`${j.brief ?? ''}\n${j.ideal_profile ?? ''}`).digest('hex').slice(0, 16);
 /** Parse the JSON columns and drop what is the agency's alone for client users: the internal brief, the fee and who the job belongs to. */
 function hydrateJob(j, user) {
-  const { ideal_profile, brief, fee_percent, off_careers, ...rest } = j; // agency-only: the brief, and the fee the client pays
+  const { ideal_profile, brief, fee_percent, off_careers, ...rest } = withoutClientFile(j); // agency-only: the brief, and the fee the client pays
   const shown = isAgency(user) ? { ...rest, ideal_profile, brief: json(brief, {}), brief_version: briefVersion(j), fee_percent } : withoutAgencyPeople(rest);
   // careers_page: whether the job is listed on the client's careers page while it is open. Everybody is told that much, and not why.
   return { ...shown, careers_page: !off_careers, questions: json(j.questions, []), criteria: json(j.criteria, []) };
@@ -1048,7 +1059,10 @@ api.post('/jobs', agencyOnly, (req, res) => {
 });
 
 api.get('/jobs/:id', (req, res) => {
-  const job = hydrateJob(loadJob(req.params.id, req.user), req.user);
+  const row = loadJob(req.params.id, req.user);
+  const job = hydrateJob(row, req.user);
+  // The client's own file, for the agency only: its name, size, and who added it when (see jobdescription.js).
+  if (isAgency(req.user)) job.client_file = jobDescription.fileView(row);
   res.json({ job, stages: stagesOf(job.id, req.user) });
 });
 
@@ -1174,7 +1188,8 @@ api.delete('/jobs/:id', adminOnly, (req, res) => {
       const orphans = q.all(`SELECT id, photo_file FROM candidates WHERE ${alone}`, job.client_id);
       const calls = callFilesOf(orphans.map((c) => c.id));
       q.run(`DELETE FROM candidates WHERE ${alone}`, job.client_id);
-      return { files: [...files, ...orphans.map((c) => c.photo_file)], calls };
+      // The client's own job description file goes with its job.
+      return { files: [...files, ...orphans.map((c) => c.photo_file), job.jd_file], calls };
     });
   } catch (err) {
     made.forEach(removeUpload);
@@ -2779,7 +2794,7 @@ api.get('/dashboard', (req, res) => {
     `${interviewSelect} WHERE i.status = 'scheduled' AND i.starts_at >= ? AND a.status IN ('active', 'hired') ${cid ? 'AND cl.id = ?' : ''} ORDER BY i.starts_at LIMIT 6`,
     new Date(Date.now() - 3600000).toISOString(), ...p));
   const jobs = q.all(`${jobSelect} WHERE j.status = 'open' ${w} ORDER BY new_applicants DESC, j.opened_at LIMIT 8`, ...p)
-    .map(({ description, ideal_profile, brief, fee_percent, questions, criteria, off_careers, ...j }) => (isAgency(req.user) ? j : withoutAgencyPeople(j)));
+    .map(({ description, ideal_profile, brief, fee_percent, questions, criteria, off_careers, ...j }) => (isAgency(req.user) ? withoutClientFile(j) : withoutAgencyPeople(j)));
   const recent = q.all(
     `SELECT ac.id, ac.type, ac.detail, ac.created_at, ac.application_id, u.name AS user_name, c.name AS candidate_name, j.title AS job_title, cl.name AS client_name,
        -- The moments worth shouting about: into an interview stage, an interview booked, approved by the hiring team,

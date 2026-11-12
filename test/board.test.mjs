@@ -1316,8 +1316,9 @@ test('starting on a database made by the live code adds the board’s tables and
         continue;
       }
       if (name !== 'jobs') { assert.equal(after.objects[name], sql, `${name} was changed or dropped`); continue; }
+      // (And then five more, for the client's own job description file, a later feature again: test/jobdescription.test.mjs.)
       const was = /\(([\s\S]*)\)/.exec(sql)[1], now = /\(([\s\S]*)\)/.exec(after.objects.jobs)[1];
-      assert.ok(now.startsWith(was) && /^,\s*account_executive_id INTEGER REFERENCES users\(id\) ON DELETE SET NULL$/.test(now.slice(was.length)), 'jobs was changed by more than its one new column');
+      assert.ok(now.startsWith(was) && /^,\s*account_executive_id INTEGER REFERENCES users\(id\) ON DELETE SET NULL, jd_file TEXT, jd_file_name TEXT, jd_file_size INTEGER, jd_file_by INTEGER REFERENCES users\(id\) ON DELETE SET NULL, jd_file_at TEXT$/.test(now.slice(was.length)), 'jobs was changed by more than its new columns');
     }
     // What is new: the board's five tables and their indexes. Whatever else was made belongs to another change (the
     // four tables and six indexes of people saved without a job, and whatever comes later), not to the board:
@@ -1341,7 +1342,9 @@ test('starting on a database made by the live code adds the board’s tables and
     const theirs = (s) => /^(reports_|todos_|sent_resumes_)/.test(s.key);
     const plain = (value) => JSON.parse(JSON.stringify(value));
     // Each job's account executive is filled in on start from who created it: that column is the later feature's, not the board's.
-    const jobsAsTheyWere = settled.jobs.map(({ account_executive_id, ...job }) => job);
+    // The five columns for the client's own job description file are that feature's, and empty.
+    assert.ok(settled.jobs.every((j) => j.jd_file === null && j.jd_file_name === null && j.jd_file_size === null && j.jd_file_by === null && j.jd_file_at === null));
+    const jobsAsTheyWere = settled.jobs.map(({ account_executive_id, jd_file, jd_file_name, jd_file_size, jd_file_by, jd_file_at, ...job }) => job);
     // Each person's switch for e-mails about new messages is on: that column is the messages feature's.
     assert.deepEqual(settled.users.map((u) => u.message_mail), settled.users.map(() => 1));
     const usersAsTheyWere = settled.users.map(({ message_mail, ...user }) => user);

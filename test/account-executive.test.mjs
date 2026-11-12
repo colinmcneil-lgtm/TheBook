@@ -450,11 +450,14 @@ test('starting on a database from before fills in each job’s account executive
   const first = everything(oldDir);
   // The creator, when they are still on file and on the agency's team (deactivated or not); otherwise nobody.
   assert.deepEqual(first.rows.jobs.map((j) => [j.id, j.created_by, j.account_executive_id]), [[1, 1, 1], [2, 2, 2], [3, null, null], [4, 3, null], [5, 9, null], [6, 4, 4], [7, 2, 2]]);
-  // Everything else about every job is as it was, who created it included.
-  assert.deepEqual(first.rows.jobs.map(({ account_executive_id, ...rest }) => rest), before.rows.jobs);
-  // The jobs table gained that one column at its end. Every other table, index and trigger is written as it was, and no row in any of them changed.
+  // Everything else about every job is as it was, who created it included. (The five columns for the client's own
+  // job description file came later, after it, and are empty in every job; test/jobdescription.test.mjs is about them.)
+  const JD_FILE = ['jd_file', 'jd_file_name', 'jd_file_size', 'jd_file_by', 'jd_file_at'];
+  for (const j of first.rows.jobs) for (const column of JD_FILE) assert.equal(j[column], null, column);
+  assert.deepEqual(first.rows.jobs.map(({ account_executive_id, jd_file, jd_file_name, jd_file_size, jd_file_by, jd_file_at, ...rest }) => rest), before.rows.jobs);
+  // The jobs table gained that one column at its end (and then those five). Every other table, index and trigger is written as it was, and no row in any of them changed.
   const columnsBefore = /\(([\s\S]*)\)/.exec(before.objects.jobs)[1], columnsNow = /\(([\s\S]*)\)/.exec(first.objects.jobs)[1];
-  assert.ok(columnsNow.startsWith(columnsBefore) && /^,\s*account_executive_id INTEGER REFERENCES users\(id\) ON DELETE SET NULL$/.test(columnsNow.slice(columnsBefore.length)), 'jobs was changed by more than its one new column');
+  assert.ok(columnsNow.startsWith(columnsBefore) && /^,\s*account_executive_id INTEGER REFERENCES users\(id\) ON DELETE SET NULL, jd_file TEXT, jd_file_name TEXT, jd_file_size INTEGER, jd_file_by INTEGER REFERENCES users\(id\) ON DELETE SET NULL, jd_file_at TEXT$/.test(columnsNow.slice(columnsBefore.length)), 'jobs was changed by more than its new columns');
   // (Two tables are written again by another change, so that somebody can be saved to The Book without a job: a
   // candidate no longer has to have a client, nor an application a job and a stage, and an application has one new
   // column. Nothing else about the two is different; test/pool-upgrade.test.mjs is about that upgrade.)

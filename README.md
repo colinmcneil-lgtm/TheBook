@@ -14,7 +14,7 @@ Your agency name is set at first sign-in and shown throughout the workspace.
 | **Clients** | Each company you embed in has its own jobs, candidates, hiring-team logins, brand colour and engagement terms (retainer, fee per hire, or both). A switcher scopes the whole workspace to one client or all of them. |
 | **Careers pages** | Every client gets a public, branded careers page at `/careers/<client>` listing open roles, each with an application form (résumé upload, custom screening questions, consent). Link to it from the client's website. Add `?src=linkedin`, `?src=job_board` or `?src=referral` to an apply link to track where applicants came from. |
 | **Jobs on our website** | Your agency's own public job board, in your name, for the jobs you choose to advertise yourselves without saying who the employer is. Each post is written for the purpose and checked for anything that would give the client away before it can go public. Link to the board, show it inside a page of your own website, or read it as data. See [Jobs on our website (confidential posts)](#jobs-on-our-website-confidential-posts). |
-| **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. |
+| **Recruiter brief** | Each job opens on a brief for your recruiters: about the role, must-haves, nice-to-haves, who is not a fit, companies and places to look, job titles and keywords with a ready-made search string (one click to search LinkedIn or Google), pay and room to move, your fee, selling points, first-call questions and process notes. The person who created the job (or an admin) edits it; the rest of the team reads it; clients never see it. Beside it, the job description: the job's advert as a PDF to send to candidates, with or without the client's name, and the client's own file. See [The job description on the Brief](#the-job-description-on-the-brief). |
 | **Job board** | Every job has an account executive: the person on your team who created it. The dashboard has a board with a column for each account executive and their jobs under their name, each with how long it has been open, how many openings are filled and how many people are in its pipeline, at interview and at offer. Agency only. See [Account executives and the job board](#account-executives-and-the-job-board). |
 | **Job autofill** | When adding a job, paste or drop in the client's job description and your intake call notes or transcript, and the job and its recruiter brief are filled in for you to review. With an Anthropic API key connected, Claude drafts everything, including the brief from the call. Without one, the details a job description states outright are picked up (title, location, salary, requirement lists). |
 | **Otterview** | Every call with a candidate in one place, in two tabs. **Metaview**: the conversations your agency records in Metaview, findable and on the right candidates, each opening with its transcript and Metaview's notes. **Record a live conversation**: record a call in the browser, or upload a recording, and it is written out with who said what. Either way a notes summary is there and one click drafts the write-up for the hiring team. Agency only. See [Otterview](#otterview) and [Metaview in Otterview](#metaview-in-otterview). |
@@ -80,6 +80,75 @@ checks as Edit details, or nothing is saved. The résumé that was there is kept
 agency only, and the history says "Résumé added" or "Résumé replaced". From then on it is the profile's résumé like
 one attached any other way, and the same rules decide what happens to it when the person goes back to The Book (see
 "What they wrote to one client never reaches another" below).
+
+## The job description on the Brief
+
+Every job's Brief has a **Job description** card, beside the brief (and there before the brief is written, since the
+job's advert comes first). It is the agency's alone, like the rest of the Brief. It offers two things.
+
+**Download as PDF.** A PDF made from the advert saved on the job (Edit, the Job advert box), to send to a candidate.
+A small dialog asks two things each time, and starts on the safe answer to the first:
+
+- **Without the client's name** (where it starts) or **With the client's name**. Both are one click away.
+- **Include the pay range**, when the job has one. It starts ticked with the client's name; without it, it starts as
+  the job's confidential post has it (ticked when there is no post).
+
+| | With the client's name | Without the client's name |
+| --- | --- | --- |
+| **Heading** | Your agency's name, the job title, the client's name | Your agency's name, the job title, "With our client" and "The employer's name is kept confidential at this stage." |
+| **Facts** | Location, working pattern, contract and (if ticked) the pay range, in the careers page's own words | The same; the pay range rounded when the confidential post rounds it |
+| **Text** | The job's advert | The confidential post's own title, location and text when the post has all three (they were written and checked for the public; the dialog says "Uses the wording of your confidential post"); otherwise the job's own |
+| **File name** | `<Client> - <Job title>.pdf` | `<Job title> - <Agency>.pdf` |
+| **Inside the file** | Title "<Job title> - <Client>", author your agency, subject "Job description" | Title the job title, author your agency, subject "Job description": no client anywhere, in the text, the file's details, its name or the link that fetches it |
+
+Never in either PDF: anything from the recruiter brief (must-haves, where to look, pay notes, who we are looking for),
+the fee, internal notes, the account executive's or any recruiter's name, anything about candidates, or any id. The
+footer has your agency's name and the day it was made, and the page number when there is more than one page.
+
+The advert is laid out as written: paragraphs and blank lines kept, list lines (•, -, *, numbers, Word's own bullets)
+with a hanging indent, and a short line standing on its own ("What you will do", "About the role:") set as a heading.
+
+**The check, before a PDF without the client's name.** The same check a confidential post goes through (see
+[The check](#the-check)) is run on exactly the title, location and text that go in the file: the client's name and
+the words of it, its initials, the other names you listed for the client, its careers address, its website, the names
+and e-mail domains of the people at the client with a login, and any link, e-mail address, phone number, hashtag or
+handle. If it finds anything, the dialog lists what and where ("The description mentions “Lumen Health” 3 times:
+the client's name.") and the download waits until you tick **Download anyway**, or you change the advert (or the
+confidential post) first. The server holds to it too: a request without that tick is refused with the same list, so
+a link put together by hand cannot skip it. An admin's overrules on the job's confidential post count here as they
+do for the post. Matching with the client's careers page, which matters for a public post, is not looked at.
+
+**The client's own file.** The file the client sent (a PDF, Word, RTF or text file, up to 8 MB, the same rules as a
+résumé) can be kept with the job: drop it on the card or choose it. The card shows its name, size, who added it and
+when, and **Download**, which always saves it under the name it came with and never opens it inside The Book.
+Anybody on the agency team can download it; only the job's account executive or an admin can **Replace** or
+**Remove** it (the rest are told who can). It is the client's own document and names them, so it is not for
+candidates on a confidential role: the card says so.
+
+When a job description file is dropped (or chosen) in the **Job description** box of "Fill in the job" on the new-job
+form, or of "Fill in the brief" in the brief form, its text is read as before and the file itself is kept with the
+job as the client's file once the job is created or the brief is saved. A line under the box says so ("advert.pdf will
+be kept with the job as the client's file") with **Don't keep it**. If the job already keeps a file, nothing is
+replaced unless you choose **Replace it** there. A file dropped in the **Intake call** box is never kept, and pasted
+text keeps nothing. If the job is saved and the file is refused, the job stays saved and you are told the file was not
+kept and can be added from the Brief.
+
+**Where the file is kept, and when it goes.** In the uploads folder of the data folder, with the résumés, under a
+random name. Replacing or removing it deletes it from the disk, and so does deleting the job. A client's hiring team
+is never sent it, or anything that says it exists: their job lists, job pages, dashboard and reports, and the public
+careers pages, are exactly as they were.
+
+**The font.** The PDF is set in [Inter](https://github.com/rsms/inter) (SIL Open Font License 1.1), the app's own
+typeface, with [DejaVu Sans](https://dejavu-fonts.github.io/) (Bitstream Vera licence, DejaVu changes in the public
+domain) for the characters Inter lacks, such as ☐. Both licences allow the fonts to be shipped with the app and
+embedded in documents; the files and their licences are in `server/fonts/`. Nothing is fetched while a PDF is made.
+Characters neither font can show (most emoji, Chinese, Japanese and Korean, and right-to-left scripts, which would
+come out in the wrong order) are left out, and the dialog says when some were.
+
+**Limits.** The PDF is made from the saved text, so the formatting, tables, images and logos of the client's original
+are not carried over. A scanned file is kept as a file but gives no text to fill anything in from. The advert is cut
+at the job form's limit of 20,000 characters. There is no Word version, no way to change the PDF's look for your
+agency (logo, colours), and no sending it by e-mail from The Book.
 
 ## People in The Book without a job
 
@@ -401,9 +470,9 @@ did, because the first start gives each job that was there its creator.
 `test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview (and, where this meets the
 agency's jobs page, a stand-in for the mail provider), on four ports: the fifteenth,
 sixteenth, eleventh and twelfth from `ORACLE_TEST_PORT`, or four in a row from `POOL_TEST_PORT` when that is set
-(`test/oracle-helpers.mjs` lists which test file uses which port, and a unit test checks that no two share one). `npm test` uses thirty-six ports in a row from `ORACLE_TEST_PORT` (3610 unless
+(`test/oracle-helpers.mjs` lists which test file uses which port, and a unit test checks that no two share one). `npm test` uses thirty-seven ports in a row from `ORACLE_TEST_PORT` (3610 unless
 set): `ORACLE_TEST_PORT=5080 npm test`. Node refuses to fetch from a few ports whatever is listening on them
-(5060 and 5061 among them), so a base that puts one of the thirty-six on such a port, any base from 5025 to 5061 for
+(5060 and 5061 among them), so a base that puts one of the thirty-seven on such a port, any base from 5024 to 5061 for
 one, is refused before a test runs, with a sentence that says which base to choose instead.
 
 ## Account executives and the job board
@@ -1457,6 +1526,9 @@ server/
   todos.js   To do: each person's own lists of jobs to work on and people to prep and debrief, and what interviews add to them
   messages.js  Messages: the agency team's one-to-one and group conversations, unread counts and the e-mail heads-up
   board.js   Jobs on our website: the agency's confidential posts, the check that keeps the client out of them, the public board and its feed
+  jobdescription.js  The job description on the Brief: the PDF with or without the client's name, its check, and the client's own file
+  jobpdf.js  Lays a job's advert out as an A4 PDF (pdfkit), with the fonts in server/fonts
+  jobwords.js  The careers page's words for a job's working pattern, contract and pay, for the server
   autofill.js  Drafting a job and its brief from a job description and intake notes
   oracle.js  Otterview: recording and uploading calls, transcription, notes and submission drafts
   metaview.js         Metaview in Otterview: the key, reading the list in the background, bringing calls in
@@ -1529,6 +1601,12 @@ they made at that client, their résumé files, and their recorded calls with th
   applying, every e-mail's whole text, which websites may frame which pages, and starting on a database made by the
   version before it); the agency's screens, the public board and the board inside a stand-in for the agency's
   website were driven in Chrome at 1280 and 390 wide on the demo data.
+  The job description on the Brief is tested against the real server (`test/jobdescription.test.mjs`: every route
+  refused to a client's user, their answers unchanged by a kept file, the file's rules, replacing, removing and
+  deleting it from the disk, who may change it, both PDFs read back with pdfjs-dist, nothing of the client in the one
+  without, the confidential post's wording, the check and its overrules, characters the fonts lack, a 50,000-character
+  advert and hostile file names); the card, the dialog and a file dropped in the new-job form were driven in Chromium
+  at 1280 and 390 wide on the demo data, and the PDFs looked at page by page.
   Messages is tested against the real server with a stand-in for the mail provider (`test/messages.test.mjs`: who can
   be written to, one conversation for each pair also when two requests arrive at once, groups joined and left, every
   route refused to somebody not in the conversation and to a client's user, deleting, unread counts, every e-mail rule,

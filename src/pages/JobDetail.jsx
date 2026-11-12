@@ -274,7 +274,7 @@ export default function JobDetail() {
           { id: 'details', label: isAgency ? 'Advert and setup' : 'Job details' },
           // The agency's own advert for this job, on its public job board. The client's hiring team has no such tab.
           isAgency && { id: 'post', label: 'Confidential post' }].filter(Boolean)} />
-      {tab === 'brief' && <JobBrief job={job} stages={stages} />}
+      {tab === 'brief' && <JobBrief job={job} stages={stages} onEditJob={() => setModal('edit')} />}
       {tab === 'pipeline' && <Board stages={stages} apps={inPlay} />}
       {tab === 'all' && <ApplicationsTable rows={apps} showJob={false} empty="Nobody has applied yet. Share the apply link or add candidates you have sourced." />}
       {tab === 'details' && <Details job={job} stages={stages} />}

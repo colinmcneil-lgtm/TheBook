@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronDown, FileUp, LoaderCircle, Sparkles } from 'lucide-react';
+import { ChevronDown, FileText, FileUp, LoaderCircle, Sparkles } from 'lucide-react';
 import { api } from '../lib.js';
 import { useApi } from '../state.jsx';
 import { Badge, Button, Textarea, useAction, useToast, cx } from '../ui.jsx';
+import { clientFileRefusal } from './JobDescriptionCard.jsx';
 
 // Paste or drop in a job description and/or the notes from an intake call, and get the job (and its recruiter
 // brief) drafted. With AI connected the documents are read by Claude; without it only what a job description
@@ -15,13 +16,15 @@ const MAX_NOTES = 300000;
 // A call transcript saved as a PDF runs to dozens of pages. Every page is read, up to this many.
 const MAX_PAGES = 300;
 
-function Source({ label, hint, placeholder, value, onChange }) {
+/** `onFile`, when given, is told of each file dropped or chosen that is read (whatever text it gave). */
+function Source({ label, hint, placeholder, value, onChange, onFile, children }) {
   const toast = useToast();
   const [reading, setReading] = useState(false);
   const [over, setOver] = useState(false);
   const take = async (file) => {
     if (!file) return;
     if (!/\.(pdf|docx|rtf|txt|md|vtt|srt)$/i.test(file.name)) return toast('Use a PDF, Word (.docx), RTF or text file, or paste the text.', 'error');
+    onFile?.(file);
     setReading(true);
     try {
       const { extractDocumentText } = await import('../resume.js');
@@ -56,8 +59,28 @@ function Source({ label, hint, placeholder, value, onChange }) {
         onDrop={(e) => { e.preventDefault(); setOver(false); take(e.dataTransfer.files[0]); }}
         className={cx('text-[13px]', over && '!border-brand-500 !bg-brand-50')} />
       <p className="mt-1 text-xs text-stone-500">{hint}</p>
+      {children}
     </div>
   );
+}
+
+/**
+ * The line under the boxes about the file dropped in the Job description box: it is kept with the job as the
+ * client's own file once the job (or the brief) is saved, unless the person says no. A file the job already has is
+ * only replaced when they say so.
+ */
+function KeepLine({ kept, setKept, existing }) {
+  if (!kept) return null;
+  const { file } = kept;
+  const link = (label, change) => <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setKept({ ...kept, ...change })}>{label}</button>;
+  const name = <span className="font-medium text-stone-800 [overflow-wrap:anywhere]">{file.name}</span>;
+  let line;
+  if (kept.refusal) line = <>{name} cannot be kept with the job: {kept.refusal.charAt(0).toLowerCase() + kept.refusal.slice(1)}</>;
+  else if (!existing) line = kept.keep ? <>{name} will be kept with the job as the client’s file. {link('Don’t keep it', { keep: false })}</> : <>{name} will not be kept with the job. {link('Keep it', { keep: true })}</>;
+  else if (kept.keep && kept.replace) line = <>{name} will replace the client’s file this job keeps ({existing.name}) when you save. {link('Keep the one it has', { keep: false, replace: false })}</>;
+  else if (kept.keep) line = <>This job already keeps the client’s file ({existing.name}). Replace it with {name}? {link('Replace it', { replace: true })} · {link('Keep the one it has', { keep: false })}</>;
+  else line = <>{name} will not be kept: the job keeps the client’s file it has ({existing.name}). {link('Replace it after all', { keep: true, replace: true })}</>;
+  return <p className="flex items-start gap-2 text-xs leading-relaxed text-stone-600"><FileText className="mt-px size-3.5 shrink-0 text-brand-600" /><span>{line}</span></p>;
 }
 
 /**
@@ -65,12 +88,19 @@ function Source({ label, hint, placeholder, value, onChange }) {
  * shown after the outcome (which fields it left alone, say), and `notesUsed: false` when the intake notes the
  * plain reader keeps "as written" did not go anywhere.
  */
-export default function JobAutofill({ onResult, collapsible, what = 'the job' }) {
+export default function JobAutofill({ onResult, collapsible, what = 'the job', onKeep, existingFile = null }) {
   const toast = useToast();
   const [open, setOpen] = useState(!collapsible);
   const [description, setDescription] = useState('');
   const [notes, setNotes] = useState('');
   const [outcome, setOutcome] = useState(null);
+  // The file last dropped or chosen in the Job description box, and what is to happen to it (see KeepLine). Only that
+  // box: a file dropped in the intake call box, or text pasted anywhere, keeps nothing.
+  const [kept, setKept] = useState(null);
+  useEffect(() => {
+    onKeep?.(kept && !kept.refusal && kept.keep && (!existingFile || kept.replace) ? { file: kept.file, replace: Boolean(existingFile) } : null);
+  }, [kept]);
+  const dropped = (file) => setKept({ file, keep: true, replace: false, refusal: clientFileRefusal(file) });
   const { data: status } = useApi('/jobs/autofill/status');
   const [run, busy] = useAction(async () => {
     const k = (n) => `${Math.round(n / 1000)}k`;
@@ -109,9 +139,11 @@ export default function JobAutofill({ onResult, collapsible, what = 'the job' })
       {open && (
         <div className="space-y-3 border-t border-brand-200 px-4 py-3">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Source label="Job description" value={description} onChange={setDescription}
+            <Source label="Job description" value={description} onChange={setDescription} onFile={onKeep ? dropped : undefined}
               placeholder="Paste the client's job description or advert, or drop the file here."
-              hint="PDF, Word or text." />
+              hint={onKeep ? 'PDF, Word or text. A file dropped here is kept with the job as the client’s file.' : 'PDF, Word or text.'}>
+              {kept && <div className="mt-2"><KeepLine kept={kept} setKept={setKept} existing={existingFile} /></div>}
+            </Source>
             <Source label="Intake call" value={notes} onChange={setNotes}
               placeholder="Paste your notes or the transcript from the call with the hiring manager, or drop the file here."
               hint="Notes or a full transcript both work." />
@@ -137,6 +169,8 @@ export default function JobAutofill({ onResult, collapsible, what = 'the job' })
           </div>
         </div>
       )}
+      {/* Folded away, the form still says what will happen to a file dropped in, so nothing is kept unseen. */}
+      {!open && kept && <div className="border-t border-brand-200 px-4 py-2.5"><KeepLine kept={kept} setKept={setKept} existing={existingFile} /></div>}
     </section>
   );
 }
