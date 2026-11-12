@@ -2265,8 +2265,8 @@ function entryIntoApplication({ entry, person, into, there, job, user }) {
  * agency on an entry that was never on A's record, goes on to client B as before.
  *
  * The limits. What was sent before this version and deleted since is not known: at the first start of this version
- * the résumés then on file on people's own applications were recorded (with their client), and every earlier résumé
- * then set aside (with no client, since it may be what was sent the client they were with: see recordSentBefore); a
+ * the résumés then on file on people's own applications were recorded (with their client), and the earlier résumés
+ * set aside when an application of somebody's own went back to The Book (with no client: see recordSentBefore); a
  * file deleted before that left no fingerprint. And a file the agency attaches to somebody's entry once they
  * are back in The Book is the agency's choice, and is not checked: rule (2) looks only at the earlier résumés of the
  * application leaving a client's job, and only when it leaves.
@@ -2291,11 +2291,12 @@ function clientsCopy(a) {
 
 /**
  * Once, at the first start of this version: what people sent clients before anything was recorded (see clientsCopy).
- * The résumé on each application they made themselves that is on a job, with that job's client; and each earlier
- * résumé that somebody set aside (kept_by is set), with no client. Before this version a file was set aside that way
- * when somebody went back to The Book (where it may be what they had sent the client they were with), and also when
- * they were saved again with a newer résumé or two of their records were joined: which of these it was is not known,
- * so all of them count. Files no longer on disk are skipped. A setting says it has been done, so it is done once.
+ * The résumé on each application they made themselves that is on a job, with that job's client. And, with no client,
+ * each earlier résumé that was set aside when an application they had made themselves went back to The Book: that
+ * return left the agency's note "From their own application for ..." on it, written at the same moment as the file
+ * was set aside. Other earlier résumés are not recorded: before this version a file was also set aside when
+ * somebody was saved again with a newer résumé or two of their records were joined, and those are the agency's own.
+ * Files no longer on disk are skipped. A setting says it has been done, so it is done once.
  */
 function recordSentBefore() {
   if (getSetting('sent_resumes_backfilled')) return;
@@ -2304,7 +2305,9 @@ function recordSentBefore() {
     const own = q.all(`SELECT resume_file, (SELECT client_id FROM jobs WHERE jobs.id = applications.job_id) AS client_id FROM applications
       WHERE job_id IS NOT NULL AND resume_file IS NOT NULL AND ${OWN_APPLICATION}`);
     for (const r of own) recordSent(r.client_id, r.resume_file, t);
-    for (const r of q.all('SELECT resume_file FROM earlier_resumes WHERE kept_by IS NOT NULL')) recordSent(null, r.resume_file, t);
+    const theirs = q.all(`SELECT r.resume_file FROM earlier_resumes r WHERE r.kept_by IS NOT NULL AND EXISTS (
+      SELECT 1 FROM notes n WHERE n.application_id = r.application_id AND n.created_at = r.kept_at AND n.body LIKE 'From their own application for %')`);
+    for (const r of theirs) recordSent(null, r.resume_file, t);
     setSetting('sent_resumes_backfilled', t);
   });
 }

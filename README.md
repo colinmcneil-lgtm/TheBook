@@ -177,8 +177,8 @@ candidate in the app, and put on a job later when the right role comes up.
   the agency found keeps the agency's résumé however often they were on and off the client's jobs. What they sent
   one client is not held back from an entry of theirs that was never on that client's jobs. The limits: what was
   sent before this version and deleted since is not known (at its first start, the résumés then on people's own
-  applications were recorded with their client, and every earlier résumé then set aside with no client, which may
-  hold back an agency's file that was once replaced and is attached again); and a résumé the agency attaches to
+  applications were recorded with their client, and the earlier résumés set aside when an application of
+  somebody's own had gone back to The Book with no client); and a résumé the agency attaches to
   somebody's entry after they are back in The Book is the agency's choice, and is not checked.
 - **What a hiring team could still work out.** Nothing from before the job is shown, but two things are as they
   are because the entry is kept and not copied: its history line reads "Added to (job) at (stage)", where somebody

@@ -963,6 +963,7 @@ test('a database from before this version: what was on file is recorded once at 
   const uploadsDir = path.join(dataDir, 'uploads');
   const G = 'Gus Example, sent to Maple Freight before this version';
   const H = 'Hal Example, set aside when he went back to The Book before this version';
+  const U = 'Una Example, from the agency\'s files, saved again over a newer one before this version';
   const ids = {};
   const database = new DatabaseSync(path.join(dataDir, 'app.db'));
   try {
@@ -984,6 +985,16 @@ test('a database from before this version: what was on file is recorded once at 
     const hal = run('INSERT INTO candidates (client_id, name, email, created_at) VALUES (NULL, ?, ?, ?)', 'Hal Example', 'hal@example.com', t);
     ids.hal = run(`INSERT INTO applications (candidate_id, job_id, stage_id, source, applied_at, stage_entered_at, updated_at) VALUES (?, NULL, NULL, 'agency_sourced', ?, ?, ?)`, hal, t, t, t);
     run('INSERT INTO earlier_resumes (application_id, resume_file, resume_name, kept_at, kept_by) VALUES (?, ?, ?, ?, ?)', ids.hal, put('0000aaaa-hal.pdf', H), 'Hal.pdf', t, alexId);
+    // It was an application he had made himself: the return left the agency's note on it, at the same moment.
+    run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', ids.hal, alexId,
+      'From their own application for Payroll Clerk at Maple Freight, where they agreed to their data being processed on 2026-01-05. Kept for the agency only.', t);
+    // Una is somebody the agency found. It saved her with U, then with a newer file, then with U again: U is on her
+    // entry and also among its earlier résumés. Nothing here was sent to a client, so none of it is recorded.
+    const una = run('INSERT INTO candidates (client_id, name, email, created_at) VALUES (NULL, ?, ?, ?)', 'Una Example', 'una@example.com', t);
+    ids.una = run(`INSERT INTO applications (candidate_id, job_id, stage_id, source, resume_file, resume_name, applied_at, stage_entered_at, updated_at)
+         VALUES (?, NULL, NULL, 'agency_sourced', ?, 'Una.pdf', ?, ?, ?)`, una, put('0000aaaa-una-now.pdf', U), t, t, t);
+    run('INSERT INTO earlier_resumes (application_id, resume_file, resume_name, kept_at, kept_by) VALUES (?, ?, ?, ?, ?)', ids.una, put('0000aaaa-una-first.pdf', U), 'Una.pdf', t, alexId);
+    run('INSERT INTO earlier_resumes (application_id, resume_file, resume_name, kept_at, kept_by) VALUES (?, ?, ?, ?, ?)', ids.una, put('0000aaaa-una-newer.pdf', `${U}, the newer one`), 'Una newer.pdf', t, alexId);
     // An application of somebody's own whose file is no longer on disk is passed over.
     const gone = run('INSERT INTO candidates (client_id, name, email, created_at) VALUES (?, ?, ?, ?)', client.maple, 'Ivo Example', 'ivo@example.com', t);
     run(`INSERT INTO applications (candidate_id, job_id, stage_id, source, resume_file, resume_name, consent_at, applied_at, stage_entered_at, updated_at)
@@ -996,9 +1007,13 @@ test('a database from before this version: what was on file is recorded once at 
   assert.equal(db(`SELECT COUNT(*) AS n FROM settings WHERE key = 'sent_resumes_backfilled'`)[0].n, 1);
   const own = db(`SELECT COUNT(*) AS n FROM applications WHERE job_id IS NOT NULL AND resume_file IS NOT NULL AND resume_file != 'missing-file.pdf'
     AND (consent_at IS NOT NULL OR source IN ('careers_page', 'our_website'))`)[0].n;
-  const kept = db('SELECT COUNT(*) AS n FROM earlier_resumes WHERE kept_by IS NOT NULL')[0].n;
   const recorded = db('SELECT COUNT(*) AS n FROM sent_resumes')[0].n;
-  assert.equal(recorded, own + kept, 'one row for each file on disk, and none for the missing one');
+  // Earlier in this file people's own applications went back to The Book too: each left its note and its file set aside.
+  const theirs = db(`SELECT COUNT(*) AS n FROM earlier_resumes r WHERE r.kept_by IS NOT NULL AND EXISTS (SELECT 1 FROM notes n
+    WHERE n.application_id = r.application_id AND n.created_at = r.kept_at AND n.body LIKE 'From their own application for %')`)[0].n;
+  assert.ok(theirs < db('SELECT COUNT(*) AS n FROM earlier_resumes WHERE kept_by IS NOT NULL')[0].n, 'not every earlier résumé is one they sent');
+  assert.equal(recorded, own + theirs, 'one row for each file on people\'s own applications that is on disk, and one for each set aside when such an application went back');
+  assert.deepEqual(fingerprints(Buffer.from(U)), [], 'what the agency saved again over a newer file is not what anybody sent a client');
 
   // (1) Gus's entry, put on a Maple job as a second record of him and removed: the copy of G is held back.
   await putOn(ids.gus, await newJob('Loader, Gus'));
@@ -1013,6 +1028,11 @@ test('a database from before this version: what was on file is recorded once at 
   assert.equal(await resumeText(alex, ids.hal), 404);
   await agencyKeeps(ids.hal, H);
   await northlineGetsNothing(ids.hal, 'Hal.pdf', 'Hal again.pdf');
+
+  // Una, put on a Maple job and removed: the agency's résumé stays on her profile, and the next client's team gets it.
+  await putOn(ids.una, await newJob('Loader, Una'));
+  await removeFrom(ids.una);
+  await stillGoesOn(ids.una, U);
 
   // A second start records nothing more.
   const before = db('SELECT id, client_id, hash, sent_at FROM sent_resumes ORDER BY id');
