@@ -1308,11 +1308,12 @@ test('starting on a database made by the live code adds the board’s tables and
       applications: rebuilt('applications').replace('job_id INTEGER NOT NULL REFERENCES', 'job_id INTEGER REFERENCES').replace('stage_id INTEGER NOT NULL REFERENCES', 'stage_id INTEGER REFERENCES')
         .replace('owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,', 'owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL, general_until TEXT,') };
     // (The users table gains one column at its end as well, for each person's choice about e-mails for new messages:
-    // a later feature, tested in test/messages.test.mjs. It is on in the rows that were there.)
+    // a later feature, tested in test/messages.test.mjs; and one more for e-mails about notes, in test/note-mail.test.mjs.
+    // Both are on in the rows that were there.)
     for (const [name, sql] of Object.entries(expected)) {
       if (name === 'users') {
         const was = /\(([\s\S]*)\)/.exec(sql)[1], now = /\(([\s\S]*)\)/.exec(after.objects.users)[1];
-        assert.ok(now.startsWith(was) && /^,\s*message_mail INTEGER NOT NULL DEFAULT 1$/.test(now.slice(was.length)), 'users was changed by more than its one new column');
+        assert.ok(now.startsWith(was) && /^,\s*message_mail INTEGER NOT NULL DEFAULT 1, note_mail INTEGER NOT NULL DEFAULT 1$/.test(now.slice(was.length)), 'users was changed by more than its new columns');
         continue;
       }
       if (name !== 'jobs') { assert.equal(after.objects[name], sql, `${name} was changed or dropped`); continue; }
@@ -1345,9 +1346,9 @@ test('starting on a database made by the live code adds the board’s tables and
     // The five columns for the client's own job description file are that feature's, and empty.
     assert.ok(settled.jobs.every((j) => j.jd_file === null && j.jd_file_name === null && j.jd_file_size === null && j.jd_file_by === null && j.jd_file_at === null));
     const jobsAsTheyWere = settled.jobs.map(({ account_executive_id, jd_file, jd_file_name, jd_file_size, jd_file_by, jd_file_at, ...job }) => job);
-    // Each person's switch for e-mails about new messages is on: that column is the messages feature's.
-    assert.deepEqual(settled.users.map((u) => u.message_mail), settled.users.map(() => 1));
-    const usersAsTheyWere = settled.users.map(({ message_mail, ...user }) => user);
+    // Each person's switches for e-mails about new messages and about notes are on: those columns are those features'.
+    assert.deepEqual(settled.users.map((u) => [u.message_mail, u.note_mail]), settled.users.map(() => [1, 1]));
+    const usersAsTheyWere = settled.users.map(({ message_mail, note_mail, ...user }) => user);
     assert.deepEqual(plain({ ...settled, jobs: jobsAsTheyWere, users: usersAsTheyWere, settings: settled.settings.filter((s) => !theirs(s)) }),
       plain({ ...before.rows, settings: before.rows.settings.filter((s) => !theirs(s)), applications: before.rows.applications.map((row) => ({ ...row, general_until: null })) }));
     assert.ok(!after.rows.settings.some((s) => s.key.startsWith('board_')));   // the board's settings are only written when an admin saves them

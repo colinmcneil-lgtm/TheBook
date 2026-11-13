@@ -488,9 +488,9 @@ did, because the first start gives each job that was there its creator.
 `test/pool.test.mjs` runs the rest against the real API and a stand-in for Metaview (and, where this meets the
 agency's jobs page, a stand-in for the mail provider), on four ports: the fifteenth,
 sixteenth, eleventh and twelfth from `ORACLE_TEST_PORT`, or four in a row from `POOL_TEST_PORT` when that is set
-(`test/oracle-helpers.mjs` lists which test file uses which port, and a unit test checks that no two share one). `npm test` uses thirty-seven ports in a row from `ORACLE_TEST_PORT` (3610 unless
+(`test/oracle-helpers.mjs` lists which test file uses which port, and a unit test checks that no two share one). `npm test` uses thirty-eight ports in a row from `ORACLE_TEST_PORT` (3610 unless
 set): `ORACLE_TEST_PORT=5080 npm test`. Node refuses to fetch from a few ports whatever is listening on them
-(5060 and 5061 among them), so a base that puts one of the thirty-seven on such a port, any base from 5024 to 5061 for
+(5060 and 5061 among them), so a base that puts one of the thirty-eight on such a port, any base from 5023 to 5061 for
 one, is refused before a test runs, with a sentence that says which base to choose instead.
 
 ## Account executives and the job board
@@ -627,6 +627,21 @@ a back arrow.
   themselves with **Email me about new messages** in Settings, under Your account. These are e-mails to the team: the
   switch for e-mails to candidates does not affect them. If the e-mail cannot be sent, the message is still sent, the
   log says so, and the next message tries again. Nobody is noted as e-mailed while e-mail is not connected.
+- **E-mail about notes on your candidates and jobs.** Not a message, but told the same way: with e-mail connected, when
+  somebody writes a note on a candidate, the candidate's owner and the account executive of the job they are on are
+  e-mailed ("Priya Nair wrote a note on Tom Kaplan (Head of Sales)"), with who wrote it, the job and client, whether
+  you are told as the owner or as the account executive, the first 200 characters and a link to the profile (when
+  `APP_URL` is set). Somebody in The Book on no job has no account executive, so only their owner is told. One person who
+  is both gets one e-mail, nobody is e-mailed about their own note, and only people active on the agency team are
+  e-mailed: never a client's user, somebody deactivated or somebody still waiting for their account. A note from the
+  client's hiring team on their own job counts, and so does a note for the agency only (it says so). What counts is a
+  note somebody chose to write: in the Notes box, when adding somebody, in a debrief from To do, or a call's notes saved
+  to the profile from Otterview (the first time). Notes The Book files by itself, such as a covering note kept when
+  somebody in The Book goes on a job, do not. After an e-mail about a candidate, further notes on them send you nothing
+  for 15 minutes; the next note after that does. Each person can switch it off with **Email me about notes on my
+  candidates and jobs** in Settings, under Your account, just below the switch for messages. As with messages, the note
+  is saved and answered whatever happens to the e-mail, an e-mail that cannot be sent is not counted (the next note
+  tries again), and nothing is noted while e-mail is not connected. `test/note-mail.test.mjs` runs all of this.
 - **People who leave the team.** A deactivated teammate's messages stay, with their name; a one-to-one conversation with
   them can still be read but no longer written in. Somebody removed from the database outright is shown as "Somebody no
   longer on the team"; the conversation stays for the others.
@@ -1580,7 +1595,7 @@ The `Dockerfile` deliberately has no `VOLUME` instruction, because Railway rejec
   rejections and messages written from a profile go on being saved on the candidate's record, marked "Saved, not
   sent", until an admin switches on **Send emails to candidates** on the Email delivery card in Settings; the screens
   that would send one say so. E-mails to your own team (account requests, password links, review requests, a
-  confidential post that came down) are sent as soon as delivery is connected, whatever the switch says.
+  confidential post that came down, new messages, notes on your candidates and jobs) are sent as soon as delivery is connected, whatever the switch says.
   - `RESEND_API_KEY` and `MAIL_FROM`: sends through [Resend](https://resend.com)'s web API. Use this on Railway,
     whose Hobby plan blocks SMTP. Create a Resend account, verify your sending domain there, create an API key,
     and set `MAIL_FROM` to an address on that domain, for example `Your Agency <hiring@youragency.com>`.
@@ -1619,6 +1634,7 @@ server/
   reporting.js  The Individual and Clients reports: the record of submissions, first interviews, placements and searches, and the day counting starts
   todos.js   To do: each person's own lists of jobs to work on and people to prep and debrief, and what interviews add to them
   messages.js  Messages: the agency team's one-to-one and group conversations, unread counts and the e-mail heads-up
+  note-mail.js  E-mails to a candidate's owner and their job's account executive when somebody writes a note, and each person's switch for them
   board.js   Jobs on our website: the agency's confidential posts, the check that keeps the client out of them, the public board and its feed
   jobdescription.js  The job description on the Brief: the PDF with or without the client's name, its check, and the client's own file
   jobpdf.js  Lays a job's advert out as an A4 PDF (pdfkit), with the fonts in server/fonts

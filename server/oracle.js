@@ -31,6 +31,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { q, now, tx, getSetting, DATA_DIR, UPLOAD_DIR } from './db.js';
+import { noteWritten } from './note-mail.js';
 import { aiConfigured } from './autofill.js';
 import { measureWebm, webmWithDuration } from './webm.js';
 
@@ -1399,6 +1400,7 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
     if (!call.application_id) bad('Add this call to a candidate first, so the note has a profile to go on.');
     if (!call.notes) bad('There are no notes on this call to save yet.');
     const body = `Notes from ${call.title}\n\n${call.notes}`.slice(0, 10000);
+    let written = null; // the note made the first time, which is told about by e-mail; saving again changes the same note
     tx(() => {
       // Saving again after editing the summary updates the note already on the profile, so the same call never leaves
       // two. Only a note that is still this call's own is written over: still there, on this profile and agency-only.
@@ -1407,10 +1409,12 @@ export function registerOracle(api, { agencyOnly, clean, int, takeHit, loadApp, 
       else {
         const noteId = q.insert('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', call.application_id, req.user.id, body, now());
         q.run('UPDATE calls SET note_id = ? WHERE id = ?', noteId, call.id);
+        written = { applicationId: call.application_id, noteId, body };
       }
       q.run('UPDATE applications SET updated_at = ? WHERE id = ?', now(), call.application_id);
     });
     res.json({ ok: true });
+    if (written) noteWritten({ ...written, writer: req.user }); // the candidate's owner and their job's account executive are told (note-mail.js)
   });
 
   // Remove a call for good: the audio, the pieces of an unfinished recording, the transcript and the notes.

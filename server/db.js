@@ -999,6 +999,23 @@ addColumn('jobs', 'jd_file_size', 'INTEGER');
 addColumn('jobs', 'jd_file_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
 addColumn('jobs', 'jd_file_at', 'TEXT');
 
+// ---------- e-mails to the team about notes on candidates ----------
+// Somebody writes a note on a candidate, and the candidate's owner and the account executive of their job are told by
+// e-mail (see note-mail.js). Each person's own choice, on unless they switch it off in Settings:
+addColumn('users', 'note_mail', 'INTEGER NOT NULL DEFAULT 1');
+// One row for each person and candidate they were e-mailed about in the last 15 minutes: when, and the note it was
+// about. Further notes on that candidate send that person nothing until the 15 minutes are over. Rows older than that
+// are cleared each time a note is written, so the table stays small; a row whose e-mail did not go is taken out again.
+db.exec(`
+CREATE TABLE IF NOT EXISTS note_mail (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  note_id INTEGER NOT NULL,                          -- the note the e-mail was about
+  mailed_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, application_id)
+);`);
+// ---------- end of e-mails to the team about notes ----------
+
 export const q = {
   all: (sql, ...p) => db.prepare(sql).all(...p),
   get: (sql, ...p) => db.prepare(sql).get(...p),

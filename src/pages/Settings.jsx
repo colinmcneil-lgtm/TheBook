@@ -36,10 +36,37 @@ function MessageMail() {
   });
   if (value == null) return null;
   return (
-    <div className="space-y-1.5 border-t border-line pt-4">
+    <div className="space-y-1.5">
       <Switch checked={value} onChange={(next) => !busy && flip(next)} label="Email me about new messages" />
       <p className="text-[13px] text-stone-500">
         One email when somebody on your team writes to you, and no more about that conversation until you have read it.
+        {!mailConfigured && ' Email delivery is not connected yet, so nothing is sent for now.'}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Each person's own choice about e-mails when somebody else writes a note on a candidate they own, or on a candidate on
+ * a job they are the account executive of. On until they switch it off; saved the moment it is flipped. The agency's only.
+ */
+function NoteMail() {
+  const { mailConfigured } = useApp();
+  const toast = useToast();
+  const { data } = useApi('/note-mail/settings');
+  const [on, setOn] = useState(null);
+  const value = on ?? data?.email;
+  const [flip, busy] = useAction(async (next) => {
+    await api.put('/note-mail/settings', { email: next });
+    setOn(next);
+    toast(next ? 'You will be emailed about notes on your candidates and jobs' : 'You will not be emailed about notes on your candidates and jobs');
+  });
+  if (value == null) return null;
+  return (
+    <div className="space-y-1.5">
+      <Switch checked={value} onChange={(next) => !busy && flip(next)} label="Email me about notes on my candidates and jobs" />
+      <p className="text-[13px] text-stone-500">
+        An email when somebody else writes a note on a candidate you own, or on a candidate on a job you are the account executive of. At most one email per candidate every 15 minutes.
         {!mailConfigured && ' Email delivery is not connected yet, so nothing is sent for now.'}
       </p>
     </div>
@@ -64,7 +91,12 @@ function Account() {
           <Field label="New password" hint="At least 8 characters."><Input type="password" autoComplete="new-password" required minLength={8} value={form.next} onChange={(e) => setForm({ ...form, next: e.target.value })} /></Field>
           <Button type="submit" variant="primary" busy={busy}>Change password</Button>
         </form>
-        {isAgency && <MessageMail />}
+        {isAgency && (
+          <div className="space-y-4 border-t border-line pt-4">
+            <MessageMail />
+            <NoteMail />
+          </div>
+        )}
       </div>
     </Card>
   );

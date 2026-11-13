@@ -16,6 +16,7 @@ import * as board from './board.js';
 import * as reviews from './reviews.js';
 import * as messages from './messages.js';
 import * as jobDescription from './jobdescription.js';
+import { registerNoteMail, noteWritten } from './note-mail.js';
 
 export const api = express.Router();
 // Parsed here rather than app-wide, so a malformed body is answered by this router's error handler and its contents
@@ -600,6 +601,9 @@ reviews.registerReviews(api, { agencyOnly, bad, text, int, loadApp: (id, user) =
 // Messages between people on the agency team are a module of their own as well. The routes below tell it when an
 // application is folded into another, so that messages about it stay on the person's profile.
 messages.registerMessages(api, { agencyOnly, bad });
+// E-mails to the team about notes on candidates are a module of their own too: each person's switch for them is there,
+// and the routes below that write a note somebody chose to write tell it (each call to `noteWritten`).
+registerNoteMail(api, { agencyOnly, bad });
 // A job's description as a PDF, and the client's own file kept with the job, are a module of their own too. Both are
 // the agency's: every route there is for the agency only and finds the job through loadJob, as the job's own routes do.
 jobDescription.registerJobDescription(api, { agencyOnly, bad, clean, takeHit, removeUpload, ALLOWED_RESUME, HttpError,
@@ -1522,7 +1526,7 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
       const note = text(b.note, 10000);
       // A note on someone who is on no job is the agency's own, whatever the form said: no client was in view when it was written.
       const agencyOnlyNote = general || b.note_private === 'true' || b.note_private === true;
-      if (note) q.run('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, ?, ?)', appId, req.user.id, note, agencyOnlyNote ? 1 : 0, t);
+      const noteId = note ? q.insert('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, ?, ?)', appId, req.user.id, note, agencyOnlyNote ? 1 : 0, t) : null;
       // A photo sent with them becomes the record's photo (replacing an older one).
       let replaced = null;
       if (photo) {
@@ -1535,13 +1539,17 @@ api.post('/applications', agencyOnly, candidateUpload, (req, res) => {
       return {
         id: appId, known: known || Boolean(book), merged: known || Boolean(book), name: cand.name, general,
         ...(book ? { moved: true, joined: known } : {}), ...(resumeChange ? { resume: resumeChange.change } : {}),
-        spare: [replaced, resumeChange?.spare, sparePhoto],
+        spare: [replaced, resumeChange?.spare, sparePhoto], noteId, note,
       };
     });
     stored = true;
     photo = null; // it belongs to the record now
     result.spare.forEach(removeUpload);
     delete result.spare;
+    // A note written with them is told to their owner and the job's account executive, as one written on the profile is.
+    if (result.noteId) noteWritten({ applicationId: result.id, noteId: result.noteId, writer: req.user, body: result.note });
+    delete result.noteId;
+    delete result.note;
     res.json(photoRejected ? { ...result, photo_rejected: true } : result);
   } finally {
     if (!stored) removeUpload(req.file?.filename);
@@ -1830,6 +1838,8 @@ api.post('/applications/:id/notes', (req, res) => {
     a.id, req.user.id, body, isAgency(req.user) && (req.body.private || isGeneral(a)) ? 1 : 0, now());
   q.run('UPDATE applications SET updated_at = ? WHERE id = ?', now(), a.id);
   res.json({ id });
+  // The candidate's owner and their job's account executive are told by e-mail, after the answer has gone (note-mail.js).
+  noteWritten({ applicationId: a.id, noteId: id, writer: req.user, body });
 });
 
 api.delete('/notes/:id', (req, res) => {

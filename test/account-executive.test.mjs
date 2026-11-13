@@ -548,9 +548,10 @@ test('starting on a database from before fills in each job’s account executive
     applications: rebuilt('applications').replace('job_id INTEGER NOT NULL REFERENCES', 'job_id INTEGER REFERENCES').replace('stage_id INTEGER NOT NULL REFERENCES', 'stage_id INTEGER REFERENCES')
       .replace('owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,', 'owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL, general_until TEXT,') };
   // (The users table gains one column at its end too, for each person's choice about e-mails for new messages, a later
-  // feature with tests of its own in test/messages.test.mjs. It is on in every row that was there.)
+  // feature with tests of its own in test/messages.test.mjs, and then one more for their choice about e-mails for notes
+  // on their candidates and jobs, in test/note-mail.test.mjs. Both are on in every row that was there.)
   const usersBefore = /\(([\s\S]*)\)/.exec(before.objects.users)[1], usersNow = /\(([\s\S]*)\)/.exec(first.objects.users)[1];
-  assert.ok(usersNow.startsWith(usersBefore) && /^,\s*message_mail INTEGER NOT NULL DEFAULT 1$/.test(usersNow.slice(usersBefore.length)), 'users was changed by more than its one new column');
+  assert.ok(usersNow.startsWith(usersBefore) && /^,\s*message_mail INTEGER NOT NULL DEFAULT 1, note_mail INTEGER NOT NULL DEFAULT 1$/.test(usersNow.slice(usersBefore.length)), 'users was changed by more than its new columns');
   for (const [name, sql] of Object.entries(expected)) if (name !== 'jobs' && name !== 'users') assert.equal(first.objects[name], sql, `${name} was changed or dropped`);
   // (The agency's public jobs page came after the fixture was made: its own tables and indexes, all named board_, are
   // new and are covered by its own upgrade test. So are the tables and indexes of people saved without a job, which
@@ -569,8 +570,11 @@ test('starting on a database from before fills in each job’s account executive
   // (And cycles, a job ticked on somebody's To do list: one table and four indexes. The fixture has no ticked job,
   // so the table is empty; test/todos.test.mjs is about it.)
   const THE_CYCLES = ['cycles', 'idx_cycles_at', 'idx_cycles_job', 'idx_cycles_todo', 'idx_cycles_user'];
-  assert.deepEqual(Object.keys(first.objects).filter(notTheBoards).sort(), [...Object.keys(before.objects), ...THE_BOOKS, ...THE_REVIEWS, ...THE_SENT, ...THE_MESSAGES, ...THE_CYCLES].sort(), 'nothing was added beside the column');
-  for (const table of [...THE_BOOKS, ...THE_REVIEWS, ...THE_SENT, ...THE_MESSAGES, ...THE_CYCLES].filter((name) => first.rows[name])) assert.deepEqual(first.rows[table], [], `${table} is empty`);
+  // (And who was e-mailed about notes on a candidate in the last 15 minutes: one table, empty; test/note-mail.test.mjs is about it.)
+  const THE_NOTE_MAILS = ['note_mail'];
+  const LATER = [...THE_BOOKS, ...THE_REVIEWS, ...THE_SENT, ...THE_MESSAGES, ...THE_CYCLES, ...THE_NOTE_MAILS];
+  assert.deepEqual(Object.keys(first.objects).filter(notTheBoards).sort(), [...Object.keys(before.objects), ...LATER].sort(), 'nothing was added beside the column');
+  for (const table of LATER.filter((name) => first.rows[name])) assert.deepEqual(first.rows[table], [], `${table} is empty`);
   // (Starting also does what it did before this version: it notes when the server first ran and files candidates' names for looking up.)
   const STARTING_WRITES = ['jobs', 'settings', 'candidate_name_keys', 'candidate_name_dirty', 'candidate_phone_keys'];
   // (The agency's public jobs page adds one e-mail template of its own on start; the templates that were there are untouched.)
@@ -580,7 +584,7 @@ test('starting on a database from before fills in each job’s account executive
   for (const [table, rows] of Object.entries(before.rows)) {
     if (STARTING_WRITES.includes(table)) continue;
     assert.deepEqual(plain(table === 'email_templates' ? first.rows[table].filter((row) => !theBoards(row)) : first.rows[table]),
-      plain(table === 'applications' ? rows.map((row) => ({ ...row, general_until: null })) : table === 'users' ? rows.map((row) => ({ ...row, message_mail: 1 })) : rows), `rows in ${table} changed`);
+      plain(table === 'applications' ? rows.map((row) => ({ ...row, general_until: null })) : table === 'users' ? rows.map((row) => ({ ...row, message_mail: 1, note_mail: 1 })) : rows), `rows in ${table} changed`);
   }
   for (const row of before.rows.settings) assert.deepEqual(first.rows.settings.find((s) => s.key === row.key), row, `the setting ${row.key} changed`);
 

@@ -18,7 +18,7 @@ export const FIXTURES = path.join(HERE, 'fixtures');
 export const RECORDING = fs.readFileSync(path.join(FIXTURES, 'call.webm'));
 export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-canned.json'), 'utf8'));
 
-// Ports: every test file's ports are counted from ORACLE_TEST_PORT (3610 unless set), thirty-seven in a row in all
+// Ports: every test file's ports are counted from ORACLE_TEST_PORT (3610 unless set), thirty-eight in a row in all
 // (PORT_PLAN below is the same list, for the code).
 //   +0 to +4    Otterview tests: three for servers, then one for each stand-in
 //   +5 to +8    the job board tests: two servers, then a stand-in each for the AI and mail services
@@ -33,15 +33,16 @@ export const CANNED = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'deepgram-c
 //   +32, +33    the team review tests (reviews.test.mjs): a server with e-mail delivery connected, and a stand-in for its mail provider
 //   +34, +35    the messages tests (messages.test.mjs): a server with e-mail delivery connected, and a stand-in for its mail provider
 //   +36         a job's description as a PDF and the client's own file (jobdescription.test.mjs): a server
+//   +37         e-mails to the team about notes on candidates (note-mail.test.mjs): a server (its mail stand-in takes any free port)
 // Node refuses to fetch from a few ports whatever is listening there (the list browsers refuse, among them 3659,
 // 4045, 5060, 5061, 6000 and 6665 to 6669). Tests on such a port fail with nothing but "fetch failed", and one of
-// them waits for minutes first. So a base that puts any of the thirty-seven on one of them is refused here, before a
+// them waits for minutes first. So a base that puts any of the thirty-eight on one of them is refused here, before a
 // single test runs, with a sentence that says which port and what to choose instead.
 const REFUSED_BY_NODE = [1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139,
   143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061,
   6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080];
-export const PORT_COUNT = 37;
-/** Why this base cannot be used for the tests' thirty-seven ports, as a sentence; nothing when it can. */
+export const PORT_COUNT = 38;
+/** Why this base cannot be used for the tests' thirty-eight ports, as a sentence; nothing when it can. */
 export function portsProblem(base) {
   if (!Number.isInteger(base) || base < 1024 || base + PORT_COUNT - 1 > 65535) return `ORACLE_TEST_PORT must be a whole number from 1024 to ${65536 - PORT_COUNT}: the tests use ${PORT_COUNT} ports in a row from it.`;
   const refused = REFUSED_BY_NODE.filter((port) => port >= base && port < base + PORT_COUNT);
@@ -54,18 +55,18 @@ const BASE_PORT = Number(process.env.ORACLE_TEST_PORT) || 3610;
 const problem = portsProblem(BASE_PORT);
 if (problem) throw new Error(problem);
 /**
- * Which of the thirty-seven each group of tests takes: where its ports start, counted from the base, and how many in a row.
+ * Which of the thirty-eight each group of tests takes: where its ports start, counted from the base, and how many in a row.
  * The test files run at the same time, so no two groups may overlap; the unit tests check this list for that, and
  * every file takes its ports from it, through PORTS below (pool.test.mjs can be given four of its own instead).
  */
-export const PORT_PLAN = { oracle: [0, 5], board: [5, 4], resumeDrop: [9, 1], poolMail: [10, 2], workspace: [12, 2], pool: [14, 2], reporting: [16, 2], todos: [18, 2], metaview: [20, 10], accountExecutive: [30, 2], reviews: [32, 2], messages: [34, 2], jobDescription: [36, 1] };
+export const PORT_PLAN = { oracle: [0, 5], board: [5, 4], resumeDrop: [9, 1], poolMail: [10, 2], workspace: [12, 2], pool: [14, 2], reporting: [16, 2], todos: [18, 2], metaview: [20, 10], accountExecutive: [30, 2], reviews: [32, 2], messages: [34, 2], jobDescription: [36, 1], noteMail: [37, 1] };
 const first = (group) => BASE_PORT + PORT_PLAN[group][0];
 export const PORTS = {
   main: first('oracle'), bare: first('oracle') + 1, restart: first('oracle') + 2, deepgram: first('oracle') + 3, anthropic: first('oracle') + 4,
   board: first('board'), poolMail: first('poolMail'), workspace: first('workspace'), workspaceAi: first('workspace') + 1, pool: first('pool'), reporting: first('reporting'), todos: first('todos'), metaview: first('metaview'),
   accountExecutive: first('accountExecutive'), accountExecutiveOld: first('accountExecutive') + 1,
   reviews: first('reviews'), reviewsMail: first('reviews') + 1, resumeDrop: first('resumeDrop'),
-  messages: first('messages'), messagesMail: first('messages') + 1, jobDescription: first('jobDescription'),
+  messages: first('messages'), messagesMail: first('messages') + 1, jobDescription: first('jobDescription'), noteMail: first('noteMail'),
 };
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

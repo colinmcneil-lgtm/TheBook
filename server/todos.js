@@ -32,6 +32,7 @@
 // those points. Interviews are only ever deleted along with their candidate or job, and the database removes those
 // items by itself (see the table in db.js).
 import { q, tx, now, getSetting, setSetting } from './db.js';
+import { noteWritten } from './note-mail.js';
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -434,6 +435,7 @@ export function registerTodos(api, { agencyOnly, bad, clean, text, int }) {
     const item = mine(req);
     const b = req.body || {};
     if (b.done !== undefined && typeof b.done !== 'boolean') bad('done must be true or false.');
+    let written = null; // a debrief note written now (not one sent again), to be told about by e-mail
     const noteId = tx(() => {
       if (b.note !== undefined) q.run('UPDATE todos SET note = ? WHERE id = ?', clean(b.note, NOTE_MAX), item.id);
       if (b.done === true) {
@@ -455,7 +457,8 @@ export function registerTodos(api, { agencyOnly, bad, clean, text, int }) {
         const sent = item.done_at ? q.get('SELECT id FROM notes WHERE application_id = ? AND user_id = ? AND private = 1 AND body = ?', item.application_id, req.user.id, body) : null;
         if (sent) return sent.id;
         q.run('UPDATE applications SET updated_at = ? WHERE id = ?', now(), item.application_id);
-        return q.insert('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', item.application_id, req.user.id, body, now());
+        written = { applicationId: item.application_id, noteId: q.insert('INSERT INTO notes (application_id, user_id, body, private, created_at) VALUES (?, ?, ?, 1, ?)', item.application_id, req.user.id, body, now()), body };
+        return written.noteId;
       }
       if (b.done === false && item.done_at) {
         if (onList(req.user.id, item.kind, item.kind === 'job' ? 'job_id' : 'application_id', item.job_id ?? item.application_id)) {
@@ -474,6 +477,9 @@ export function registerTodos(api, { agencyOnly, bad, clean, text, int }) {
       return null;
     });
     res.json({ ok: true, ...(noteId ? { note_id: noteId } : {}) });
+    // The debrief is a note like one written on the profile: the candidate's owner and their job's account executive
+    // are told by e-mail (note-mail.js).
+    if (written) noteWritten({ ...written, writer: req.user });
   });
 
   // Move an item to a place among what is still to do on its own list. Prep and debrief are separate items, so
