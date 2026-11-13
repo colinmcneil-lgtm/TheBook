@@ -11,12 +11,19 @@ const ClearToastsContext = createContext(() => {});
 /** Takes every toast off the screen at once: for a dialog that opens where they would cover its buttons. */
 export const useClearToasts = () => useContext(ClearToastsContext);
 
+/**
+ * Messages at the foot of the window. `toast(message)` for news, `toast(message, 'error')` for something that went
+ * wrong. A message can carry one action with it, `{ action: { label, onClick } }` (Undo, say), and stays up for
+ * `duration` milliseconds, long enough to reach it; pressing it takes the message away. A message with a `key`
+ * takes the place of one already up with the same key: an older Undo about the same thing would no longer be true.
+ */
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
-  const push = (message, kind = 'ok') => {
+  const dismiss = (id) => setToasts((t) => t.filter((x) => x.id !== id));
+  const push = (message, kind = 'ok', { action, duration, key } = {}) => {
     const id = Math.random();
-    setToasts((t) => [...t, { id, message, kind }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 6000 : 3200);
+    setToasts((t) => [...t.filter((x) => key == null || x.key !== key), { id, message, kind, action, key }]);
+    setTimeout(() => dismiss(id), duration ?? (kind === 'error' ? 6000 : 3200));
   };
   const clear = () => setToasts([]);
   return (
@@ -24,8 +31,16 @@ export function ToastProvider({ children }) {
       <ClearToastsContext.Provider value={clear}>{children}</ClearToastsContext.Provider>
       <div className="no-print fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-2" role="status" aria-live="polite">
         {toasts.map((t) => (
-          <div key={t.id} className={cx('animate-pop-in max-w-sm rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-lg', t.kind === 'error' ? 'bg-red-700' : 'bg-stone-900')}>
-            {t.message}
+          <div key={t.id} className={cx('animate-pop-in max-w-sm rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-lg', t.kind === 'error' ? 'bg-red-700' : 'bg-stone-900', t.action && 'flex w-max max-w-[calc(100vw-2rem)] items-center gap-3 py-1.5 pr-1.5')}>
+            {t.action ? (
+              <>
+                <span className="min-w-0">{t.message}</span>
+                <button type="button" data-toast-action="" onClick={() => { dismiss(t.id); t.action.onClick(); }}
+                  className="shrink-0 rounded-md px-2.5 py-1 font-semibold text-brand-200 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white">
+                  {t.action.label}
+                </button>
+              </>
+            ) : t.message}
           </div>
         ))}
       </div>
@@ -370,7 +385,7 @@ function MenuEscape({ onClose }) {
   return null;
 }
 
-export function Menu({ trigger, items, align = 'right', className }) {
+export function Menu({ trigger, items, align = 'right', className, reveal = false }) {
   const [open, setOpen] = useState(false);
   const [above, setAbove] = useState(false);
   const ref = useRef(null);
@@ -389,6 +404,9 @@ export function Menu({ trigger, items, align = 'right', className }) {
     // The first item has the keyboard, so the menu can be worked with the arrow keys and Enter at once.
     list.current.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
   }, [open]);
+  // `reveal`: a menu inside a box that scrolls by itself (a column of the job board) can open past the box's
+  // bottom edge, where the window has room for it but the box does not show it. The box is scrolled to show it whole.
+  useEffect(() => { if (open && reveal) list.current?.scrollIntoView({ block: 'nearest' }); }, [open, above]);
   const closeToButton = () => {
     setOpen(false);
     ref.current?.querySelector('[aria-haspopup="menu"]')?.focus();

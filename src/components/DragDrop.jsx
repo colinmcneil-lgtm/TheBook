@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GripVertical } from 'lucide-react';
 import { cx } from '../ui.jsx';
+import { nudgeFor, zoneAt } from '../drag-zones.js';
 
 /** Where the picture of a dragged row sits from the left, kept whole inside the window (on a phone it is nearly as wide as the screen). */
 const inWindow = (left, width) => Math.round(Math.max(8, Math.min(left, window.innerWidth - width - 8)));
@@ -18,8 +19,14 @@ const inWindow = (left, width) => Math.round(Math.max(8, Math.min(left, window.i
  * Escape, changes nothing.
  *
  * `accepts(item, from, zone)` says whether a row from one box may be dropped on another.
+ *
+ * A row can also be picked up by itself rather than by a grip (`press`, for the people in a job's pipeline on the
+ * job board): a mouse picks it up once it has moved a few pixels with the button held, so a click is still a click;
+ * a finger picks it up once it has been held still for a moment, so a finger sliding over the rows scrolls the page
+ * as it always did. With `scrollInside`, a box the row is in that scrolls by itself (a column of the job board) is
+ * scrolled while the row is held near its top or bottom edge, before the page is.
  */
-export function useDragDrop({ accepts, onDrop }) {
+export function useDragDrop({ accepts, onDrop, scrollInside = false }) {
   const [drag, setDrag] = useState(null); // { item, from, width, height, over }
   const live = useRef(null);              // the same, with the pointer's place, changed without drawing the page again
   const ghost = useRef(null);
@@ -33,18 +40,19 @@ export function useDragDrop({ accepts, onDrop }) {
     // the top or past the edge of the window, and a row let go there must not land in it.
     const seen = d.scroller.getBoundingClientRect();
     if (x < Math.max(seen.left, 0) || x > Math.min(seen.right, window.innerWidth) || y < Math.max(seen.top, 0) || y > Math.min(seen.bottom, window.innerHeight)) return null;
-    for (const zone of document.querySelectorAll('[data-drop-zone]')) {
-      const box = zone.getBoundingClientRect();
-      if (x < box.left || x > box.right || y < box.top || y > box.bottom) continue;
-      const name = zone.dataset.dropZone;
-      if (!latest.current.accepts(d.item, d.from, name)) continue;
-      // Above the middle of a row is before it; below the last row is the end.
-      const rows = [...zone.querySelectorAll('[data-drop-row]')].filter((row) => row !== d.row);
-      let index = rows.findIndex((row) => { const r = row.getBoundingClientRect(); return y < r.top + r.height / 2; });
-      if (index === -1) index = rows.length;
-      return { zone: name, index };
-    }
-    return null;
+    const zones = [...document.querySelectorAll('[data-drop-zone]')];
+    // Which boxes around each zone scroll does not change during a drag: worked out once a zone, not at every move.
+    d.around ??= new Map();
+    const around = (zone) => { if (!d.around.has(zone)) d.around.set(zone, scrollingBoxes(zone)); return d.around.get(zone); };
+    const name = zoneAt(zones.map((zone) => ({ name: zone.dataset.dropZone, box: zone.getBoundingClientRect(), clips: around(zone).map((box) => box.getBoundingClientRect()) })),
+      x, y, (zone) => latest.current.accepts(d.item, d.from, zone));
+    if (name === null) return null;
+    const zone = zones.find((z) => z.dataset.dropZone === name);
+    // Above the middle of a row is before it; below the last row is the end.
+    const rows = [...zone.querySelectorAll('[data-drop-row]')].filter((row) => row !== d.row);
+    let index = rows.findIndex((row) => { const r = row.getBoundingClientRect(); return y < r.top + r.height / 2; });
+    if (index === -1) index = rows.length;
+    return { zone: name, index };
   };
   const follow = () => {
     const d = live.current;
@@ -59,26 +67,32 @@ export function useDragDrop({ accepts, onDrop }) {
   const stop = useRef(() => {});
   useEffect(() => () => stop.current(), []); // leaving the page in the middle of a drag lets go of everything
 
-  const start = (e, item, from) => {
-    if (e.button || live.current) return; // the left button or a finger only, and one row at a time
-    e.preventDefault();                   // no text is selected while dragging
-    e.currentTarget.focus();
-    const row = e.currentTarget.closest('[data-drop-row], [data-drag-row]');
+  /**
+   * Pick a row up. `at` is where the pointer went down on it, and `now` where it is now (further on, when a row is
+   * picked up by `press` once it has moved, or been held). `finger` says the row is held by a finger.
+   */
+  const begin = ({ el, item, from, id, at, now, finger }) => {
+    const row = el.closest('[data-drop-row], [data-drag-row]');
     const box = row.getBoundingClientRect();
     const scroller = row.closest('main') || document.scrollingElement;
-    live.current = { item, from, row, scroller, id: e.pointerId, x: e.clientX, y: e.clientY, dx: e.clientX - box.left, dy: e.clientY - box.top, over: null };
-    live.current.over = landing(e.clientX, e.clientY);
-    setDrag({ item, from, width: box.width, height: box.height, x: box.left, y: box.top, over: live.current.over });
+    // The boxes that scroll while the row is held near their edges, the one nearest the row first; the page last.
+    const scrollers = scrollInside ? [...scrollingBoxes(row).filter((b) => b !== scroller), scroller] : [scroller];
+    live.current = { item, from, row, scroller, finger, id, x: now.x, y: now.y, dx: at.x - box.left, dy: at.y - box.top, over: null };
+    live.current.over = landing(now.x, now.y);
+    setDrag({ item, from, width: box.width, height: box.height, x: now.x - (at.x - box.left), y: now.y - (at.y - box.top), over: live.current.over });
 
     // The page scrolls by itself while the row is held near its top or bottom edge, so a list further down can be reached.
     let frame = requestAnimationFrame(function nudge() {
       const d = live.current;
       if (!d) return;
-      const edge = scroller.getBoundingClientRect();
-      const speed = d.y < edge.top + 56 ? -12 : d.y > Math.min(edge.bottom, window.innerHeight) - 56 ? 12 : 0;
-      const before = scroller.scrollTop;
-      if (speed) scroller.scrollTop += speed;
-      if (scroller.scrollTop !== before) follow();
+      for (const [i, el] of scrollers.entries()) {
+        const edge = el.getBoundingClientRect();
+        const inner = i < scrollers.length - 1;
+        const speed = nudgeFor({ left: edge.left, right: edge.right, top: inner ? Math.max(edge.top, 0) : edge.top, bottom: Math.min(edge.bottom, window.innerHeight) }, d.x, d.y, inner ? { inner, edge: 44 } : {});
+        const before = el.scrollTop;
+        if (speed) el.scrollTop += speed;
+        if (el.scrollTop !== before) { follow(); break; } // a column that has scrolled leaves the page where it is
+      }
       frame = requestAnimationFrame(nudge);
     });
 
@@ -127,9 +141,115 @@ export function useDragDrop({ accepts, onDrop }) {
     };
   };
 
+  const start = (e, item, from) => {
+    if (e.button || live.current) return; // the left button or a finger only, and one row at a time
+    e.preventDefault();                   // no text is selected while dragging
+    e.currentTarget.focus();
+    const at = { x: e.clientX, y: e.clientY };
+    begin({ el: e.currentTarget, item, from, id: e.pointerId, at, now: at, finger: e.pointerType === 'touch' });
+  };
+
+  /**
+   * A row pressed by itself, not by a grip. Nothing happens until the mouse has moved a few pixels with its button
+   * held, or a finger has stayed still for a moment: until then a click is a click and a finger that slides scrolls
+   * the page. Once the row has been picked up, the click the browser sends when it is let go is not passed on, so a
+   * drag never also opens what the row opens.
+   */
+  const pressed = (e, item, from) => {
+    if (e.button || live.current || waiting.current) return;
+    const el = e.currentTarget, id = e.pointerId, finger = e.pointerType === 'touch';
+    const at = { x: e.clientX, y: e.clientY }, now = { ...at };
+    let timer = null;
+    const forget = () => {
+      clearTimeout(timer);
+      window.removeEventListener('pointermove', moved);
+      window.removeEventListener('pointerup', forget);
+      window.removeEventListener('pointercancel', forget);
+      window.removeEventListener('keydown', escape, true);
+      waiting.current = null;
+    };
+    const pickUp = () => {
+      forget();
+      if (!el.isConnected) return;
+      window.getSelection()?.removeAllRanges();
+      begin({ el, item, from, id, at, now, finger });
+      swallowClick();
+      if (finger) navigator.vibrate?.(8); // a small tap, where a phone has one, to say the row has come away
+    };
+    const moved = (ev) => {
+      if (ev.pointerId !== id) return;
+      now.x = ev.clientX;
+      now.y = ev.clientY;
+      const far = Math.hypot(now.x - at.x, now.y - at.y);
+      if (finger) { if (far > FINGER_SLIP) forget(); } // the finger is scrolling the page, not holding the row
+      else if (ev.buttons === 0) forget();
+      else if (far > MOUSE_START) pickUp();
+    };
+    const escape = (ev) => { if (ev.key === 'Escape') forget(); };
+    window.addEventListener('pointermove', moved);
+    window.addEventListener('pointerup', forget);
+    window.addEventListener('pointercancel', forget);
+    window.addEventListener('keydown', escape, true);
+    if (finger) timer = setTimeout(pickUp, HOLD);
+    waiting.current = forget;
+  };
+  const waiting = useRef(null);
+  useEffect(() => () => waiting.current?.(), []);
+
+  /**
+   * While a finger is dragging a row, the page must not also scroll under it. That can only be stopped from a
+   * listener that was there before the finger came down, and that the browser has been told may stop it, so a box
+   * holding rows that are picked up with `press` is given one with `touchArea`.
+   */
+  const touchArea = useCallback((el) => {
+    if (!el) return undefined;
+    const still = (ev) => { if (live.current?.finger) ev.preventDefault(); };
+    el.addEventListener('touchmove', still, { passive: false });
+    // A long press would otherwise open the browser's own menu, or select a word, on some phones.
+    const noMenu = (ev) => { if (live.current || waiting.current) ev.preventDefault(); };
+    el.addEventListener('contextmenu', noMenu);
+    return () => { el.removeEventListener('touchmove', still); el.removeEventListener('contextmenu', noMenu); };
+  }, []);
+
   /** What a grip needs to start a drag of `item` out of the box called `from`. */
   const grip = (item, from) => ({ onPointerDown: (e) => start(e, item, from) });
-  return { drag, grip, ghost };
+  /** What a row needs to be picked up by itself (see `pressed`). The browser's own dragging of its picture is turned off. */
+  const press = (item, from) => ({ onPointerDown: (e) => pressed(e, item, from), onDragStart: (e) => e.preventDefault() });
+  return { drag, grip, press, touchArea, ghost };
+}
+
+// A mouse picks a row up once it has moved this many pixels with the button held; less than that is a click.
+const MOUSE_START = 5;
+// A finger picks a row up once it has been held this long without moving more than FINGER_SLIP pixels. Moving
+// further first is scrolling the page, and the row is left alone. Long enough not to catch a finger that stops
+// for a moment while scrolling, and short enough not to feel like waiting.
+const HOLD = 400;
+const FINGER_SLIP = 10;
+
+/** The boxes around an element that scroll up and down by themselves, the nearest first. */
+function scrollingBoxes(el) {
+  const boxes = [];
+  for (let at = el.parentElement; at && at !== document.body; at = at.parentElement) {
+    const { overflowY } = getComputedStyle(at);
+    if (overflowY === 'auto' || overflowY === 'scroll') boxes.push(at);
+  }
+  return boxes;
+}
+
+/**
+ * After a row has been dragged, the browser still sends a click when it is let go, to whatever is under the
+ * pointer then (the row's own name, as often as not). That click is not passed on. A finger's click can come a
+ * little after the finger is lifted, so the next click within a short while is the one.
+ */
+function swallowClick() {
+  let armed = false;
+  const swallow = (ev) => { ev.preventDefault(); ev.stopPropagation(); done(); };
+  const done = () => { window.removeEventListener('click', swallow, true); window.removeEventListener('pointerup', arm, true); window.removeEventListener('pointercancel', arm, true); };
+  // Waits for the row to be let go, then for the click that follows it.
+  const arm = () => { if (armed) return; armed = true; setTimeout(done, 350); };
+  window.addEventListener('click', swallow, true);
+  window.addEventListener('pointerup', arm, true);
+  window.addEventListener('pointercancel', arm, true);
 }
 
 /** The handle a row is dragged by. It takes the focus too, so the arrow keys can move the row (the page's onKeyDown). */
@@ -167,4 +287,19 @@ export function DragGhost({ dnd, children }) {
       {children}
     </div>
   );
+}
+
+/**
+ * Keep an element where it was on screen (its top was `top`) after the page around it has changed size, by
+ * scrolling whatever it is in: the box nearest it first, then the page. Used when the places to drop on open up
+ * as a drag starts, and close again when it ends, so that what is under the pointer stays under it.
+ */
+export function keepInPlace(el, top) {
+  let off = el.getBoundingClientRect().top - top;
+  for (const box of scrollingBoxes(el)) {
+    if (Math.abs(off) < 1) return;
+    const before = box.scrollTop;
+    box.scrollTop += off;
+    off -= box.scrollTop - before;
+  }
 }
