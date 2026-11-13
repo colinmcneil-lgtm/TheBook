@@ -76,7 +76,9 @@ function tell({ applicationId, noteId, writer, body }) {
   const writerClient = writer.role === 'client' ? q.get('SELECT name FROM clients WHERE id = ?', writer.client_id)?.name : null;
   const who = writerClient ? `${writer.name} (hiring team at ${writerClient})` : writer.name;
   const words = body.trim();
-  const excerpt = words.length > 200 ? `${words.slice(0, 200)}…` : words;
+  // Counted in characters, so a character such as an emoji is never cut in half.
+  const chars = Array.from(words);
+  const excerpt = chars.length > 200 ? `${chars.slice(0, 200).join('')}…` : words;
   const onJob = app.job_id != null;
   const where = onJob ? `, on ${app.job_title} at ${app.client_name}` : ', who is in The Book on no job';
   const path = onJob ? `/jobs/${app.job_id}?c=${app.id}` : `/candidates?c=${app.id}`;

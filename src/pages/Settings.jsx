@@ -277,7 +277,7 @@ function Agency() {
         <div className="space-y-2 p-4 text-sm leading-relaxed text-stone-600">
           {mailConfigured ? (
             <>
-              <p><b className="font-medium text-stone-900">Your team:</b> admins are emailed when someone requests an account, people are emailed a link to set their password when their request is approved, anybody asked to review a candidate is emailed, and people are emailed about new messages from the team unless they switch that off for themselves under Your account. These are always sent.</p>
+              <p><b className="font-medium text-stone-900">Your team:</b> admins are emailed when someone requests an account, people are emailed a link to set their password when their request is approved, anybody asked to review a candidate is emailed, and people are emailed about new messages from the team, and about notes on their candidates and jobs, unless they switch that off for themselves under Your account. These are always sent.</p>
               <div className="rounded-lg border border-line p-3">
                 {isAdmin
                   ? <Switch checked={Boolean(candidateMail)} onChange={(on) => !switching && setCandidateMail(on)} label="Send emails to candidates" />

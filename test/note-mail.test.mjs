@@ -148,6 +148,16 @@ test('a note e-mails the candidate’s owner and the job’s account executive, 
   assert.equal(about(PRIYA, 'Wes Writer').length, 0);
 });
 
+test('the first 200 characters are counted as characters, so an emoji at the cut is never split in half', async () => {
+  const eve = await add({ job_id: job.sales, name: 'Eve Emoji', email: 'eve@mail.example' }, id.priya);
+  const body = `a${'\u{1F600}'.repeat(250)}`; // 'a' and then emoji, each two units long in JavaScript strings
+  await note(orla, eve, body);
+  await until(() => about(PRIYA, 'Eve Emoji').length, (n) => n === 1);
+  const [email] = about(PRIYA, 'Eve Emoji');
+  assert.ok(email.text.includes(`\n\na${'\u{1F600}'.repeat(199)}…\n\n`), 'the first 200 characters, whole');
+  assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(email.text), false, 'no half of a character');
+});
+
 test('somebody who is both the owner and the account executive gets one e-mail, which says both', async () => {
   const bea = await add({ job_id: job.sales, name: 'Bea Both', email: 'bea@mail.example' }, id.marcus);
   await note(orla, bea, 'Keen, and free from March.');
@@ -312,6 +322,50 @@ test('a note written when adding somebody counts; the notes The Book files by it
   await settle();
   assert.equal(mail.sent.filter((m) => m.subject.includes('Fay Filed')).length, 0);
   assert.deepEqual(rows('SELECT * FROM note_mail WHERE application_id = ?', fay), []);
+
+  // Somebody in The Book with a covering note, joined to the record the client already has of them on Head of Sales:
+  // the entry is folded into that application, and The Book keeps the covering note there for the agency. Nobody is
+  // e-mailed about that either (Priya owns the entry, and Marcus is the job's account executive).
+  const there = await add({ job_id: job.sales, name: 'Gil Folded', email: 'gil@mail.example' });
+  const entry = await add({ name: 'Gil Folded', email: 'gil-own@mail.example', cover_note: 'Met at a meetup.' }, id.priya);
+  write('UPDATE candidates SET email = ? WHERE id = (SELECT candidate_id FROM applications WHERE id = ?)', 'gil@mail.example', entry);
+  const asked = await alex.post(`/applications/${entry}/add-to-job`, { job_id: job.sales });
+  assert.equal(asked.status, 409, JSON.stringify(asked.body));
+  const joined = ok(await alex.post(`/applications/${entry}/add-to-job`, { job_id: job.sales, into: asked.body.join.candidate_id }));
+  assert.deepEqual(joined, { id: there, merged: true });
+  assert.equal(rows(`SELECT COUNT(*) AS n FROM notes WHERE application_id = ? AND body LIKE 'Saved with their entry in The Book:%'`, there)[0].n, 1);
+  await settle();
+  assert.equal(mail.sent.filter((m) => m.subject.includes('Gil Folded')).length, 0);
+  assert.deepEqual(rows('SELECT * FROM note_mail WHERE application_id = ?', there), []);
+});
+
+test('a call’s notes saved to the profile from Otterview count the first time; saving them again e-mails nobody', async () => {
+  const cid = await add({ job_id: job.sales, name: 'Ivy Interview', email: 'ivy@mail.example' }, id.priya);
+  const at = new Date().toISOString();
+  const call = Number(write(
+    `INSERT INTO calls (recording_id, title, status, source, notes, application_id, candidate_id, created_by, created_at, updated_at)
+     VALUES (?, 'Call with Ivy', 'ready', 'uploaded', 'Wants a hybrid role.', ?, (SELECT candidate_id FROM applications WHERE id = ?), ?, ?, ?)`,
+    'ab'.repeat(16), cid, cid, id.orla, at, at).lastInsertRowid);
+  assert.deepEqual(ok(await orla.post(`/oracle/calls/${call}/save-note`, {})), { ok: true });
+  await until(() => [about(PRIYA, 'Ivy Interview').length, about(MARCUS, 'Ivy Interview').length], ([p, m]) => p === 1 && m === 1);
+  await settle();
+  assert.equal(about(ORLA, 'Ivy Interview').length, 0, 'never the writer');
+  assert.match(about(PRIYA, 'Ivy Interview')[0].text, /\n\nNotes from Call with Ivy\n\nWants a hybrid role\.\n\n/);
+  // Saving again (after the summary was edited) changes the same note, and tells nobody, even once the 15 minutes are over.
+  write('UPDATE calls SET notes = ? WHERE id = ?', 'Wants a hybrid role, three days in.', call);
+  write('UPDATE note_mail SET mailed_at = ? WHERE application_id = ?', minutesAgo(20), cid);
+  assert.deepEqual(ok(await orla.post(`/oracle/calls/${call}/save-note`, {})), { ok: true });
+  await settle();
+  assert.equal(rows('SELECT COUNT(*) AS n FROM notes WHERE application_id = ?', cid)[0].n, 1);
+  assert.equal(about(PRIYA, 'Ivy Interview').length, 1);
+  assert.equal(about(MARCUS, 'Ivy Interview').length, 1);
+});
+
+test('the Email delivery card in Settings tells an admin about these e-mails among the team’s', () => {
+  const page = fs.readFileSync(path.join(import.meta.dirname, '..', 'src/pages/Settings.jsx'), 'utf8');
+  const line = /<b[^>]*>Your team:<\/b>([^<]*)<\/p>/.exec(page)?.[1];
+  assert.ok(line, 'the Your team line is there');
+  assert.match(line, /about new messages from the team, and about notes on their candidates and jobs, unless they switch that off for themselves under Your account\./);
 });
 
 test('a debrief written from To do counts, once: sending the same debrief again e-mails nobody', async () => {
