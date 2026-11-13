@@ -14,7 +14,7 @@ export const useClearToasts = () => useContext(ClearToastsContext);
 /**
  * Messages at the foot of the window. `toast(message)` for news, `toast(message, 'error')` for something that went
  * wrong. A message can carry one action with it, `{ action: { label, onClick } }` (Undo, say), and stays up for
- * `duration` milliseconds, long enough to reach it; pressing it takes the message away. A message with a `key`
+ * `duration` milliseconds, long enough to reach it; pressing it takes the message away, and onClick is given the click. A message with a `key`
  * takes the place of one already up with the same key: an older Undo about the same thing would no longer be true.
  */
 export function ToastProvider({ children }) {
@@ -35,8 +35,10 @@ export function ToastProvider({ children }) {
             {t.action ? (
               <>
                 <span className="min-w-0">{t.message}</span>
-                <button type="button" data-toast-action="" onClick={() => { dismiss(t.id); t.action.onClick(); }}
-                  className="shrink-0 rounded-md px-2.5 py-1 font-semibold text-brand-200 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white">
+                {/* The action is told how it was pressed: from the keyboard, the focus goes away with the message, and
+                    the action may want to put it somewhere sensible. Big enough for a finger on a touch screen. */}
+                <button type="button" data-toast-action="" onClick={(e) => { dismiss(t.id); t.action.onClick(e); }}
+                  className="shrink-0 rounded-md px-2.5 py-1 font-semibold [@media(hover:none)]:min-h-10 text-brand-200 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white">
                   {t.action.label}
                 </button>
               </>
@@ -436,7 +438,7 @@ export function Menu({ trigger, items, align = 'right', className, reveal = fals
                 type="button"
                 role="menuitem"
                 onClick={() => { setOpen(false); item.onClick(); }}
-                className={cx('flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-stone-50 focus-visible:bg-stone-100 focus-visible:-outline-offset-2', item.danger ? 'text-red-700' : 'text-stone-700')}
+                className={cx('flex w-full items-center gap-2 px-3 py-2 text-left text-sm [@media(hover:none)]:min-h-10 hover:bg-stone-50 focus-visible:bg-stone-100 focus-visible:-outline-offset-2', item.danger ? 'text-red-700' : 'text-stone-700')}
               >
                 {item.icon && <item.icon className="size-4 shrink-0 opacity-70" />}
                 {item.label}

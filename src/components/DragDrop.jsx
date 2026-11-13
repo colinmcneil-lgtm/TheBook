@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GripVertical } from 'lucide-react';
 import { cx } from '../ui.jsx';
-import { nudgeFor, zoneAt } from '../drag-zones.js';
+import { nudgeFor, swallowClick, waitAtEdge, zoneAt } from '../drag-zones.js';
 
 /** Where the picture of a dragged row sits from the left, kept whole inside the window (on a phone it is nearly as wide as the screen). */
 const inWindow = (left, width) => Math.round(Math.max(8, Math.min(left, window.innerWidth - width - 8)));
@@ -24,7 +24,9 @@ const inWindow = (left, width) => Math.round(Math.max(8, Math.min(left, window.i
  * job board): a mouse picks it up once it has moved a few pixels with the button held, so a click is still a click;
  * a finger picks it up once it has been held still for a moment, so a finger sliding over the rows scrolls the page
  * as it always did. With `scrollInside`, a box the row is in that scrolls by itself (a column of the job board) is
- * scrolled while the row is held near its top or bottom edge, before the page is.
+ * scrolled while the row is held near its top or bottom edge, before the page is. There, a box only starts scrolling
+ * once the row has been held near its edge for a moment (see waitAtEdge), so a stage near the foot of a column can be
+ * dropped on without the column running away under it.
  */
 export function useDragDrop({ accepts, onDrop, scrollInside = false }) {
   const [drag, setDrag] = useState(null); // { item, from, width, height, over }
@@ -69,9 +71,10 @@ export function useDragDrop({ accepts, onDrop, scrollInside = false }) {
 
   /**
    * Pick a row up. `at` is where the pointer went down on it, and `now` where it is now (further on, when a row is
-   * picked up by `press` once it has moved, or been held). `finger` says the row is held by a finger.
+   * picked up by `press` once it has moved, or been held). `finger` says the row is held by a finger. `onEnd` is
+   * told when the drag stops, for whatever reason, and whether the button is let go by then (not after Escape).
    */
-  const begin = ({ el, item, from, id, at, now, finger }) => {
+  const begin = ({ el, item, from, id, at, now, finger, onEnd }) => {
     const row = el.closest('[data-drop-row], [data-drag-row]');
     const box = row.getBoundingClientRect();
     const scroller = row.closest('main') || document.scrollingElement;
@@ -82,13 +85,15 @@ export function useDragDrop({ accepts, onDrop, scrollInside = false }) {
     setDrag({ item, from, width: box.width, height: box.height, x: now.x - (at.x - box.left), y: now.y - (at.y - box.top), over: live.current.over });
 
     // The page scrolls by itself while the row is held near its top or bottom edge, so a list further down can be reached.
-    let frame = requestAnimationFrame(function nudge() {
+    const near = scrollers.map(() => null); // since when the row has been near each box's edge (with scrollInside)
+    let frame = requestAnimationFrame(function nudge(time) {
       const d = live.current;
       if (!d) return;
       for (const [i, el] of scrollers.entries()) {
         const edge = el.getBoundingClientRect();
         const inner = i < scrollers.length - 1;
-        const speed = nudgeFor({ left: edge.left, right: edge.right, top: inner ? Math.max(edge.top, 0) : edge.top, bottom: Math.min(edge.bottom, window.innerHeight) }, d.x, d.y, inner ? { inner, edge: 44 } : {});
+        let speed = nudgeFor({ left: edge.left, right: edge.right, top: inner ? Math.max(edge.top, 0) : edge.top, bottom: Math.min(edge.bottom, window.innerHeight) }, d.x, d.y, inner ? { inner, edge: 44 } : {});
+        if (scrollInside) ({ since: near[i], speed } = waitAtEdge(near[i], speed, time));
         const before = el.scrollTop;
         if (speed) el.scrollTop += speed;
         if (el.scrollTop !== before) { follow(); break; } // a column that has scrolled leaves the page where it is
@@ -105,14 +110,14 @@ export function useDragDrop({ accepts, onDrop, scrollInside = false }) {
       live.current.y = ev.clientY;
       follow();
     };
-    const end = (dropped) => {
+    const end = (dropped, released = true) => {
       const d = live.current;
-      stop.current();
+      stop.current(released);
       if (dropped && d?.over) latest.current.onDrop({ item: d.item, from: d.from, to: d.over.zone, index: d.over.index });
     };
     const up = (ev) => { if (ev.pointerId === live.current?.id) end(true); };
     const cancel = (ev) => { if (ev.pointerId === live.current?.id) end(false); };
-    const key = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); end(false); } };
+    const key = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); end(false, false); } }; // the button is still held
     const away = () => end(false); // another window or tab was switched to in the middle of a drag
     // Listened for on the window, not on the grip: the row the grip is in is taken out of the list while it is dragged.
     window.addEventListener('pointermove', move);
@@ -125,7 +130,7 @@ export function useDragDrop({ accepts, onDrop, scrollInside = false }) {
     window.addEventListener('scroll', follow, { capture: true, passive: true });
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'grabbing';
-    stop.current = () => {
+    stop.current = (released = true) => {
       cancelAnimationFrame(frame);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
@@ -138,6 +143,7 @@ export function useDragDrop({ accepts, onDrop, scrollInside = false }) {
       live.current = null;
       stop.current = () => {};
       setDrag(null);
+      onEnd?.(released);
     };
   };
 
@@ -172,8 +178,7 @@ export function useDragDrop({ accepts, onDrop, scrollInside = false }) {
       forget();
       if (!el.isConnected) return;
       window.getSelection()?.removeAllRanges();
-      begin({ el, item, from, id, at, now, finger });
-      swallowClick();
+      begin({ el, item, from, id, at, now, finger, onEnd: swallowClick(window) });
       if (finger) navigator.vibrate?.(8); // a small tap, where a phone has one, to say the row has come away
     };
     const moved = (ev) => {
@@ -234,22 +239,6 @@ function scrollingBoxes(el) {
     if (overflowY === 'auto' || overflowY === 'scroll') boxes.push(at);
   }
   return boxes;
-}
-
-/**
- * After a row has been dragged, the browser still sends a click when it is let go, to whatever is under the
- * pointer then (the row's own name, as often as not). That click is not passed on. A finger's click can come a
- * little after the finger is lifted, so the next click within a short while is the one.
- */
-function swallowClick() {
-  let armed = false;
-  const swallow = (ev) => { ev.preventDefault(); ev.stopPropagation(); done(); };
-  const done = () => { window.removeEventListener('click', swallow, true); window.removeEventListener('pointerup', arm, true); window.removeEventListener('pointercancel', arm, true); };
-  // Waits for the row to be let go, then for the click that follows it.
-  const arm = () => { if (armed) return; armed = true; setTimeout(done, 350); };
-  window.addEventListener('click', swallow, true);
-  window.addEventListener('pointerup', arm, true);
-  window.addEventListener('pointercancel', arm, true);
 }
 
 /** The handle a row is dragged by. It takes the focus too, so the arrow keys can move the row (the page's onKeyDown). */

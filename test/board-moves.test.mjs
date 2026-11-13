@@ -6,7 +6,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { inBox, nudgeFor, zoneAt } from '../src/drag-zones.js';
+import { EDGE_WAIT, inBox, nudgeFor, swallowClick, waitAtEdge, zoneAt } from '../src/drag-zones.js';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { SHOWN, dropToStage, movedWords, notMovedWords, placeOf, readZone, showMoves, stageZone, stillToShow, undoOf, wordsAfter } from '../src/board-moves.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -62,6 +63,88 @@ test('held near an edge: the page scrolls at one speed, a column that scrolls in
   assert.equal(nudgeFor(column, 400, 720, inner), 12, 'just below the column still scrolls it');
   assert.equal(nudgeFor(column, 600, 699, inner), 0, 'over another column: not this one');
   assert.equal(nudgeFor(column, 400, 800, inner), 0, 'far below it: not this one');
+});
+
+test('a box scrolls by itself only once the pointer has stayed near its edge for a moment', () => {
+  // Frames 16ms apart: the pointer comes near the foot of a column at 1000 and stays.
+  let since = null, speed;
+  ({ since, speed } = waitAtEdge(since, 0, 984));
+  assert.deepEqual({ since, speed }, { since: null, speed: 0 }, 'not near: nothing');
+  ({ since, speed } = waitAtEdge(since, 6, 1000));
+  assert.equal(speed, 0, 'just come near (or just picked up there): not yet');
+  ({ since, speed } = waitAtEdge(since, 9, 1000 + EDGE_WAIT - 16));
+  assert.equal(speed, 0, 'still waiting');
+  ({ since, speed } = waitAtEdge(since, 9, 1000 + EDGE_WAIT));
+  assert.equal(speed, 9, 'held there long enough: at the speed asked for');
+  ({ since, speed } = waitAtEdge(since, 0, 1000 + EDGE_WAIT + 16));
+  ({ since, speed } = waitAtEdge(since, 9, 1000 + EDGE_WAIT + 32));
+  assert.equal(speed, 0, 'left the edge and came back: the wait starts again');
+  assert.ok(EDGE_WAIT >= 150 && EDGE_WAIT <= 250);
+});
+
+/** A stand-in for the window: the click catcher only listens and is told about presses, lets go and clicks. */
+function fakeWindow() {
+  const target = new EventTarget();
+  const send = (type, extra = {}) => {
+    const ev = new Event(type, { cancelable: true });
+    Object.assign(ev, extra);
+    target.dispatchEvent(ev);
+    return ev;
+  };
+  const click = () => {
+    let reached = false;
+    target.addEventListener('click', () => { reached = true; }, { once: true });
+    const ev = send('click');
+    return reached && !ev.defaultPrevented;
+  };
+  return { target, send, click };
+}
+
+test('after a drag, the click that comes with letting go is caught, and only that one', async () => {
+  const w = fakeWindow();
+  const ended = swallowClick(w.target, 30);
+  w.send('pointerup', { isPrimary: true });
+  ended(true);
+  assert.equal(w.click(), false, 'the click straight after letting go does not open the profile');
+  assert.equal(w.click(), true, 'the next one does');
+
+  // A finger's click comes late, or not at all: within a short while it is caught, after that it is let through.
+  const late = fakeWindow();
+  swallowClick(late.target, 30)(true);
+  late.send('pointerup', { isPrimary: true });
+  await sleep(60);
+  assert.equal(late.click(), true);
+});
+
+test('a drag that ends without the page hearing the button let go leaves nothing to eat the next click', async () => {
+  // The window lost the focus in the middle of the drag, or the button was let go over another window: no pointerup.
+  const w = fakeWindow();
+  swallowClick(w.target, 30)(true);
+  await sleep(60);
+  assert.equal(w.click(), true, 'a click from the keyboard (Undo, say) a moment later goes through');
+
+  // Straight away, a new press of its own begins: the click after it is that press's, not the drag's.
+  const soon = fakeWindow();
+  swallowClick(soon.target, 30)(true);
+  soon.send('pointerdown', { isPrimary: true });
+  soon.send('pointerup', { isPrimary: true });
+  assert.equal(soon.click(), true);
+
+  // Escape ends the drag with the button still held: the click when it is let go is still caught...
+  const esc = fakeWindow();
+  const ended = swallowClick(esc.target, 30);
+  ended(false);
+  await sleep(60);
+  esc.send('pointerup', { isPrimary: true });
+  assert.equal(esc.click(), false);
+  assert.equal(esc.click(), true);
+
+  // ...and a second finger touching down while the first still holds the row does not let the first one's click through.
+  const two = fakeWindow();
+  swallowClick(two.target, 30);
+  two.send('pointerdown', { isPrimary: false });
+  two.send('pointerup', { isPrimary: false });
+  assert.equal(two.click(), false);
 });
 
 test('what a drop means: a stage of the same job other than their own is a move; anything else is nothing', () => {
@@ -178,6 +261,8 @@ test('the board uses these rules, and shows only as many people per stage as the
   for (const name of ['dropToStage', 'showMoves', 'stillToShow', 'undoOf', 'wordsAfter', 'stageZone', 'readZone']) assert.match(board, new RegExp(`\\b${name}\\(`), name);
   assert.match(read('src/components/DragDrop.jsx'), /zoneAt\(/);
   assert.match(read('src/components/DragDrop.jsx'), /nudgeFor\(/);
+  assert.match(read('src/components/DragDrop.jsx'), /onEnd: swallowClick\(window\)/, 'the click catcher is told when the drag ends');
+  assert.match(read('src/components/DragDrop.jsx'), /waitAtEdge\(/);
   assert.match(read('server/api.js'), new RegExp(`const BOARD_PEOPLE = ${SHOWN};`));
   // The move is the Pipeline tab's own: no new route.
   assert.match(board, /api\.post\(`\/applications\/\$\{id\}\/move`, \{ stage_id: to\.id \}\)/);

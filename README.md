@@ -527,14 +527,16 @@ beside each job and can be narrowed to one person's jobs, and the job form has a
   press and move; a click on the name still opens the profile. With a finger, hold the name still for a moment until
   it lifts, then drag; a finger that slides straight away scrolls the page as usual. While somebody is dragged, every
   other stage of the job is outlined as a place to drop them (empty stages open up), the one under the pointer is
-  highlighted, and the column, or the page on a phone, scrolls by itself when you hold near its top or bottom.
-  Letting go over the stage they are in, over another job or anywhere else changes nothing, and so does Escape. The
+  highlighted, and the column, or the page on a phone, scrolls by itself when you hold near its top or bottom for a
+  moment. Letting go over the stage they are in, over another job or anywhere else changes nothing, and so does Escape. The
   same move without dragging: each name has a **Move** button (it shows when you point at the name or reach it with
   Tab, and is always there on a touch screen) that lists the job's other stages. The person moves at once and the
   card's numbers follow when The Book has saved it; if it cannot be saved they go back, with the reason. Dropping
   somebody on **Hired** marks them hired, as on the Pipeline tab, and somebody hired can be moved back. After every move a message says what happened
   ("Moved Tom Kaplan to Final Round", "Marked Tom Kaplan as hired"), and its **Undo**, there for a few seconds, moves
-  them back to the stage they came from. Somebody moved into a stage that already names eight people can go under its
+  them back to the stage they came from (only the stage: whoever took on somebody nobody owned by moving them keeps
+  them, and a first interview reporting has counted stays counted, as after moving them back on the Pipeline tab;
+  a hire that is undone is no longer counted as a placement). Somebody moved into a stage that already names eight people can go under its
   "and N more"; the message then says so. The order of people within a stage stays by when they applied.
 - **Jobs with nobody.** A job whose account executive is not known is in a last column, **No account executive**,
   until an admin gives it to somebody (open the job and choose **Edit**). That is the jobs that were already there when account executives arrived and

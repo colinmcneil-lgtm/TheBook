@@ -105,7 +105,10 @@ function Pipeline({ job, onShown }) {
     // One message about each person: a later move of the same person takes the place of the one before, whose Undo
     // would put them somewhere else.
     toast(wordsAfter(stages, entry), 'ok', { key: `board-move-${entry.person.id}`,
-      ...(entry.undo ? {} : { duration: UNDO_FOR, action: { label: 'Undo', onClick: () => latestMove.current(back.person, back.to, { undo: true }) } }) });
+      ...(entry.undo ? {} : { duration: UNDO_FOR, action: { label: 'Undo',
+        // Undo pressed from the keyboard (a click with no pointer behind it) takes the message, and the focus with it,
+        // away: the focus goes to the person's Move button where they are put back, as after a move made with the keyboard.
+        onClick: (e) => latestMove.current(back.person, back.to, { undo: true, keyboard: e?.detail === 0 }) } }) });
   };
   useEffect(() => {
     let live = true;
@@ -239,18 +242,19 @@ function Pipeline({ job, onShown }) {
                             little first, and a finger has to be held still for a moment, so neither starts a move by accident. */}
                         <button type="button" {...dnd.press(item, stageZone(job.id, stage.id))} onClick={() => openCandidate(a.id)}
                           title={[a.name, a.current_title, a.current_company].filter(Boolean).join(' · ')}
-                          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left select-none [-webkit-touch-callout:none]">
+                          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left select-none [-webkit-touch-callout:none] [@media(hover:none)]:min-h-10">
                           <Avatar name={a.name} size={20} src={photoUrl(a.candidate_id, a.photo)} />
                           <span className="truncate text-[13px] text-stone-800">{a.name}</span>
                         </button>
                         {/* For the keyboard, and for anybody who would rather not drag. Seen when the row is pointed at
-                            or the button has the keyboard, and always on a touch screen, where nothing is pointed at. */}
+                            or the button has the keyboard, and always on a touch screen, where nothing is pointed at. There
+                            it and the name are as tall as a fingertip, so the wrong person is not tapped by mistake. */}
                         <Menu reveal className={cx('shrink-0', dragging && 'invisible')} items={stageList.filter((s) => s.id !== stage.id).map((s) => ({
                           label: s.kind === 'hired' ? `${s.name} (marks them hired)` : s.name,
                           onClick: () => move(item, s.id, { keyboard: true }),
                         }))} trigger={(
                           <button type="button" data-board-move={a.id} aria-label={`Move ${a.name} to another stage`} title="Move to another stage. You can also drag the name."
-                            className="mr-0.5 rounded px-1.5 py-0.5 text-[11px] font-medium text-stone-500 opacity-0 group-hover/row:opacity-100 hover:bg-white hover:text-stone-900 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand-500 aria-expanded:opacity-100 [@media(hover:none)]:py-1.5 [@media(hover:none)]:opacity-100">
+                            className="mr-0.5 rounded px-1.5 py-0.5 text-[11px] font-medium text-stone-500 opacity-0 group-hover/row:opacity-100 hover:bg-white hover:text-stone-900 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand-500 aria-expanded:opacity-100 [@media(hover:none)]:min-h-10 [@media(hover:none)]:px-2.5 [@media(hover:none)]:opacity-100">
                             Move
                           </button>
                         )} />
