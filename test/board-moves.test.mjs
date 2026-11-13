@@ -223,6 +223,10 @@ test('a long stage: somebody moved into it can go under “and N more”, and th
   const nia = { ...many[0], jobId: 7, stageId: 1 };
   const out = showMoves(stages, [{ person: nia, from: 1, to: 3 }]);
   assert.deepEqual([out[0].count, out[0].people.length, out[2].count], [10, SHOWN - 1, 1]);
+  // And somebody older moved in before the server has filled that gap: still among the rest, not named in it.
+  const both = showMoves(stages, [{ person: nia, from: 1, to: 3 }, { person: tom, from: 2, to: 1 }]);
+  assert.deepEqual([both[0].count, both[0].people.length, placeOf(both, tom)], [11, SHOWN - 1, null]);
+  assert.equal(wordsAfter(both, { person: tom, from: 2, to: 1 }), 'Moved Tom Kaplan to Applied, under “and 4 more”');
   // Moved again while under "and N more" of the stage they were put in: taken from that stage's count.
   const again = showMoves(under, [{ person: { ...tom, stageId: 1 }, from: 1, to: 4 }]);
   assert.deepEqual([again[0].count, again[3].count, names(again, 4)], [11, 1, ['Tom Kaplan']]);
