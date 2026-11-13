@@ -127,8 +127,8 @@ test('a note e-mails the candidate’s owner and the job’s account executive, 
   const [toPriya] = about(PRIYA, 'Tom Kaplan'), [toMarcus] = about(MARCUS, 'Tom Kaplan');
   assert.deepEqual(toPriya.to, [PRIYA], 'one e-mail for each person, to them alone');
   assert.equal(toPriya.subject, 'Orla Quillfeather wrote a note on Tom Kaplan (Head of Sales)');
-  assert.ok(toPriya.text.startsWith('Hi Priya,\n\nOrla Quillfeather wrote a note on Tom Kaplan, on Head of Sales at Kestrel Logistics. You are told because you own Tom Kaplan.\n\n'), toPriya.text);
-  assert.ok(toMarcus.text.startsWith('Hi Marcus,\n\nOrla Quillfeather wrote a note on Tom Kaplan, on Head of Sales at Kestrel Logistics. You are told because you are the account executive of Head of Sales.\n\n'), toMarcus.text);
+  assert.ok(toPriya.text.startsWith('Hi Priya,\n\nOrla Quillfeather wrote a note on Tom Kaplan, on Head of Sales at Kestrel Logistics. You are getting this because Tom Kaplan is your candidate.\n\n'), toPriya.text);
+  assert.ok(toMarcus.text.startsWith('Hi Marcus,\n\nOrla Quillfeather wrote a note on Tom Kaplan, on Head of Sales at Kestrel Logistics. You are getting this because you are the account executive on Head of Sales.\n\n'), toMarcus.text);
   for (const email of [toPriya, toMarcus]) {
     assert.ok(email.text.includes(`\n\n${long.slice(0, 200)}…\n\n`), 'the first 200 characters of the note');
     assert.equal(email.text.includes('THE END'), false);
@@ -165,7 +165,7 @@ test('somebody who is both the owner and the account executive gets one e-mail, 
   await settle();
   assert.equal(about(MARCUS, 'Bea Both').length, 1);
   assert.equal(mail.sent.filter((m) => m.subject.includes('Bea Both')).length, 1);
-  assert.match(about(MARCUS, 'Bea Both')[0].text, /You are told because you own Bea Both and are the account executive of Head of Sales\./);
+  assert.match(about(MARCUS, 'Bea Both')[0].text, /You are getting this because Bea Both is your candidate and you are the account executive on Head of Sales\./);
 });
 
 test('a note from the client’s hiring team on their own job e-mails the agency’s owner and account executive', async () => {
@@ -234,7 +234,7 @@ test('somebody in The Book on no job: only their owner is told, with a link to t
   assert.equal(mail.sent.filter((m) => m.subject.includes('Nora Nojob')).length, 1, 'nobody but the owner');
   const [email] = about(PRIYA, 'Nora Nojob');
   assert.equal(email.subject, 'Orla Quillfeather wrote a note on Nora Nojob');
-  assert.match(email.text, /^Hi Priya,\n\nOrla Quillfeather wrote a note on Nora Nojob, who is in The Book on no job\. You are told because you own Nora Nojob\. The note is for the agency only\.\n\n/);
+  assert.match(email.text, /^Hi Priya,\n\nOrla Quillfeather wrote a note on Nora Nojob, who is in The Book on no job\. You are getting this because Nora Nojob is your candidate\. The note is for the agency only\.\n\n/);
   assert.ok(email.text.includes(`Open their profile: ${APP_URL}/candidates?c=${nora}\n`));
 });
 

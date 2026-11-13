@@ -86,9 +86,9 @@ function tell({ applicationId, noteId, writer, body }) {
     : onJob ? `You will find them on the ${app.job_title} job, under Jobs.` : 'You will find them under Candidates.';
   for (const person of people) {
     const owner = person.id === app.owner_id, executive = onJob && person.id === app.account_executive_id;
-    const why = owner && executive ? `You are told because you own ${app.candidate_name} and are the account executive of ${app.job_title}.`
-      : owner ? `You are told because you own ${app.candidate_name}.`
-      : `You are told because you are the account executive of ${app.job_title}.`;
+    const why = owner && executive ? `You are getting this because ${app.candidate_name} is your candidate and you are the account executive on ${app.job_title}.`
+      : owner ? `You are getting this because ${app.candidate_name} is your candidate.`
+      : `You are getting this because you are the account executive on ${app.job_title}.`;
     const sent = notify({
       to: person.email,
       subject: `${writer.name} wrote a note on ${app.candidate_name}${onJob ? ` (${app.job_title})` : ''}`,
