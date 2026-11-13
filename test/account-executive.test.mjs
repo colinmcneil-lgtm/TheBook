@@ -159,6 +159,87 @@ test('a card’s pipeline: every stage in order with how many are in it and who,
   assert.equal((await session(server.base).get(`/jobs/${job.sales}/pipeline`)).status, 401);
 });
 
+// The dropdown lets the agency drag people between its stages (src/components/JobBoard.jsx). It moves them with the
+// same route as the job's Pipeline tab, and asks for the pipeline and the board again once the move is saved: what
+// it relies on is that both say so at once.
+test('a person moved from a card’s pipeline shows at once in the pipeline, the card’s numbers and the job’s own list', async () => {
+  const pipeline = async () => (await priya.get(`/jobs/${job.sales}/pipeline`)).body.stages;
+  const card = async () => (await board(priya))[0].jobs.find((j) => j.id === job.sales);
+  const counts = (stages) => Object.fromEntries(stages.map((s) => [s.name, s.count]));
+  const before = await pipeline();
+  const anna = before[0].people.find((a) => a.name === 'Anna Applied');
+  const final = before.find((s) => s.name === 'Final interview');
+  assert.deepEqual([(await card()).in_pipeline, (await card()).interviewing], [4, 2]);
+
+  const moved = await priya.post(`/applications/${anna.id}/move`, { stage_id: final.id });
+  assert.equal(moved.status, 200);
+  const after = await pipeline();
+  assert.deepEqual(counts(after), { ...counts(before), Applied: 0, 'Final interview': 2 });
+  assert.deepEqual(after.find((s) => s.id === final.id).people.map((a) => a.name).sort(), ['Anna Applied', 'Fay Final']);
+  assert.equal(after.find((s) => s.id === final.id).people.find((a) => a.id === anna.id).status, 'active');
+  // The card: still four in play, now three at interview. The job's own Pipeline tab agrees.
+  assert.deepEqual([(await card()).in_pipeline, (await card()).interviewing, (await card()).offers], [4, 3, 1]);
+  const own = (await priya.get(`/applications?job_id=${job.sales}`)).body.find((a) => a.id === anna.id);
+  assert.equal(own.stage_id, final.id);
+  // Alex added her, so she is his: moving her does not hand her to whoever moved her.
+  assert.equal((await priya.get(`/applications/${anna.id}`)).body.application.owner_id, id.alex);
+
+  // Undo is a move back: logged as one, and she is where she was.
+  assert.equal((await priya.post(`/applications/${anna.id}/move`, { stage_id: before[0].id })).status, 200);
+  assert.deepEqual(counts(await pipeline()), counts(before));
+  const lines = (await priya.get(`/applications/${anna.id}`)).body.activities.map((x) => x.detail);
+  assert.ok(lines.includes('Moved back to Applied'), lines.join(' | '));
+  // A move to the stage she is in already changes nothing.
+  assert.equal((await priya.post(`/applications/${anna.id}/move`, { stage_id: before[0].id })).status, 200);
+  assert.deepEqual(counts(await pipeline()), counts(before));
+});
+
+test('a person cannot be moved to a stage of another job, and a client’s user has no dropdown to move them from', async () => {
+  const sales = (await priya.get(`/jobs/${job.sales}/pipeline`)).body.stages;
+  const ivo = sales.flatMap((s) => s.people).find((a) => a.name === 'Ivo Interview');
+  const elsewhere = (await priya.get(`/jobs/${job.depot}/pipeline`)).body.stages.at(-2);
+  const refused = await priya.post(`/applications/${ivo.id}/move`, { stage_id: elsewhere.id });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.error, 'That stage does not belong to this job.');
+  assert.deepEqual((await priya.get(`/jobs/${job.sales}/pipeline`)).body.stages.map((s) => s.count), sales.map((s) => s.count));
+  assert.equal((await priya.get(`/jobs/${job.depot}/pipeline`)).body.stages.at(-2).count, elsewhere.count);
+  // The board and its dropdowns are the agency's: Maya, on Kestrel's hiring team, is sent neither, even for her own company's job.
+  assert.equal((await maya.get(`/jobs/${job.sales}/pipeline`)).status, 403);
+  assert.equal((await maya.get('/dashboard')).body.board, undefined);
+});
+
+test('dropping somebody on Hired marks them hired, and moving them back makes them a candidate in play again', async () => {
+  const pipeline = async () => (await priya.get(`/jobs/${job.sales}/pipeline`)).body.stages;
+  const card = async () => (await board(priya))[0].jobs.find((j) => j.id === job.sales);
+  const stages = await pipeline();
+  const offer = stages.find((s) => s.kind === 'offer'), hired = stages.find((s) => s.kind === 'hired');
+  const otto = offer.people.find((a) => a.name === 'Otto Offer');
+  const was = await card();
+  assert.deepEqual([was.hires, was.in_pipeline, was.offers], [1, 4, 1]);
+
+  assert.equal((await priya.post(`/applications/${otto.id}/move`, { stage_id: hired.id })).status, 200);
+  let now = await pipeline();
+  assert.deepEqual(now.find((s) => s.id === hired.id).people.map((a) => [a.name, a.status]).sort(), [['Hana Hired', 'hired'], ['Otto Offer', 'hired']]);
+  assert.equal(now.find((s) => s.id === offer.id).count, 0);
+  const full = await card();
+  assert.deepEqual([full.hires, full.in_pipeline, full.offers], [2, 3, 0]);
+  const app = (await priya.get(`/applications/${otto.id}`)).body;
+  assert.equal(app.application.status, 'hired');
+  assert.ok(app.activities.some((x) => x.detail === 'Marked as hired'));
+
+  // Undo: back to Offer, in play again and no longer counted as a hire.
+  assert.equal((await priya.post(`/applications/${otto.id}/move`, { stage_id: offer.id })).status, 200);
+  now = await pipeline();
+  assert.deepEqual(now.find((s) => s.id === offer.id).people.map((a) => [a.name, a.status]), [['Otto Offer', 'active']]);
+  assert.equal(now.find((s) => s.id === hired.id).count, 1);
+  const back = await card();
+  assert.deepEqual([back.hires, back.in_pipeline, back.offers], [1, 4, 1]);
+  const again = (await priya.get(`/applications/${otto.id}`)).body;
+  assert.equal(again.application.status, 'active');
+  assert.equal(again.application.hired_at, null);
+  assert.ok(again.activities.some((x) => x.detail === 'Moved back to Offer'));
+});
+
 test('the switch adds paused and draft jobs to the board, after the open ones, and never closed ones', async () => {
   const all = await board(priya, '?board=all');
   assert.deepEqual(shape(all), [
